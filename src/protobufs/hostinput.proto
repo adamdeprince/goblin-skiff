@@ -6,6 +6,7 @@ package HostBuffers;
 
 import "stream.proto";
 import "clipboard.proto";
+import "kitty.proto";
 
 message HostMessage {
   repeated Instruction instruction = 1;
@@ -34,4 +35,5 @@ extend Instruction {
   optional EchoAck echoack = 7;
   optional StreamBuffers.StreamEvent stream = 9;
   optional ClipboardBuffers.ClipboardEvent clipboard = 10;
+  optional KittyBuffers.StateDelta kitty = 11;
 }

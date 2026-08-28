@@ -23,6 +23,13 @@ class Framebuffer;
 static const size_t KITTY_MAX_APC_CHARS = 8192;
 static const size_t KITTY_CHUNK_B64 = 4096;
 static const size_t KITTY_IMAGE_QUOTA = 32 * 1024 * 1024;
+static const uint32_t KITTY_FORMAT_RGB = 24;
+static const uint32_t KITTY_FORMAT_RGBA = 32;
+static const uint32_t KITTY_FORMAT_PNG = 100;
+/* Canonical in-memory and state-sync representation.  This value is never
+   emitted to the user's terminal; the public Kitty protocol only defines
+   RGB, RGBA, and PNG. */
+static const uint32_t KITTY_FORMAT_WEBP = 0x57454250U;
 
 enum KittyAction
 {
@@ -117,10 +124,17 @@ std::string encode_kitty_chunks( const std::string& controls, const std::string&
 std::string kitty_response( uint32_t image_id, uint32_t placement_id, const std::string& message );
 bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string& error );
 bool kitty_inflate( const std::string& input, std::string& output, size_t hint );
-void append_kitty_frame( std::string& out,
-                         bool initialized,
-                         const Framebuffer& last,
-                         const Framebuffer& current );
+bool kitty_normalize_webp( uint32_t format,
+                           uint32_t width,
+                           uint32_t height,
+                           const std::string& input,
+                           std::string& webp,
+                           uint32_t& output_width,
+                           uint32_t& output_height,
+                           std::string& error );
+bool kitty_webp_dimensions( const std::string& webp, uint32_t& width, uint32_t& height );
+bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& width, uint32_t& height );
+void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current );
 
 }
 

@@ -318,19 +318,29 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
   kitty_uploading = false;
   kitty_payload.clear();
 
-  if ( cmd.compression == 'z' ) {
-    std::string inflated;
-    if ( !kitty_inflate( cmd.payload, inflated, cmd.data_size ) ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: zlib inflate failed" );
-      return;
-    }
-    cmd.payload.swap( inflated );
-    cmd.compression = 0;
-  }
-
   std::string data, error;
   if ( !kitty_read_medium( cmd, data, error ) ) {
     kitty_reply( this, cmd, cmd.image_id, error.empty() ? "EINVAL: transmit failed" : error );
+    return;
+  }
+
+  if ( cmd.compression == 'z' ) {
+    std::string inflated;
+    if ( !kitty_inflate( data, inflated, cmd.data_size ) ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL: zlib inflate failed" );
+      return;
+    }
+    data.swap( inflated );
+  } else if ( cmd.compression != 0 ) {
+    kitty_reply( this, cmd, cmd.image_id, "EINVAL: unsupported compression" );
+    return;
+  }
+
+  std::string webp;
+  uint32_t width = 0, height = 0;
+  if ( data.size() > KITTY_IMAGE_QUOTA
+       || !kitty_normalize_webp( cmd.format, cmd.width, cmd.height, data, webp, width, height, error ) ) {
+    kitty_reply( this, cmd, cmd.image_id, error.empty() ? "EINVAL: image exceeds storage quota" : error );
     return;
   }
 
@@ -348,10 +358,10 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
   KittyImage image;
   image.id = cmd.image_id;
   image.number = cmd.image_number;
-  image.format = cmd.format ? cmd.format : 32;
-  image.width = cmd.width;
-  image.height = cmd.height;
-  image.data = std::make_shared<std::string>( data );
+  image.format = KITTY_FORMAT_WEBP;
+  image.width = width;
+  image.height = height;
+  image.data = std::make_shared<std::string>( webp );
   if ( image.id == 0 && image.number == 0 ) {
     /* assign internally so the image can live in terminal state */
   }
@@ -397,6 +407,11 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
 void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused ) ), Framebuffer* fb )
 {
   if ( APC_overflow || APC_string.empty() ) {
+    if ( APC_overflow && kitty_uploading ) {
+      kitty_reply( this, kitty_partial, kitty_partial.image_id, "ENOSPC: Kitty APC exceeds size limit" );
+      kitty_uploading = false;
+      kitty_payload.clear();
+    }
     APC_string.clear();
     APC_overflow = false;
     return;
@@ -404,6 +419,11 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
 
   KittyCommand cmd;
   if ( !parse_kitty_command( APC_string, cmd ) ) {
+    if ( kitty_uploading ) {
+      kitty_reply( this, kitty_partial, kitty_partial.image_id, "EINVAL: malformed Kitty continuation" );
+      kitty_uploading = false;
+      kitty_payload.clear();
+    }
     APC_string.clear();
     return;
   }
@@ -414,6 +434,13 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
       kitty_uploading = false;
       kitty_payload.clear();
       fb->delete_kitty( cmd );
+      return;
+    }
+    if ( kitty_payload.size() > KITTY_IMAGE_QUOTA
+         || cmd.payload.size() > KITTY_IMAGE_QUOTA - kitty_payload.size() ) {
+      kitty_reply( this, kitty_partial, kitty_partial.image_id, "ENOSPC: image exceeds storage quota" );
+      kitty_uploading = false;
+      kitty_payload.clear();
       return;
     }
     kitty_payload.append( cmd.payload );
@@ -468,6 +495,10 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
   if ( cmd.action == KittyQuery || cmd.action == KittyTransmit || cmd.action == KittyTransmitAndDisplay ) {
     if ( cmd.image_id != 0 && cmd.image_number != 0 ) {
       kitty_reply( this, cmd, cmd.image_id, "EINVAL: both i and I specified" );
+      return;
+    }
+    if ( cmd.payload.size() > KITTY_IMAGE_QUOTA ) {
+      kitty_reply( this, cmd, cmd.image_id, "ENOSPC: image exceeds storage quota" );
       return;
     }
     kitty_uploading = true;

@@ -253,6 +253,15 @@ AC_CHECK_LIB([z], [compress],
    LIBS="$ZLIB_LIBS $LIBS"],
   [AC_MSG_ERROR([Unable to find zlib.])])
 
+# Kitty graphics are normalized to lossless WebP in terminal state.  PNG is
+# required to accept the compact image format mandated by the Kitty protocol.
+PKG_CHECK_MODULES([WEBP], [libwebp], [],
+  [AC_MSG_ERROR([Unable to find libwebp, required for Kitty graphics state.])])
+PKG_CHECK_MODULES([PNG], [libpng], [],
+  [AC_MSG_ERROR([Unable to find libpng, required for Kitty PNG input.])])
+CPPFLAGS="$CPPFLAGS $WEBP_CFLAGS $PNG_CFLAGS"
+LIBS="$WEBP_LIBS $PNG_LIBS $LIBS"
+
 AC_ARG_WITH([zstd],
   [AS_HELP_STRING([--with-zstd], [Enable zstd compression for moshcp and transport state @<:@check@:>@])],
   [with_zstd="$withval"],
@@ -690,4 +699,5 @@ AC_MSG_NOTICE([Harden CFLAGS:       $HARDEN_CFLAGS])
 AC_MSG_NOTICE([Cryptography:        $human_readable_cryptography_description])
 AC_MSG_NOTICE([FEC RFC6330:         $have_libraptorq])
 AC_MSG_NOTICE([moshcp zstd:         $have_zstd])
+AC_MSG_NOTICE([Kitty WebP state:    yes])
 AC_MSG_NOTICE([ =============================])

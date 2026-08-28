@@ -15,45 +15,50 @@
 #include "src/terminal/terminalframebuffer.h"
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <sys/mman.h>
 
+#include <png.h>
+#include <webp/decode.h>
+#include <webp/encode.h>
 #include <zlib.h>
 
 namespace Terminal {
 
 KittyCommand::KittyCommand()
-  : action( KittyTransmit ), medium( 'd' ), compression( 0 ), format( 32 ), width( 0 ), height( 0 ),
-    data_size( 0 ), data_offset( 0 ), image_id( 0 ), image_number( 0 ), placement_id( 0 ), more( 0 ),
-    quiet( 0 ), columns( 0 ), rows( 0 ), src_x( 0 ), src_y( 0 ), src_w( 0 ), src_h( 0 ), cell_x( 0 ),
-    cell_y( 0 ), z( 0 ), cursor_hold( 0 ), unicode_placeholder( 0 ), parent_image( 0 ), parent_placement( 0 ),
-    H( 0 ), V( 0 ), delete_target( 'a' ), payload()
+  : action( KittyTransmit ), medium( 'd' ), compression( 0 ), format( KITTY_FORMAT_RGBA ), width( 0 ), height( 0 ),
+    data_size( 0 ), data_offset( 0 ), image_id( 0 ), image_number( 0 ), placement_id( 0 ), more( 0 ), quiet( 0 ),
+    columns( 0 ), rows( 0 ), src_x( 0 ), src_y( 0 ), src_w( 0 ), src_h( 0 ), cell_x( 0 ), cell_y( 0 ), z( 0 ),
+    cursor_hold( 0 ), unicode_placeholder( 0 ), parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 ),
+    delete_target( 'a' ), payload()
 {}
 
 KittyImage::KittyImage()
-  : id( 0 ), number( 0 ), format( 32 ), width( 0 ), height( 0 ), data( std::make_shared<std::string>() ),
-    serial( 0 )
+  : id( 0 ), number( 0 ), format( KITTY_FORMAT_WEBP ), width( 0 ), height( 0 ),
+    data( std::make_shared<std::string>() ), serial( 0 )
 {}
 
 bool KittyImage::operator==( const KittyImage& other ) const
 {
-  return ( id == other.id ) && ( number == other.number ) && ( format == other.format )
-         && ( width == other.width ) && ( height == other.height ) && ( serial == other.serial )
+  return ( id == other.id ) && ( number == other.number ) && ( format == other.format ) && ( width == other.width )
+         && ( height == other.height ) && ( serial == other.serial )
          && ( ( data == other.data ) || ( data && other.data && *data == *other.data ) );
 }
 
 KittyPlacement::KittyPlacement()
   : image_id( 0 ), placement_id( 0 ), row( 0 ), col( 0 ), columns( 0 ), rows( 0 ), src_x( 0 ), src_y( 0 ),
-    src_w( 0 ), src_h( 0 ), cell_x( 0 ), cell_y( 0 ), z( 0 ), cursor_hold( false ),
-    unicode_placeholder( false ), parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 )
+    src_w( 0 ), src_h( 0 ), cell_x( 0 ), cell_y( 0 ), z( 0 ), cursor_hold( false ), unicode_placeholder( false ),
+    parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 )
 {}
 
 bool KittyPlacement::operator==( const KittyPlacement& other ) const
@@ -61,10 +66,10 @@ bool KittyPlacement::operator==( const KittyPlacement& other ) const
   return ( image_id == other.image_id ) && ( placement_id == other.placement_id ) && ( row == other.row )
          && ( col == other.col ) && ( columns == other.columns ) && ( rows == other.rows )
          && ( src_x == other.src_x ) && ( src_y == other.src_y ) && ( src_w == other.src_w )
-         && ( src_h == other.src_h ) && ( cell_x == other.cell_x ) && ( cell_y == other.cell_y )
-         && ( z == other.z ) && ( cursor_hold == other.cursor_hold )
-         && ( unicode_placeholder == other.unicode_placeholder ) && ( parent_image == other.parent_image )
-         && ( parent_placement == other.parent_placement ) && ( H == other.H ) && ( V == other.V );
+         && ( src_h == other.src_h ) && ( cell_x == other.cell_x ) && ( cell_y == other.cell_y ) && ( z == other.z )
+         && ( cursor_hold == other.cursor_hold ) && ( unicode_placeholder == other.unicode_placeholder )
+         && ( parent_image == other.parent_image ) && ( parent_placement == other.parent_placement )
+         && ( H == other.H ) && ( V == other.V );
 }
 
 static bool parse_u32( const std::string& s, uint32_t& out )
@@ -243,7 +248,17 @@ static bool path_is_sensitive( const std::string& path )
 static bool read_regular_file( const std::string& path, uint32_t offset, uint32_t size, std::string& data )
 {
   struct stat st;
-  if ( stat( path.c_str(), &st ) < 0 || !S_ISREG( st.st_mode ) ) {
+  if ( stat( path.c_str(), &st ) < 0 || !S_ISREG( st.st_mode ) || st.st_size < 0 ) {
+    return false;
+  }
+  const uint64_t total = static_cast<uint64_t>( st.st_size );
+  const uint64_t off = offset;
+  if ( off > total ) {
+    return false;
+  }
+  const uint64_t available = total - off;
+  const uint64_t wanted = size == 0 || size > available ? available : size;
+  if ( wanted > KITTY_IMAGE_QUOTA ) {
     return false;
   }
   std::ifstream in( path.c_str(), std::ios::in | std::ios::binary );
@@ -253,14 +268,15 @@ static bool read_regular_file( const std::string& path, uint32_t offset, uint32_
   if ( offset > 0 ) {
     in.seekg( offset, std::ios::beg );
   }
-  if ( size > 0 ) {
-    data.assign( size, '\0' );
-    in.read( &data[0], size );
-    data.resize( static_cast<size_t>( in.gcount() ) );
-  } else {
-    data.assign( std::istreambuf_iterator<char>( in ), std::istreambuf_iterator<char>() );
+  data.assign( static_cast<size_t>( wanted ), '\0' );
+  if ( wanted > 0 ) {
+    in.read( &data[0], static_cast<std::streamsize>( wanted ) );
+    if ( static_cast<uint64_t>( in.gcount() ) != wanted ) {
+      data.clear();
+      return false;
+    }
   }
-  return !data.empty() || size == 0;
+  return true;
 }
 
 bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string& error )
@@ -304,23 +320,37 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     struct stat st;
     if ( fstat( fd, &st ) < 0 || st.st_size < 0 ) {
       close( fd );
+      shm_unlink( name.c_str() );
       error = "EINVAL: shm fstat failed";
       return false;
     }
-    size_t total = static_cast<size_t>( st.st_size );
-    size_t off = cmd.data_offset;
-    size_t want = cmd.data_size ? cmd.data_size : ( off < total ? total - off : 0 );
-    if ( off > total ) {
+    const uint64_t total64 = static_cast<uint64_t>( st.st_size );
+    const uint64_t off64 = cmd.data_offset;
+    if ( total64 > SIZE_MAX || off64 > total64 ) {
       close( fd );
+      shm_unlink( name.c_str() );
       error = "EINVAL: shm offset";
       return false;
     }
-    if ( off + want > total ) {
-      want = total - off;
+    const size_t total = static_cast<size_t>( total64 );
+    const size_t off = static_cast<size_t>( off64 );
+    const size_t available = total - off;
+    const size_t want = cmd.data_size == 0 || cmd.data_size > available ? available : cmd.data_size;
+    if ( want > KITTY_IMAGE_QUOTA ) {
+      close( fd );
+      shm_unlink( name.c_str() );
+      error = "ENOSPC: shared memory image exceeds storage quota";
+      return false;
+    }
+    if ( total == 0 ) {
+      close( fd );
+      shm_unlink( name.c_str() );
+      return true;
     }
     void* map = mmap( NULL, total, PROT_READ, MAP_SHARED, fd, 0 );
     close( fd );
     if ( map == MAP_FAILED ) {
+      shm_unlink( name.c_str() );
       error = "EINVAL: mmap failed";
       return false;
     }
@@ -338,6 +368,143 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
   return false;
 }
 
+static bool checked_pixel_size( uint32_t width, uint32_t height, size_t bytes_per_pixel, size_t& size )
+{
+  if ( width == 0 || height == 0 || width > static_cast<uint32_t>( INT_MAX )
+       || height > static_cast<uint32_t>( INT_MAX ) || bytes_per_pixel == 0 ) {
+    return false;
+  }
+  if ( width > KITTY_IMAGE_QUOTA / bytes_per_pixel
+       || height > KITTY_IMAGE_QUOTA / ( static_cast<size_t>( width ) * bytes_per_pixel ) ) {
+    return false;
+  }
+  size = static_cast<size_t>( width ) * static_cast<size_t>( height ) * bytes_per_pixel;
+  return size <= KITTY_IMAGE_QUOTA;
+}
+
+bool kitty_webp_dimensions( const std::string& webp, uint32_t& width, uint32_t& height )
+{
+  int decoded_width = 0, decoded_height = 0;
+  size_t rgba_size = 0;
+  if ( webp.empty() || webp.size() > KITTY_IMAGE_QUOTA
+       || !WebPGetInfo(
+         reinterpret_cast<const uint8_t*>( webp.data() ), webp.size(), &decoded_width, &decoded_height )
+       || decoded_width <= 0 || decoded_height <= 0
+       || !checked_pixel_size(
+         static_cast<uint32_t>( decoded_width ), static_cast<uint32_t>( decoded_height ), 4, rgba_size ) ) {
+    return false;
+  }
+  width = static_cast<uint32_t>( decoded_width );
+  height = static_cast<uint32_t>( decoded_height );
+  return true;
+}
+
+static bool encode_lossless_webp( const unsigned char* pixels,
+                                  uint32_t width,
+                                  uint32_t height,
+                                  bool alpha,
+                                  std::string& webp,
+                                  std::string& error )
+{
+  const int stride = static_cast<int>( width * ( alpha ? 4 : 3 ) );
+  uint8_t* encoded = NULL;
+  const size_t encoded_size = alpha ? WebPEncodeLosslessRGBA( pixels, width, height, stride, &encoded )
+                                    : WebPEncodeLosslessRGB( pixels, width, height, stride, &encoded );
+  if ( encoded_size == 0 || encoded == NULL || encoded_size > KITTY_IMAGE_QUOTA ) {
+    WebPFree( encoded );
+    error = "EINVAL: WebP encode failed";
+    return false;
+  }
+  webp.assign( reinterpret_cast<const char*>( encoded ), encoded_size );
+  WebPFree( encoded );
+  return true;
+}
+
+bool kitty_normalize_webp( uint32_t format,
+                           uint32_t width,
+                           uint32_t height,
+                           const std::string& input,
+                           std::string& webp,
+                           uint32_t& output_width,
+                           uint32_t& output_height,
+                           std::string& error )
+{
+  webp.clear();
+  error.clear();
+
+  if ( format == KITTY_FORMAT_RGB || format == KITTY_FORMAT_RGBA ) {
+    const size_t bytes_per_pixel = format == KITTY_FORMAT_RGB ? 3 : 4;
+    size_t expected = 0, rgba_size = 0;
+    if ( !checked_pixel_size( width, height, bytes_per_pixel, expected )
+         || !checked_pixel_size( width, height, 4, rgba_size ) || input.size() != expected ) {
+      error = "EINVAL: pixel data size does not match dimensions";
+      return false;
+    }
+    output_width = width;
+    output_height = height;
+    return encode_lossless_webp( reinterpret_cast<const unsigned char*>( input.data() ),
+                                 width,
+                                 height,
+                                 format == KITTY_FORMAT_RGBA,
+                                 webp,
+                                 error );
+  }
+
+  if ( format == KITTY_FORMAT_PNG ) {
+    png_image image;
+    memset( &image, 0, sizeof( image ) );
+    image.version = PNG_IMAGE_VERSION;
+    if ( input.empty() || !png_image_begin_read_from_memory( &image, input.data(), input.size() ) ) {
+      error = "EINVAL: invalid PNG image";
+      return false;
+    }
+
+    size_t rgba_size = 0;
+    const uint32_t png_width = image.width;
+    const uint32_t png_height = image.height;
+    if ( !checked_pixel_size( png_width, png_height, 4, rgba_size ) ) {
+      png_image_free( &image );
+      error = "EINVAL: PNG dimensions exceed image quota";
+      return false;
+    }
+
+    image.format = PNG_FORMAT_RGBA;
+    std::string rgba( rgba_size, '\0' );
+    if ( !png_image_finish_read( &image, NULL, &rgba[0], 0, NULL ) ) {
+      png_image_free( &image );
+      error = "EINVAL: PNG decode failed";
+      return false;
+    }
+    png_image_free( &image );
+    output_width = png_width;
+    output_height = png_height;
+    return encode_lossless_webp(
+      reinterpret_cast<const unsigned char*>( rgba.data() ), output_width, output_height, true, webp, error );
+  }
+
+  error = "EINVAL: unsupported Kitty image format";
+  return false;
+}
+
+bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& width, uint32_t& height )
+{
+  if ( !kitty_webp_dimensions( webp, width, height ) ) {
+    return false;
+  }
+  const size_t size = static_cast<size_t>( width ) * static_cast<size_t>( height ) * 4;
+  rgba.assign( size, '\0' );
+  if ( WebPDecodeRGBAInto( reinterpret_cast<const uint8_t*>( webp.data() ),
+                           webp.size(),
+                           reinterpret_cast<uint8_t*>( &rgba[0] ),
+                           rgba.size(),
+                           static_cast<int>( width * 4 ) )
+       == NULL ) {
+    rgba.clear();
+    return false;
+  }
+  return true;
+}
+
 static void append_u32_key( std::string& controls, const char* key, uint32_t value, bool skip_zero = true )
 {
   if ( skip_zero && value == 0 ) {
@@ -348,15 +515,38 @@ static void append_u32_key( std::string& controls, const char* key, uint32_t val
   controls.append( buf );
 }
 
-void append_kitty_frame( std::string& out,
-                         bool initialized,
-                         const Framebuffer& last,
-                         const Framebuffer& current )
+static bool anonymous_placement_removed( const std::vector<KittyPlacement>& old_places,
+                                         const std::vector<KittyPlacement>& now_places,
+                                         uint32_t image_id )
+{
+  std::vector<bool> matched( now_places.size(), false );
+  for ( size_t i = 0; i < old_places.size(); i++ ) {
+    if ( old_places[i].image_id != image_id || old_places[i].placement_id != 0 ) {
+      continue;
+    }
+    bool found = false;
+    for ( size_t j = 0; j < now_places.size(); j++ ) {
+      if ( !matched[j] && now_places[j].image_id == image_id && now_places[j].placement_id == 0
+           && old_places[i] == now_places[j] ) {
+        matched[j] = true;
+        found = true;
+        break;
+      }
+    }
+    if ( !found ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current )
 {
   const std::map<uint32_t, KittyImage>& now_images = current.get_kitty_images();
   const std::map<uint32_t, KittyImage>& old_images = last.get_kitty_images();
   const std::vector<KittyPlacement>& now_places = current.get_kitty_placements();
   const std::vector<KittyPlacement>& old_places = last.get_kitty_placements();
+  std::set<uint32_t> placements_cleared;
 
   if ( now_images.empty() && now_places.empty() && old_images.empty() && old_places.empty() ) {
     return;
@@ -364,34 +554,62 @@ void append_kitty_frame( std::string& out,
 
   if ( !initialized ) {
     out.append( "\033_Ga=d,d=A,q=2\033\\" );
-  }
-
-  for ( std::map<uint32_t, KittyImage>::const_iterator it = old_images.begin(); it != old_images.end();
-        ++it ) {
-    std::map<uint32_t, KittyImage>::const_iterator cur = now_images.find( it->first );
-    if ( cur == now_images.end() || cur->second.serial != it->second.serial ) {
+    for ( std::map<uint32_t, KittyImage>::const_iterator it = old_images.begin(); it != old_images.end(); ++it ) {
       char buf[64];
       snprintf( buf, sizeof( buf ), "\033_Ga=d,d=I,i=%u,q=2\033\\", it->first );
       out.append( buf );
+      placements_cleared.insert( it->first );
     }
   }
 
-  for ( std::map<uint32_t, KittyImage>::const_iterator it = now_images.begin(); it != now_images.end();
-        ++it ) {
+  for ( std::map<uint32_t, KittyImage>::const_iterator it = old_images.begin(); it != old_images.end(); ++it ) {
+    std::map<uint32_t, KittyImage>::const_iterator cur = now_images.find( it->first );
+    if ( cur == now_images.end() || cur->second.serial != it->second.serial ) {
+      if ( placements_cleared.insert( it->first ).second ) {
+        char buf[64];
+        snprintf( buf, sizeof( buf ), "\033_Ga=d,d=I,i=%u,q=2\033\\", it->first );
+        out.append( buf );
+      }
+    }
+  }
+
+  for ( std::map<uint32_t, KittyImage>::const_iterator it = now_images.begin(); it != now_images.end(); ++it ) {
     std::map<uint32_t, KittyImage>::const_iterator old = old_images.find( it->first );
     if ( initialized && old != old_images.end() && old->second.serial == it->second.serial ) {
       continue;
     }
+    if ( it->second.format != KITTY_FORMAT_WEBP || !it->second.data ) {
+      continue;
+    }
+    const std::string& webp = *it->second.data;
+    std::string rgba;
+    uint32_t width = 0, height = 0;
+    if ( !kitty_webp_to_rgba( webp, rgba, width, height ) || width != it->second.width
+         || height != it->second.height ) {
+      continue;
+    }
     std::string controls( "a=t,q=2" );
-    append_u32_key( controls, "f", it->second.format, false );
+    append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
     append_u32_key( controls, "i", it->second.id, false );
-    append_u32_key( controls, "s", it->second.width );
-    append_u32_key( controls, "v", it->second.height );
-    const std::string& binary = it->second.data ? *it->second.data : std::string();
-    out.append( encode_kitty_chunks( controls, binary ) );
+    append_u32_key( controls, "s", width );
+    append_u32_key( controls, "v", height );
+    out.append( encode_kitty_chunks( controls, rgba ) );
+  }
+
+  for ( std::map<uint32_t, KittyImage>::const_iterator it = now_images.begin(); it != now_images.end(); ++it ) {
+    if ( placements_cleared.find( it->first ) == placements_cleared.end()
+         && anonymous_placement_removed( old_places, now_places, it->first ) ) {
+      char buf[64];
+      snprintf( buf, sizeof( buf ), "\033_Ga=d,d=i,i=%u,q=2\033\\", it->first );
+      out.append( buf );
+      placements_cleared.insert( it->first );
+    }
   }
 
   for ( size_t i = 0; i < old_places.size(); i++ ) {
+    if ( placements_cleared.find( old_places[i].image_id ) != placements_cleared.end() ) {
+      continue;
+    }
     bool still = false;
     for ( size_t j = 0; j < now_places.size(); j++ ) {
       if ( old_places[i] == now_places[j] ) {
@@ -425,6 +643,9 @@ void append_kitty_frame( std::string& out,
           break;
         }
       }
+    }
+    if ( placements_cleared.find( now_places[i].image_id ) != placements_cleared.end() ) {
+      already = false;
     }
     if ( already ) {
       continue;
@@ -482,7 +703,7 @@ bool kitty_inflate( const std::string& input, std::string& output, size_t hint )
     dest_len = KITTY_IMAGE_QUOTA;
   }
 
-  for ( int attempt = 0; attempt < 4; attempt++ ) {
+  while ( true ) {
     output.assign( dest_len, '\0' );
     uLongf out_len = dest_len;
     const int rc = uncompress( reinterpret_cast<Bytef*>( &output[0] ),
@@ -496,12 +717,11 @@ bool kitty_inflate( const std::string& input, std::string& output, size_t hint )
     if ( rc != Z_BUF_ERROR ) {
       return false;
     }
-    dest_len *= 2;
-    if ( dest_len > KITTY_IMAGE_QUOTA ) {
+    if ( dest_len == KITTY_IMAGE_QUOTA ) {
       return false;
     }
+    dest_len = dest_len > KITTY_IMAGE_QUOTA / 2 ? KITTY_IMAGE_QUOTA : dest_len * 2;
   }
-  return false;
 }
 
 }

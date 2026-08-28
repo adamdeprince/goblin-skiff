@@ -1,4 +1,4 @@
-source = clipboard.proto stream.proto userinput.proto hostinput.proto transportinstruction.proto
+source = clipboard.proto kitty.proto stream.proto userinput.proto hostinput.proto transportinstruction.proto
 
 AM_CPPFLAGS = $(protobuf_CFLAGS)
 AM_CXXFLAGS = $(WARNING_CXXFLAGS) $(HARDEN_CFLAGS) $(MISC_CXXFLAGS) $(CODE_COVERAGE_CXXFLAGS) -Wno-error
@@ -9,7 +9,7 @@ SUFFIXES = .proto .pb.cc
 	$(AM_V_GEN)$(PROTOC) --cpp_out=. -I$(srcdir) $<
 
 userinput.pb.cc: stream.pb.cc clipboard.pb.cc
-hostinput.pb.cc: stream.pb.cc clipboard.pb.cc
+hostinput.pb.cc: stream.pb.cc clipboard.pb.cc kitty.pb.cc
 
 noinst_LIBRARIES = libmoshprotos.a
 

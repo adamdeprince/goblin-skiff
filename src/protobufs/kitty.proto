@@ -1,0 +1,42 @@
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package KittyBuffers;
+
+message Image {
+  required uint32 id = 1;
+  optional uint32 number = 2;
+  required uint32 width = 3;
+  required uint32 height = 4;
+  required bytes webp = 5;
+}
+
+message Placement {
+  required uint32 image_id = 1;
+  optional uint32 placement_id = 2;
+  required sint32 row = 3;
+  required sint32 col = 4;
+  optional uint32 columns = 5;
+  optional uint32 rows = 6;
+  optional uint32 src_x = 7;
+  optional uint32 src_y = 8;
+  optional uint32 src_w = 9;
+  optional uint32 src_h = 10;
+  optional uint32 cell_x = 11;
+  optional uint32 cell_y = 12;
+  optional sint32 z = 13;
+  optional bool cursor_hold = 14;
+  optional bool unicode_placeholder = 15;
+  optional uint32 parent_image = 16;
+  optional uint32 parent_placement = 17;
+  optional sint32 horizontal_offset = 18;
+  optional sint32 vertical_offset = 19;
+}
+
+message StateDelta {
+  repeated uint32 delete_image_id = 1 [packed = true];
+  repeated Image image = 2;
+  optional bool replace_placements = 3 [default = false];
+  repeated Placement placement = 4;
+}

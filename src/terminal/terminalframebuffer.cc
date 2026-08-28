@@ -73,8 +73,8 @@ DrawState::DrawState( int s_width, int s_height )
 }
 
 Framebuffer::Framebuffer( int s_width, int s_height )
-  : rows(), icon_name(), window_title(), clipboard(), bell_count( 0 ), title_initialized( false ),
-    kitty_images(), kitty_placements(), kitty_next_id( 1 ), kitty_serial( 1 ), ds( s_width, s_height )
+  : rows(), icon_name(), window_title(), clipboard(), bell_count( 0 ), title_initialized( false ), kitty_images(),
+    kitty_placements(), kitty_next_id( 1 ), kitty_serial( 1 ), ds( s_width, s_height )
 {
   assert( s_height > 0 );
   assert( s_width > 0 );
@@ -769,7 +769,7 @@ uint32_t Framebuffer::put_kitty_image( const KittyImage& image )
   }
 
   kitty_images[stored.id] = stored;
-  evict_kitty_images();
+  evict_kitty_images( stored.id );
   return stored.id;
 }
 
@@ -795,6 +795,19 @@ KittyImage* Framebuffer::find_newest_kitty_number( uint32_t number )
   return newest;
 }
 
+void Framebuffer::erase_kitty_image( uint32_t id )
+{
+  kitty_images.erase( id );
+  std::vector<KittyPlacement> kept;
+  kept.reserve( kitty_placements.size() );
+  for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
+    if ( kitty_placements[i].image_id != id ) {
+      kept.push_back( kitty_placements[i] );
+    }
+  }
+  kitty_placements.swap( kept );
+}
+
 void Framebuffer::put_kitty_placement( const KittyPlacement& placement )
 {
   if ( placement.image_id != 0 && placement.placement_id != 0 ) {
@@ -807,6 +820,11 @@ void Framebuffer::put_kitty_placement( const KittyPlacement& placement )
     }
   }
   kitty_placements.push_back( placement );
+}
+
+void Framebuffer::replace_kitty_placements( const std::vector<KittyPlacement>& placements )
+{
+  kitty_placements = placements;
 }
 
 void Framebuffer::delete_kitty( const KittyCommand& cmd )
@@ -826,13 +844,12 @@ void Framebuffer::delete_kitty( const KittyCommand& cmd )
         drop = !p.unicode_placeholder;
         break;
       case 'i':
-        drop = ( p.image_id == cmd.image_id )
-               && ( cmd.placement_id == 0 || p.placement_id == cmd.placement_id );
+        drop = ( p.image_id == cmd.image_id ) && ( cmd.placement_id == 0 || p.placement_id == cmd.placement_id );
         break;
       case 'n': {
         KittyImage* newest = find_newest_kitty_number( cmd.image_number );
-        drop = newest && p.image_id == newest->id
-               && ( cmd.placement_id == 0 || p.placement_id == cmd.placement_id );
+        drop
+          = newest && p.image_id == newest->id && ( cmd.placement_id == 0 || p.placement_id == cmd.placement_id );
         break;
       }
       case 'c':
@@ -922,14 +939,22 @@ void Framebuffer::scroll_kitty_placements( int first_row, int count, bool insert
   kitty_placements.swap( kept );
 }
 
-void Framebuffer::evict_kitty_images( void )
+static size_t kitty_image_cost( const KittyImage& image )
 {
-  size_t total = 0;
-  for ( std::map<uint32_t, KittyImage>::const_iterator it = kitty_images.begin(); it != kitty_images.end();
-        ++it ) {
-    if ( it->second.data ) {
-      total += it->second.data->size();
-    }
+  const size_t encoded = image.data ? image.data->size() : 0;
+  if ( image.width == 0 || image.width > KITTY_IMAGE_QUOTA / 4
+       || image.height > KITTY_IMAGE_QUOTA / ( static_cast<size_t>( image.width ) * 4 ) ) {
+    return KITTY_IMAGE_QUOTA + 1;
+  }
+  const size_t decoded = static_cast<size_t>( image.width ) * static_cast<size_t>( image.height ) * 4;
+  return encoded > decoded ? encoded : decoded;
+}
+
+void Framebuffer::evict_kitty_images( uint32_t preserve_id )
+{
+  uint64_t total = 0;
+  for ( std::map<uint32_t, KittyImage>::const_iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
+    total += kitty_image_cost( it->second );
   }
   if ( total <= KITTY_IMAGE_QUOTA ) {
     return;
@@ -942,9 +967,9 @@ void Framebuffer::evict_kitty_images( void )
 
   while ( total > KITTY_IMAGE_QUOTA && !kitty_images.empty() ) {
     std::map<uint32_t, KittyImage>::iterator victim = kitty_images.end();
-    for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end();
-          ++it ) {
-      if ( referenced.find( it->first ) != referenced.end() ) {
+    for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
+      if ( ( it->first == preserve_id && kitty_images.size() > 1 )
+           || referenced.find( it->first ) != referenced.end() ) {
         continue;
       }
       if ( victim == kitty_images.end() || it->second.serial < victim->second.serial ) {
@@ -952,17 +977,16 @@ void Framebuffer::evict_kitty_images( void )
       }
     }
     if ( victim == kitty_images.end() ) {
-      victim = kitty_images.begin();
-      for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end();
-            ++it ) {
-        if ( it->second.serial < victim->second.serial ) {
-          victim = it;
+      for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
+        if ( it->first != preserve_id || kitty_images.size() == 1 ) {
+          if ( victim == kitty_images.end() || it->second.serial < victim->second.serial ) {
+            victim = it;
+          }
         }
       }
     }
-    if ( victim->second.data ) {
-      total -= victim->second.data->size();
-    }
+    assert( victim != kitty_images.end() );
+    total -= kitty_image_cost( victim->second );
     std::vector<KittyPlacement> kept;
     for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
       if ( kitty_placements[i].image_id != victim->first ) {

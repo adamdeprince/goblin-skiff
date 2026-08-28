@@ -34,9 +34,11 @@
 
 #include "src/protobufs/clipboard.pb.h"
 #include "src/protobufs/hostinput.pb.h"
+#include "src/protobufs/kitty.pb.h"
 #include "src/protobufs/stream.pb.h"
 #include "src/statesync/clipboard.h"
 #include "src/statesync/completeterminal.h"
+#include "src/statesync/kitty.h"
 #include "src/util/fatal_assert.h"
 
 using namespace std;
@@ -72,6 +74,7 @@ string Complete::act( const Action& act )
 string Complete::diff_from( const Complete& existing ) const
 {
   HostBuffers::HostMessage output;
+  bool hostbytes_emitted = false;
 
   if ( existing.get_echo_ack() != get_echo_ack() ) {
     assert( get_echo_ack() >= existing.get_echo_ack() );
@@ -90,7 +93,17 @@ string Complete::diff_from( const Complete& existing ) const
     if ( !update.empty() ) {
       Instruction* new_inst = output.add_instruction();
       new_inst->MutableExtension( hostbytes )->set_hoststring( update );
+      hostbytes_emitted = true;
     }
+  }
+
+  KittyBuffers::StateDelta kitty_delta;
+  const bool force_kitty_placements
+    = hostbytes_emitted
+      && ( !existing.get_fb().get_kitty_placements().empty() || !get_fb().get_kitty_placements().empty() );
+  if ( kitty_state_delta_to_proto( existing.get_fb(), get_fb(), &kitty_delta, force_kitty_placements ) ) {
+    Instruction* new_inst = output.add_instruction();
+    new_inst->MutableExtension( HostBuffers::kitty )->CopyFrom( kitty_delta );
   }
 
   std::deque<Network::StreamEvent>::const_iterator stream_it = stream_events.begin();
@@ -105,8 +118,8 @@ string Complete::diff_from( const Complete& existing ) const
   while ( stream_it != stream_events.end() ) {
     if ( stream_it->type == Network::StreamDataType && output.instruction_size() > 0
          && output.instruction( output.instruction_size() - 1 ).HasExtension( HostBuffers::stream ) ) {
-      StreamBuffers::StreamEvent* previous = output.mutable_instruction( output.instruction_size() - 1 )
-                                               ->MutableExtension( HostBuffers::stream );
+      StreamBuffers::StreamEvent* previous
+        = output.mutable_instruction( output.instruction_size() - 1 )->MutableExtension( HostBuffers::stream );
       if ( previous->type() == StreamBuffers::StreamEvent::DATA && previous->stream_id() == stream_it->stream_id
            && previous->priority() == stream_it->priority ) {
         previous->mutable_data()->append( stream_it->data );
@@ -164,6 +177,8 @@ void Complete::apply_string( const string& diff )
     } else if ( input.instruction( i ).HasExtension( HostBuffers::clipboard ) ) {
       clipboard_events.push_back(
         clipboard_event_from_proto( input.instruction( i ).GetExtension( HostBuffers::clipboard ) ) );
+    } else if ( input.instruction( i ).HasExtension( HostBuffers::kitty ) ) {
+      apply_kitty_state_delta( input.instruction( i ).GetExtension( HostBuffers::kitty ), terminal.get_fb() );
     }
   }
 }

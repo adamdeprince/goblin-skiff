@@ -8,6 +8,8 @@ deps() {
     echo "macosx_deployment_target 11.0" | sudo tee -a /opt/local/etc/macports/macports.conf
     sudo /opt/local/bin/port install protobuf3-cpp +universal
     sudo /opt/local/bin/port install ncurses +universal
+    sudo /opt/local/bin/port install libpng webp +universal
+    sudo /opt/local/bin/port install zstd +universal
     sudo /opt/local/bin/port install pkgconfig
     sudo /opt/local/bin/port install autoconf automake
 }

@@ -246,10 +246,12 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
     wrap = put_row( initialized, frame, f, frame_y, *rows.at( frame_y ), wrap );
   }
 
-  const size_t before_kitty = frame.str.size();
-  append_kitty_frame( frame.str, initialized, frame.last_frame, f );
-  if ( frame.str.size() != before_kitty ) {
-    frame.cursor_x = frame.cursor_y = -1;
+  if ( render_kitty ) {
+    const size_t before_kitty = frame.str.size();
+    append_kitty_frame( frame.str, initialized, frame.last_frame, f );
+    if ( frame.str.size() != before_kitty ) {
+      frame.cursor_x = frame.cursor_y = -1;
+    }
   }
 
   /* has cursor location changed? */

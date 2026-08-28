@@ -103,7 +103,7 @@ osc52_parse_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.
 
 kitty_graphics_SOURCES = kitty-graphics.cc
 kitty_graphics_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS)
-kitty_graphics_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS) -lz
+kitty_graphics_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS)
 
 clean-local: clean-local-check
 .PHONY: clean-local-check

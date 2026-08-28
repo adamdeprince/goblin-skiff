@@ -524,11 +524,13 @@ public:
   const std::map<uint32_t, KittyImage>& get_kitty_images( void ) const { return kitty_images; }
   const KittyImage* find_kitty_image( uint32_t id ) const;
   KittyImage* find_newest_kitty_number( uint32_t number );
+  void erase_kitty_image( uint32_t id );
   void put_kitty_placement( const KittyPlacement& placement );
   const std::vector<KittyPlacement>& get_kitty_placements( void ) const { return kitty_placements; }
+  void replace_kitty_placements( const std::vector<KittyPlacement>& placements );
   void delete_kitty( const KittyCommand& cmd );
   void scroll_kitty_placements( int first_row, int count, bool inserting );
-  void evict_kitty_images( void );
+  void evict_kitty_images( uint32_t preserve_id = 0 );
 
   bool operator==( const Framebuffer& x ) const
   {

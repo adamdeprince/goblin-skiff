@@ -129,6 +129,11 @@ Usage
     $ adam-mosh-compile-dictionary --input=alpine.samples.zst --output=alpine.dict
     $ adam-mosh --state-zstd-dict=alpine.dict host
 
+  Static Kitty graphics sent as RGB, RGBA, or PNG are normalized once to
+  lossless WebP and synchronized as image and placement state.  Placement-only
+  changes do not resend pixels.  The client decodes WebP and emits standard
+  Kitty RGBA commands to the local terminal.
+
   State sample logs contain the uncompressed terminal update stream and may
   include sensitive terminal contents.  A dictionary passed with
   `--state-zstd-dict=FILE` is stored as a zstd level-22 compressed file,
@@ -216,7 +221,7 @@ Debian, Windows Subsystem for Linux:
 ```
 $ sudo apt install -y build-essential protobuf-compiler \
     libprotobuf-dev pkg-config libutempter-dev zlib1g-dev libncurses5-dev \
-    libssl-dev bash-completion tmux less
+    libssl-dev libpng-dev libwebp-dev libzstd-dev bash-completion tmux less
 ```
 
 Fedora, RHEL:
@@ -224,14 +229,14 @@ Fedora, RHEL:
 ```
 $ sudo dnf group install development-tools
 $ sudo dnf install automake protobuf-compiler protobuf-devel libutempter-devel \
-    zlib-ng-compat-devel ncurses-devel openssl-devel bash-completion tmux less \
-    perl-diagnostics
+    zlib-ng-compat-devel ncurses-devel openssl-devel libpng-devel libwebp-devel \
+    libzstd-devel bash-completion tmux less perl-diagnostics
 ```
 
 MacOS:
 
 ```
-$ brew install protobuf automake
+$ brew install protobuf automake libpng webp zstd
 ```
 
 Once you have forked the repository, run the following to build and test Mosh:

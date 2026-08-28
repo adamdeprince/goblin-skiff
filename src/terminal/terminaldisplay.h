@@ -74,6 +74,8 @@ private:
 
   bool has_title; /* supports window title and icon name */
 
+  bool render_kitty; /* true only for bytes sent to the user's terminal */
+
   const char *smcup, *rmcup; /* enter and exit alternate screen mode */
 
   bool put_row( bool initialized,

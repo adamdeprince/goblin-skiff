@@ -85,6 +85,7 @@ public:
   std::string read_octets_to_host( void );
   std::vector<ClipboardEvent> take_clipboard_events( void );
 
+  Framebuffer& get_fb( void ) { return fb; }
   const Framebuffer& get_fb( void ) const { return fb; }
 
   bool operator==( Emulator const& x ) const;
