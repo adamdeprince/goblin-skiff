@@ -646,7 +646,7 @@ bool STMClient::main( void )
         overlays.get_notification_engine().set_notification_string( L"" );
       }
 
-      if ( !network->has_unsent_data() ) {
+      if ( !network->shutdown_in_progress() && !network->has_unsent_data() ) {
         forwarder.flush(
           network->get_current_state(), timestamp(), network->send_interval(), network->max_datagram_payload() );
       }

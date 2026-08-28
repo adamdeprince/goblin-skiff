@@ -7,15 +7,44 @@ if ! set_locale; then
 fi
 
 set -eu
-out=$(
+
+run_local()
+{
     TERM=xterm \
         ./inpty \
         ../../scripts/adam-mosh \
         --client="../frontend/adam-mosh-client" \
         --server="$PWD/../frontend/adam-mosh-server" \
         --local --bind-server=127.0.0.1 127.0.0.1 \
-        -- printf 'he%s\n' llo)
+        -- "$@"
+}
+
+out=$(run_local printf 'he%s\n' llo)
 case "$out" in
-    *hello*) exit 0;;
+    *hello*) ;;
     *) exit 1;;
 esac
+
+# A command that produces no final terminal update used to enter shutdown
+# with an empty reliable queue, then try to append forwarding events after
+# TransportSender had frozen its state.  Bound this test so that regression
+# fails instead of leaving the test suite hung.
+timeout_command=
+if command -v timeout > /dev/null 2>&1; then
+    timeout_command=timeout
+elif command -v gtimeout > /dev/null 2>&1; then
+    timeout_command=gtimeout
+fi
+
+if test -n "$timeout_command"; then
+    TERM=xterm \
+        "$timeout_command" 15 \
+        ./inpty \
+        ../../scripts/adam-mosh \
+        --client="../frontend/adam-mosh-client" \
+        --server="$PWD/../frontend/adam-mosh-server" \
+        --local --bind-server=127.0.0.1 127.0.0.1 \
+        -- true > /dev/null
+else
+    echo "local.test: timeout unavailable; skipping no-output shutdown check" >&2
+fi

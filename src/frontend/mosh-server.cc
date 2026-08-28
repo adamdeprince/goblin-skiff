@@ -1167,7 +1167,7 @@ static void serve( int host_fd,
         break;
       }
 
-      if ( !network.has_unsent_data() ) {
+      if ( !network.shutdown_in_progress() && !network.has_unsent_data() ) {
         forwarder.flush( network.get_current_state(), now, network.send_interval(), network.max_datagram_payload() );
       }
       const bool reliable_data_queued = network.has_unsent_data();
