@@ -87,9 +87,6 @@ my $agent_forwarding = 0;
 my $x11_forwarding = 0;
 my $stream_delay = undef;
 my $stream_bandwidth = undef;
-my $state_zstd = 1;
-my $state_zstd_level = undef;
-my $state_zstd_threshold = undef;
 my $state_zstd_dict = undef;
 my $state_sample_log = undef;
 my $state_sample_min_size = undef;
@@ -142,17 +139,8 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
         --stream-bandwidth=BPS
                             cap forwarded stream payload bytes per second
                                 (default: 2048)
-        --state-zstd / --no-state-zstd
-                            enable negotiated zstd for large state updates
-                                (default: enabled when both sides support it)
-        --state-zstd-level=N
-                            zstd level for large state updates
-                                (default: 12, valid range: 0..22)
-        --state-zstd-threshold=BYTES
-                            minimum serialized state update size for zstd
-                                (default: 2048)
         --state-zstd-dict=FILE
-                            use a compiled zstd dictionary for state updates;
+                            use a compiled dictionary for negotiated zstd-22 state updates;
                                 the wrapper uploads the compressed file to the server
         --state-sample-log=FILE
                             write received uncompressed state samples to FILE
@@ -219,9 +207,6 @@ GetOptions( 'client=s' => \$client,
 	    'X' => \$x11_forwarding,
 	    'stream-delay=i' => \$stream_delay,
 	    'stream-bandwidth=i' => \$stream_bandwidth,
-	    'state-zstd!' => \$state_zstd,
-	    'state-zstd-level=i' => \$state_zstd_level,
-	    'state-zstd-threshold=i' => \$state_zstd_threshold,
 	    'state-zstd-dict=s' => \$state_zstd_dict,
 	    'state-sample-log=s' => \$state_sample_log,
 	    'state-sample-min-size=i' => \$state_sample_min_size,
@@ -278,14 +263,6 @@ if ( defined $stream_delay and $stream_delay < 0 ) {
 
 if ( defined $stream_bandwidth and $stream_bandwidth <= 0 ) {
   die "$0: --stream-bandwidth must be greater than zero.\n";
-}
-
-if ( defined $state_zstd_level and ( $state_zstd_level < 0 or $state_zstd_level > 22 ) ) {
-  die "$0: --state-zstd-level must be between 0 and 22.\n";
-}
-
-if ( defined $state_zstd_threshold and $state_zstd_threshold < 0 ) {
-  die "$0: --state-zstd-threshold must be non-negative.\n";
 }
 
 if ( defined $state_sample_min_size and $state_sample_min_size < 0 ) {
@@ -587,9 +564,6 @@ if ( $pid == 0 ) { # child
   $ENV{ 'MOSH_NO_TERM_INIT' } = '1' if !$term_init;
   $ENV{ 'MOSH_STREAM_DELAY' } = $stream_delay if defined $stream_delay;
   $ENV{ 'MOSH_STREAM_BANDWIDTH' } = $stream_bandwidth if defined $stream_bandwidth;
-  $ENV{ 'MOSH_STATE_ZSTD' } = $state_zstd ? 1 : 0;
-  $ENV{ 'MOSH_STATE_ZSTD_LEVEL' } = $state_zstd_level if defined $state_zstd_level;
-  $ENV{ 'MOSH_STATE_ZSTD_THRESHOLD' } = $state_zstd_threshold if defined $state_zstd_threshold;
   $ENV{ 'MOSH_STATE_ZSTD_DICT' } = $state_zstd_dict if defined $state_zstd_dict;
   $ENV{ 'MOSH_STATE_SAMPLE_LOG' } = $state_sample_log if defined $state_sample_log;
   $ENV{ 'MOSH_STATE_SAMPLE_MIN_SIZE' } = $state_sample_min_size if defined $state_sample_min_size;
@@ -682,9 +656,6 @@ sub server_environment_prefix {
   my @assignments;
   push @assignments, shell_assign( "MOSH_STREAM_DELAY", $stream_delay ) if defined $stream_delay;
   push @assignments, shell_assign( "MOSH_STREAM_BANDWIDTH", $stream_bandwidth ) if defined $stream_bandwidth;
-  push @assignments, shell_assign( "MOSH_STATE_ZSTD", $state_zstd ? 1 : 0 );
-  push @assignments, shell_assign( "MOSH_STATE_ZSTD_LEVEL", $state_zstd_level ) if defined $state_zstd_level;
-  push @assignments, shell_assign( "MOSH_STATE_ZSTD_THRESHOLD", $state_zstd_threshold ) if defined $state_zstd_threshold;
   push @assignments, shell_assign( "MOSH_STATE_ZSTD_DICT", $remote_state_zstd_dict ) if defined $remote_state_zstd_dict;
   push @assignments, shell_assign( "MOSH_STATE_ZSTD_DICT_UNLINK", 1 ) if $uploaded_state_zstd_dict;
   return "" if not @assignments;

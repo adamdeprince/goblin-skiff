@@ -27,7 +27,6 @@ MOSH_KEY=KEY
 [\-D \fISPEC\fP]
 [\-\-stream-delay=\fIMS\fP]
 [\-\-stream-bandwidth=\fIBPS\fP]
-[\-\-state-zstd-level=\fIN\fP]
 [\-\-state-zstd-dict=\fIFILE\fP]
 [\-\-state-sample-log=\fIFILE\fP]
 IP PORT
@@ -105,25 +104,11 @@ sending.
 .B \-\-stream\-bandwidth=\fIBPS\fP
 Cap forwarded stream payload bytes per second.
 
-.TP
-.B \-\-state\-zstd
-Enable negotiated zstd compression for large state updates when both
-peers support it. This is the default when Mosh was built with
-libzstd.
-
-.TP
-.B \-\-no\-state\-zstd
-Disable negotiated zstd compression for state updates.
-
-.TP
-.B \-\-state\-zstd\-level=\fIN\fP
-Set the zstd compression level for state updates. The default is 12.
-Values from 0 through 22 are accepted.
-
-.TP
-.B \-\-state\-zstd\-threshold=\fIBYTES\fP
-Only try zstd for serialized state updates at least this large. The
-default is 2048 bytes.
+.PP
+When both peers advertise zstd support, every serialized terminal
+state update uses zstd level 22. There is no size threshold or zlib
+comparison. Initial packets remain zlib-compressed until support is
+negotiated.
 
 .TP
 .B \-\-state\-zstd\-dict=\fIFILE\fP
@@ -194,21 +179,6 @@ Default forwarded-stream coalescing delay in milliseconds. See
 .TP
 .B MOSH_STREAM_BANDWIDTH
 Default forwarded-stream payload-byte-per-second cap. See
-.BR adam-mosh (1).
-
-.TP
-.B MOSH_STATE_ZSTD
-Default zstd state-compression setting. Use 0 to disable or 1 to
-enable negotiation.
-
-.TP
-.B MOSH_STATE_ZSTD_LEVEL
-Default zstd level for state compression. See
-.BR adam-mosh (1).
-
-.TP
-.B MOSH_STATE_ZSTD_THRESHOLD
-Default minimum serialized state-update size for zstd. See
 .BR adam-mosh (1).
 
 .TP

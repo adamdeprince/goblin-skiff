@@ -93,13 +93,11 @@ private:
   bool last_allow_zstd;
   bool last_allow_zstd_dictionary;
   std::string last_zstd_dictionary_id;
-  unsigned int last_zstd_level;
-  size_t last_zstd_threshold;
 
 public:
   Fragmenter()
     : next_instruction_id( 0 ), last_instruction(), last_MTU( -1 ), last_allow_zstd( false ),
-      last_allow_zstd_dictionary( false ), last_zstd_dictionary_id(), last_zstd_level( 0 ), last_zstd_threshold( 0 )
+      last_allow_zstd_dictionary( false ), last_zstd_dictionary_id()
   {
     last_instruction.set_old_num( -1 );
     last_instruction.set_new_num( -1 );
@@ -108,9 +106,7 @@ public:
                                         size_t MTU,
                                         bool allow_zstd = false,
                                         bool allow_zstd_dictionary = false,
-                                        const std::string& zstd_dictionary_id = "",
-                                        unsigned int zstd_level = 12,
-                                        size_t zstd_threshold = 2048 );
+                                        const std::string& zstd_dictionary_id = "" );
   uint64_t last_ack_sent( void ) const { return last_instruction.ack_num(); }
 };
 

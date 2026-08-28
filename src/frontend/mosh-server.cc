@@ -124,9 +124,6 @@ static int run_server( const char* desired_ip,
                        bool x11_forwarding,
                        unsigned int stream_delay_ms,
                        unsigned int stream_rate_bytes_per_second,
-                       bool state_zstd,
-                       unsigned int state_zstd_level,
-                       unsigned int state_zstd_threshold,
                        const std::string& state_zstd_dictionary,
                        bool unlink_state_zstd_dictionary );
 
@@ -187,14 +184,6 @@ static bool bool_from_env( const char* name, bool fallback )
   }
   fprintf( stderr, "Bad %s (%s)\n", name, value );
   exit( 1 );
-}
-
-static void validate_state_zstd_level( unsigned int level )
-{
-  if ( level > 22 ) {
-    fputs( "MOSH_STATE_ZSTD_LEVEL must be between 0 and 22\n", stderr );
-    exit( 1 );
-  }
 }
 
 /* Simple spinloop */
@@ -258,13 +247,9 @@ int main( int argc, char* argv[] )
   bool x11_forwarding = false;
   unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
   unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 2048 );
-  bool state_zstd = bool_from_env( "MOSH_STATE_ZSTD", true );
-  unsigned int state_zstd_level = uint_from_env( "MOSH_STATE_ZSTD_LEVEL", 12 );
-  unsigned int state_zstd_threshold = uint_from_env( "MOSH_STATE_ZSTD_THRESHOLD", 2048 );
   const char* state_zstd_dictionary_env = getenv( "MOSH_STATE_ZSTD_DICT" );
   std::string state_zstd_dictionary = state_zstd_dictionary_env ? state_zstd_dictionary_env : "";
   bool unlink_state_zstd_dictionary = bool_from_env( "MOSH_STATE_ZSTD_DICT_UNLINK", false );
-  validate_state_zstd_level( state_zstd_level );
   /* Will cause adam-mosh-server not to correctly detach on old versions of sshd. */
   std::list<std::string> locale_vars;
 
@@ -478,9 +463,6 @@ int main( int argc, char* argv[] )
                        x11_forwarding,
                        stream_delay_ms,
                        stream_rate_bytes_per_second,
-                       state_zstd,
-                       state_zstd_level,
-                       state_zstd_threshold,
                        state_zstd_dictionary,
                        unlink_state_zstd_dictionary );
   } catch ( const Network::NetworkException& e ) {
@@ -507,9 +489,6 @@ static int run_server( const char* desired_ip,
                        bool x11_forwarding,
                        unsigned int stream_delay_ms,
                        unsigned int stream_rate_bytes_per_second,
-                       bool state_zstd,
-                       unsigned int state_zstd_level,
-                       unsigned int state_zstd_threshold,
                        const std::string& state_zstd_dictionary,
                        bool unlink_state_zstd_dictionary )
 {
@@ -567,7 +546,6 @@ static int run_server( const char* desired_ip,
   Network::UserStream blank;
   using NetworkPointer = std::shared_ptr<ServerConnection>;
   NetworkPointer network( new ServerConnection( terminal, blank, desired_ip, desired_port ) );
-  network->set_state_compression( state_zstd, state_zstd_level, state_zstd_threshold );
 
   StreamForwarder forwarder( StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second );
   std::string forward_error;

@@ -91,7 +91,7 @@ static void print_usage( FILE* file, const char* argv0 )
 {
   print_version( file );
   fprintf( file,
-           "\nUsage: %s [-# 'ARGS'] [-A] [-X] [-L SPEC] [-D SPEC] [--stream-delay=MS] [--stream-bandwidth=BPS] [--state-zstd-level=N] [--state-zstd-dict=FILE] IP PORT\n"
+           "\nUsage: %s [-# 'ARGS'] [-A] [-X] [-L SPEC] [-D SPEC] [--stream-delay=MS] [--stream-bandwidth=BPS] [--state-zstd-dict=FILE] IP PORT\n"
            "       %s -c\n",
            argv0,
            argv0 );
@@ -124,30 +124,6 @@ static std::string string_from_env( const char* name )
   return value ? value : "";
 }
 
-static bool bool_from_env( const char* name, bool fallback )
-{
-  const char* value = getenv( name );
-  if ( !value || !*value ) {
-    return fallback;
-  }
-  if ( 0 == strcmp( value, "1" ) || 0 == strcmp( value, "yes" ) || 0 == strcmp( value, "true" ) ) {
-    return true;
-  }
-  if ( 0 == strcmp( value, "0" ) || 0 == strcmp( value, "no" ) || 0 == strcmp( value, "false" ) ) {
-    return false;
-  }
-  fprintf( stderr, "Bad %s (%s)\n", name, value );
-  exit( 1 );
-}
-
-static void validate_state_zstd_level( unsigned int level )
-{
-  if ( level > 22 ) {
-    fputs( "--state-zstd-level must be between 0 and 22\n", stderr );
-    exit( 1 );
-  }
-}
-
 static void print_colorcount( void )
 {
   /* check colors */
@@ -171,13 +147,9 @@ int main( int argc, char* argv[] )
   bool x11_forwarding = false;
   unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
   unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 2048 );
-  bool state_zstd = bool_from_env( "MOSH_STATE_ZSTD", true );
-  unsigned int state_zstd_level = uint_from_env( "MOSH_STATE_ZSTD_LEVEL", 12 );
-  unsigned int state_zstd_threshold = uint_from_env( "MOSH_STATE_ZSTD_THRESHOLD", 2048 );
   std::string state_zstd_dictionary = string_from_env( "MOSH_STATE_ZSTD_DICT" );
   std::string state_sample_log = string_from_env( "MOSH_STATE_SAMPLE_LOG" );
   unsigned int state_sample_min_size = uint_from_env( "MOSH_STATE_SAMPLE_MIN_SIZE", 0 );
-  validate_state_zstd_level( state_zstd_level );
   /* For security, make sure we don't dump core */
   Crypto::disable_dumping_core();
 
@@ -200,13 +172,9 @@ int main( int argc, char* argv[] )
   static const struct option long_options[] = {
     { "stream-delay", required_argument, NULL, 256 },
     { "stream-bandwidth", required_argument, NULL, 257 },
-    { "state-zstd", no_argument, NULL, 258 },
-    { "no-state-zstd", no_argument, NULL, 259 },
-    { "state-zstd-level", required_argument, NULL, 260 },
-    { "state-zstd-threshold", required_argument, NULL, 261 },
-    { "state-zstd-dict", required_argument, NULL, 262 },
-    { "state-sample-log", required_argument, NULL, 263 },
-    { "state-sample-min-size", required_argument, NULL, 264 },
+    { "state-zstd-dict", required_argument, NULL, 258 },
+    { "state-sample-log", required_argument, NULL, 259 },
+    { "state-sample-min-size", required_argument, NULL, 260 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -244,25 +212,12 @@ int main( int argc, char* argv[] )
         }
         break;
       case 258:
-        state_zstd = true;
-        break;
-      case 259:
-        state_zstd = false;
-        break;
-      case 260:
-        state_zstd_level = parse_uint_option( "--state-zstd-level", optarg );
-        validate_state_zstd_level( state_zstd_level );
-        break;
-      case 261:
-        state_zstd_threshold = parse_uint_option( "--state-zstd-threshold", optarg );
-        break;
-      case 262:
         state_zstd_dictionary = optarg;
         break;
-      case 263:
+      case 259:
         state_sample_log = optarg;
         break;
-      case 264:
+      case 260:
         state_sample_min_size = parse_uint_option( "--state-sample-min-size", optarg );
         break;
       default:
@@ -332,9 +287,6 @@ int main( int argc, char* argv[] )
                       x11_forwarding,
                       stream_delay_ms,
                       stream_rate_bytes_per_second,
-                      state_zstd,
-                      state_zstd_level,
-                      state_zstd_threshold,
                       state_sample_log,
                       state_sample_min_size );
     client.init();

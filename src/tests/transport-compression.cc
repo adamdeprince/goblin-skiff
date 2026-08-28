@@ -24,6 +24,10 @@
 #include <iostream>
 #include <stdexcept>
 
+#ifdef HAVE_ZSTD
+#include <zstd.h>
+#endif
+
 namespace {
 bool looks_like_zstd_frame( const std::string& input )
 {
@@ -39,6 +43,17 @@ void require( bool condition, const char* message )
   }
 }
 
+#ifdef HAVE_ZSTD
+std::string compress_zstd_22( const std::string& input )
+{
+  std::string compressed( ZSTD_compressBound( input.size() ), '\0' );
+  const size_t written = ZSTD_compress( &compressed[0], compressed.size(), input.data(), input.size(), 22 );
+  require( !ZSTD_isError( written ), "test zstd-22 compression failed" );
+  compressed.resize( written );
+  return compressed;
+}
+#endif
+
 void roundtrip( bool allow_zstd )
 {
   TransportBuffers::Instruction inst;
@@ -47,21 +62,24 @@ void roundtrip( bool allow_zstd )
   inst.set_new_num( 2 );
   inst.set_ack_num( 3 );
   inst.set_throwaway_num( 1 );
-  inst.set_diff( std::string( 16384, 'x' ) );
+  inst.set_diff( "x" );
   inst.set_chaff( "test chaff" );
   inst.set_zstd_supported( true );
 
   Network::Fragmenter fragmenter;
   const std::vector<Network::Fragment> fragments
-    = fragmenter.make_fragments( inst, 32768, allow_zstd, false, "", 12, 128 );
+    = fragmenter.make_fragments( inst, 32768, allow_zstd, false, "" );
   require( !fragments.empty(), "fragmenter returned no fragments" );
 
 #ifdef HAVE_ZSTD
   if ( allow_zstd ) {
-    require( looks_like_zstd_frame( fragments.front().contents ), "large repetitive state was not zstd-compressed" );
+    require( fragments.size() == 1, "small zstd state unexpectedly fragmented" );
+    require( looks_like_zstd_frame( fragments.front().contents ), "small state was not zstd-compressed" );
+    require( fragments.front().contents == compress_zstd_22( inst.SerializeAsString() ),
+             "state was not compressed at zstd level 22" );
+  } else {
+    require( !looks_like_zstd_frame( fragments.front().contents ), "zstd was used before peer negotiation" );
   }
-#else
-  (void)allow_zstd;
 #endif
 
   Network::FragmentAssembly assembly;

@@ -47,18 +47,13 @@ private:
   std::string zstd_dictionary_id_value;
   void* zstd_cdict;
   void* zstd_ddict;
-  unsigned int zstd_cdict_level;
 
 public:
   Compressor();
   ~Compressor();
 
   std::string compress_str( const std::string& input );
-  std::string compress_str( const std::string& input,
-                            bool allow_zstd,
-                            bool allow_zstd_dictionary,
-                            unsigned int zstd_level,
-                            size_t zstd_threshold );
+  std::string compress_str( const std::string& input, bool allow_zstd, bool allow_zstd_dictionary );
   std::string uncompress_str( const std::string& input );
   bool zstd_available( void ) const;
   void set_zstd_dictionary( const std::string& dictionary );

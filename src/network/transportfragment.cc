@@ -162,9 +162,7 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
                                                   size_t MTU,
                                                   bool allow_zstd,
                                                   bool allow_zstd_dictionary,
-                                                  const std::string& zstd_dictionary_id,
-                                                  unsigned int zstd_level,
-                                                  size_t zstd_threshold )
+                                                  const std::string& zstd_dictionary_id )
 {
   MTU -= Fragment::frag_header_len;
   if ( ( inst.old_num() != last_instruction.old_num() ) || ( inst.new_num() != last_instruction.new_num() )
@@ -175,8 +173,7 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
        || ( inst.zstd_supported() != last_instruction.zstd_supported() )
        || ( inst.zstd_dict_id() != last_instruction.zstd_dict_id() ) || ( last_MTU != MTU )
        || ( allow_zstd != last_allow_zstd ) || ( allow_zstd_dictionary != last_allow_zstd_dictionary )
-       || ( zstd_dictionary_id != last_zstd_dictionary_id ) || ( zstd_level != last_zstd_level )
-       || ( zstd_threshold != last_zstd_threshold ) ) {
+       || ( zstd_dictionary_id != last_zstd_dictionary_id ) ) {
     next_instruction_id++;
   }
 
@@ -189,11 +186,8 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
   last_allow_zstd = allow_zstd;
   last_allow_zstd_dictionary = allow_zstd_dictionary;
   last_zstd_dictionary_id = zstd_dictionary_id;
-  last_zstd_level = zstd_level;
-  last_zstd_threshold = zstd_threshold;
 
-  std::string payload = get_compressor().compress_str(
-    inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary, zstd_level, zstd_threshold );
+  std::string payload = get_compressor().compress_str( inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary );
   uint16_t fragment_num = 0;
   std::vector<Fragment> ret;
 

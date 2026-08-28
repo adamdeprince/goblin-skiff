@@ -265,7 +265,6 @@ void STMClient::main_init( void )
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
   network = NetworkPointer( new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str() ) );
 
-  network->set_state_compression( state_zstd, state_zstd_level, state_zstd_threshold );
   if ( !state_sample_log.empty() ) {
     network->set_state_sample_log( state_sample_log, state_sample_min_size );
   }

@@ -108,11 +108,8 @@ private:
 
   uint64_t mindelay_clock; /* time of first pending change to current state */
 
-  bool zstd_enabled;
   bool peer_zstd_supported;
   std::string peer_zstd_dictionary_id;
-  unsigned int zstd_level;
-  size_t zstd_threshold;
 
 public:
   /* constructor */
@@ -159,13 +156,6 @@ public:
     current_state.reset_input();
   }
   void set_verbose( unsigned int s_verbose ) { verbose = s_verbose; }
-
-  void set_state_compression( bool s_zstd_enabled, unsigned int s_zstd_level, size_t s_zstd_threshold )
-  {
-    zstd_enabled = s_zstd_enabled;
-    zstd_level = s_zstd_level;
-    zstd_threshold = s_zstd_threshold;
-  }
 
   void set_peer_zstd_capabilities( bool supported, const std::string& dictionary_id )
   {

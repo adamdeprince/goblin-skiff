@@ -118,13 +118,12 @@ Usage
   receiver open for several simultaneous transfer ids and prints lightweight
   status counters unless `--quiet` is used.
 
-  Large terminal state updates can use negotiated zstd compression when both
-  peers support it.  Initial packets remain zlib-compressed for compatibility
-  with older Mosh peers.  The wrapper enables this by default with zstd level
-  12 for large state updates; use `--state-zstd-level=N`,
-  `--state-zstd-threshold=BYTES`, or `--no-state-zstd` to tune it.  For very
-  slow links, you can train a session-specific zstd dictionary from received
-  state samples:
+  Terminal state compression is a core part of this branch's low-bandwidth
+  strategy.  After both peers advertise zstd support, every serialized state
+  update uses zstd level 22.  There is no size threshold or zlib comparison.
+  Initial packets remain zlib-compressed for compatibility with older Mosh
+  peers.  For very slow links, you can train a session-specific zstd
+  dictionary from received state samples:
 
     $ adam-mosh --state-sample-log=alpine.samples.zst host
     $ adam-mosh-compile-dictionary --input=alpine.samples.zst --output=alpine.dict

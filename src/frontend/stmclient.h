@@ -74,9 +74,6 @@ private:
   bool expecting_osc52_reply;
   StreamForwarder forwarder;
   Network::Bulk::ControlServer bulk_control;
-  bool state_zstd;
-  unsigned int state_zstd_level;
-  unsigned int state_zstd_threshold;
   std::string state_sample_log;
   unsigned int state_sample_min_size;
 
@@ -113,9 +110,6 @@ public:
              bool x11_forwarding,
              unsigned int stream_delay_ms,
              unsigned int stream_rate_bytes_per_second,
-             bool s_state_zstd,
-             unsigned int s_state_zstd_level,
-             unsigned int s_state_zstd_threshold,
              const std::string& s_state_sample_log,
              unsigned int s_state_sample_min_size )
     : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ), key( s_key ? s_key : "" ), escape_key( 0x1E ),
@@ -124,9 +118,7 @@ public:
       network(), display( true ) /* use TERM environment var to initialize display */,
       osc52_input(), expecting_osc52_reply( false ),
       forwarder( StreamForwarder::ClientSide, stream_delay_ms, stream_rate_bytes_per_second ),
-      bulk_control( "client" ), state_zstd( s_state_zstd ), state_zstd_level( s_state_zstd_level ),
-      state_zstd_threshold( s_state_zstd_threshold ), state_sample_log( s_state_sample_log ),
-      state_sample_min_size( s_state_sample_min_size ),
+      bulk_control( "client" ), state_sample_log( s_state_sample_log ), state_sample_min_size( s_state_sample_min_size ),
       connecting_notification(),
       repaint_requested( false ), lf_entered( false ), quit_sequence_started( false ), clean_shutdown( false ),
       verbose( s_verbose )

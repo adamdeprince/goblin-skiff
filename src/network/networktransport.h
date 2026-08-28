@@ -128,11 +128,6 @@ public:
     verbose = s_verbose;
   }
 
-  void set_state_compression( bool zstd_enabled, unsigned int zstd_level, size_t zstd_threshold )
-  {
-    sender.set_state_compression( zstd_enabled, zstd_level, zstd_threshold );
-  }
-
   void set_state_sample_log( const std::string& path, size_t min_size )
   {
     state_sample_writer.open( path, min_size );

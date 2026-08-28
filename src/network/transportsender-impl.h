@@ -54,8 +54,7 @@ TransportSender<MyState>::TransportSender( Connection* s_connection, MyState& in
     assumed_receiver_state( sent_states.begin() ), fragmenter(), next_ack_time( timestamp() ),
     next_send_time( timestamp() ), verbose( 0 ), shutdown_in_progress( false ), shutdown_tries( 0 ),
     shutdown_start( -1 ), ack_num( 0 ), pending_data_ack( false ), SEND_MINDELAY( 8 ), last_heard( 0 ), prng(),
-    mindelay_clock( -1 ), zstd_enabled( true ), peer_zstd_supported( false ), peer_zstd_dictionary_id(),
-    zstd_level( 12 ), zstd_threshold( 2048 )
+    mindelay_clock( -1 ), peer_zstd_supported( false ), peer_zstd_dictionary_id()
 {}
 
 /* Try to send roughly two frames per RTT, bounded by limits on frame rate */
@@ -316,7 +315,7 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
   inst.set_throwaway_num( sent_states.front().num );
   inst.set_diff( diff );
   inst.set_chaff( make_chaff() );
-  const bool advertise_zstd = zstd_enabled && get_compressor().zstd_available();
+  const bool advertise_zstd = get_compressor().zstd_available();
   inst.set_zstd_supported( advertise_zstd );
   const std::string local_dictionary_id = get_compressor().zstd_dictionary_id();
   if ( advertise_zstd && !local_dictionary_id.empty() ) {
@@ -335,9 +334,7 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
                                                                  - Crypto::Session::ADDED_BYTES,
                                                                advertise_zstd && peer_zstd_supported,
                                                                allow_zstd_dictionary,
-                                                               local_dictionary_id,
-                                                               zstd_level,
-                                                               zstd_threshold );
+                                                               local_dictionary_id );
   for ( std::vector<Fragment>::iterator i = fragments.begin(); i != fragments.end(); i++ ) {
     connection->send( i->tostring() );
 

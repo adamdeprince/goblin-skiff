@@ -267,27 +267,12 @@ Cap forwarded stream payload bytes per second. The default is 2048
 bytes per second. This limit applies to stream forwarding traffic, not
 to terminal state updates.
 
-.TP
-.B \-\-state\-zstd
-Enable negotiated zstd compression for large terminal state updates
-when both peers support it. This is the default when Mosh was built
-with libzstd.
-
-.TP
-.B \-\-no\-state\-zstd
-Disable negotiated zstd compression for terminal state updates.
-
-.TP
-.B \-\-state\-zstd\-level=\fIN\fP
-Set the zstd compression level for terminal state updates. The default
-is 12. Values from 0 through 22 are accepted.
-
-.TP
-.B \-\-state\-zstd\-threshold=\fIBYTES\fP
-Only try zstd for serialized terminal state updates at least this
-large. The default is 2048 bytes. Initial packets are still zlib
-compressed so older peers remain compatible; zstd is used only after
-both sides advertise support.
+.PP
+Terminal state compression is a core part of this branch's
+low-bandwidth strategy. When both peers advertise zstd support, every
+serialized terminal state update uses zstd level 22. There is no size
+threshold or zlib comparison. Initial packets remain zlib-compressed
+so older peers remain compatible.
 
 .TP
 .B \-\-state\-zstd\-dict=\fIFILE\fP

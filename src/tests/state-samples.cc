@@ -145,7 +145,7 @@ int main( void )
 
     Network::Fragmenter fragmenter;
     const std::vector<Network::Fragment> fragments = fragmenter.make_fragments(
-      inst, 32768, true, true, Network::state_dictionary_id( dictionary ), 12, 0 );
+      inst, 32768, true, true, Network::state_dictionary_id( dictionary ) );
     require( !fragments.empty(), "fragmenter returned no fragments" );
 
     assembly_path = temp_path();

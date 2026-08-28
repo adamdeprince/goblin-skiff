@@ -49,6 +49,7 @@ using namespace Network;
 
 namespace {
 const int COMPRESSOR_BUFFER_SIZE = 2048 * 2048;
+const int STATE_ZSTD_LEVEL = 22;
 
 std::string zlib_compress_str( unsigned char* buffer, const std::string& input )
 {
@@ -74,11 +75,12 @@ bool looks_like_zstd_frame( const std::string& input )
 }
 
 #ifdef HAVE_ZSTD
-std::string zstd_compress_str( const std::string& input, unsigned int level )
+std::string zstd_compress_str( const std::string& input )
 {
   const size_t bound = ZSTD_compressBound( input.size() );
   std::string compressed( bound, '\0' );
-  const size_t written = ZSTD_compress( &compressed[0], compressed.size(), input.data(), input.size(), level );
+  const size_t written
+    = ZSTD_compress( &compressed[0], compressed.size(), input.data(), input.size(), STATE_ZSTD_LEVEL );
   if ( ZSTD_isError( written ) ) {
     throw std::runtime_error( std::string( "zstd compression failed: " ) + ZSTD_getErrorName( written ) );
   }
@@ -87,21 +89,15 @@ std::string zstd_compress_str( const std::string& input, unsigned int level )
 }
 
 std::string zstd_compress_str( const std::string& input,
-                               unsigned int level,
                                const std::string& dictionary,
-                               void*& cached_cdict,
-                               unsigned int& cached_level )
+                               void*& cached_cdict )
 {
   if ( dictionary.empty() ) {
-    return zstd_compress_str( input, level );
+    return zstd_compress_str( input );
   }
 
-  if ( cached_cdict == NULL || cached_level != level ) {
-    if ( cached_cdict != NULL ) {
-      ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( cached_cdict ) );
-    }
-    cached_cdict = ZSTD_createCDict( dictionary.data(), dictionary.size(), level );
-    cached_level = level;
+  if ( cached_cdict == NULL ) {
+    cached_cdict = ZSTD_createCDict( dictionary.data(), dictionary.size(), STATE_ZSTD_LEVEL );
     if ( cached_cdict == NULL ) {
       throw std::runtime_error( "could not allocate zstd compression dictionary" );
     }
@@ -161,7 +157,7 @@ std::string zstd_uncompress_str( const std::string& input, void* zstd_ddict )
 }
 
 Compressor::Compressor()
-  : buffer(), zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdict( NULL ), zstd_ddict( NULL ), zstd_cdict_level( 0 )
+  : buffer(), zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdict( NULL ), zstd_ddict( NULL )
 {}
 
 Compressor::~Compressor()
@@ -181,38 +177,20 @@ std::string Compressor::compress_str( const std::string& input )
   return zlib_compress_str( buffer, input );
 }
 
-std::string Compressor::compress_str( const std::string& input,
-                                      bool allow_zstd,
-                                      bool allow_zstd_dictionary,
-                                      unsigned int zstd_level,
-                                      size_t zstd_threshold )
+std::string Compressor::compress_str( const std::string& input, bool allow_zstd, bool allow_zstd_dictionary )
 {
-  const std::string zlib = zlib_compress_str( buffer, input );
 #ifdef HAVE_ZSTD
-  if ( !allow_zstd || input.size() < zstd_threshold ) {
-    return zlib;
-  }
-
-  const std::string zstd = zstd_compress_str( input, zstd_level );
-  std::string best = zstd;
-  if ( allow_zstd_dictionary && !zstd_dictionary.empty() ) {
-    const std::string zstd_dict
-      = zstd_compress_str( input, zstd_level, zstd_dictionary, zstd_cdict, zstd_cdict_level );
-    if ( zstd_dict.size() < best.size() ) {
-      best = zstd_dict;
+  if ( allow_zstd ) {
+    if ( allow_zstd_dictionary && !zstd_dictionary.empty() ) {
+      return zstd_compress_str( input, zstd_dictionary, zstd_cdict );
     }
-  }
-  if ( best.size() < zlib.size()
-       && ( zlib.size() - best.size() >= 64 || best.size() * 100 <= zlib.size() * 95 ) ) {
-    return best;
+    return zstd_compress_str( input );
   }
 #else
   (void)allow_zstd;
   (void)allow_zstd_dictionary;
-  (void)zstd_level;
-  (void)zstd_threshold;
 #endif
-  return zlib;
+  return zlib_compress_str( buffer, input );
 }
 
 std::string Compressor::uncompress_str( const std::string& input )
@@ -245,8 +223,6 @@ void Compressor::set_zstd_dictionary( const std::string& dictionary )
     ZSTD_freeDDict( reinterpret_cast<ZSTD_DDict*>( zstd_ddict ) );
     zstd_ddict = NULL;
   }
-  zstd_cdict_level = 0;
-
   zstd_dictionary = dictionary;
   zstd_dictionary_id_value = state_dictionary_id( zstd_dictionary );
   if ( !zstd_dictionary.empty() ) {

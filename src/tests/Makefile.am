@@ -90,7 +90,7 @@ bulk_loss_sim_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network -I$(srcdir)/../f
 bulk_loss_sim_LDADD = ../fec/libmoshfec.a ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
 
 transport_compression_SOURCES = transport-compression.cc
-transport_compression_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network $(protobuf_CFLAGS)
+transport_compression_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network $(protobuf_CFLAGS) $(ZSTD_CFLAGS)
 transport_compression_LDADD = ../network/libmoshnetwork.a ../protobufs/libmoshprotos.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(protobuf_LIBS) $(CRYPTO_LIBS) $(ZSTD_LIBS)
 
 state_samples_SOURCES = state-samples.cc
