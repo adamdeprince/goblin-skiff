@@ -33,6 +33,7 @@
 #ifndef TRANSPORT_SENDER_HPP
 #define TRANSPORT_SENDER_HPP
 
+#include <cstddef>
 #include <list>
 #include <string>
 
@@ -107,6 +108,12 @@ private:
 
   uint64_t mindelay_clock; /* time of first pending change to current state */
 
+  bool zstd_enabled;
+  bool peer_zstd_supported;
+  std::string peer_zstd_dictionary_id;
+  unsigned int zstd_level;
+  size_t zstd_threshold;
+
 public:
   /* constructor */
   TransportSender( Connection* s_connection, MyState& initial_state );
@@ -153,12 +160,26 @@ public:
   }
   void set_verbose( unsigned int s_verbose ) { verbose = s_verbose; }
 
+  void set_state_compression( bool s_zstd_enabled, unsigned int s_zstd_level, size_t s_zstd_threshold )
+  {
+    zstd_enabled = s_zstd_enabled;
+    zstd_level = s_zstd_level;
+    zstd_threshold = s_zstd_threshold;
+  }
+
+  void set_peer_zstd_capabilities( bool supported, const std::string& dictionary_id )
+  {
+    peer_zstd_supported = supported;
+    peer_zstd_dictionary_id = supported ? dictionary_id : "";
+  }
+
   bool get_shutdown_in_progress( void ) const { return shutdown_in_progress; }
   bool get_shutdown_acknowledged( void ) const { return sent_states.front().num == uint64_t( -1 ); }
   bool get_counterparty_shutdown_acknowledged( void ) const { return fragmenter.last_ack_sent() == uint64_t( -1 ); }
   uint64_t get_sent_state_acked_timestamp( void ) const { return sent_states.front().timestamp; }
   uint64_t get_sent_state_acked( void ) const { return sent_states.front().num; }
   uint64_t get_sent_state_last( void ) const { return sent_states.back().num; }
+  bool has_unsent_data( void ) const { return !( current_state == sent_states.back().state ); }
 
   bool shutdown_ack_timed_out( void ) const;
 

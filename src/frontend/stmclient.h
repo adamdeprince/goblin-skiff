@@ -35,11 +35,14 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <sys/ioctl.h>
 #include <termios.h>
 
+#include "src/frontend/streamforward.h"
 #include "src/frontend/terminaloverlay.h"
+#include "src/network/bulkcontrol.h"
 #include "src/network/networktransport.h"
 #include "src/statesync/completeterminal.h"
 #include "src/statesync/user.h"
@@ -67,6 +70,15 @@ private:
   using NetworkPointer = std::shared_ptr<NetworkType>;
   NetworkPointer network;
   Terminal::Display display;
+  Terminal::Osc52InputFilter osc52_input;
+  bool expecting_osc52_reply;
+  StreamForwarder forwarder;
+  Network::Bulk::ControlServer bulk_control;
+  bool state_zstd;
+  unsigned int state_zstd_level;
+  unsigned int state_zstd_threshold;
+  std::string state_sample_log;
+  unsigned int state_sample_min_size;
 
   std::wstring connecting_notification;
   bool repaint_requested, lf_entered, quit_sequence_started;
@@ -94,14 +106,53 @@ public:
              const char* s_key,
              const char* predict_mode,
              unsigned int s_verbose,
-             const char* predict_overwrite )
+             const char* predict_overwrite,
+             const std::vector<std::string>& local_forwards,
+             const std::vector<std::string>& dynamic_forwards,
+             bool agent_forwarding,
+             bool x11_forwarding,
+             unsigned int stream_delay_ms,
+             unsigned int stream_rate_bytes_per_second,
+             bool s_state_zstd,
+             unsigned int s_state_zstd_level,
+             unsigned int s_state_zstd_threshold,
+             const std::string& s_state_sample_log,
+             unsigned int s_state_sample_min_size )
     : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ), key( s_key ? s_key : "" ), escape_key( 0x1E ),
       escape_pass_key( '^' ), escape_pass_key2( '^' ), escape_requires_lf( false ), escape_key_help( L"?" ),
       saved_termios(), raw_termios(), window_size(), local_framebuffer( 1, 1 ), new_state( 1, 1 ), overlays(),
-      network(), display( true ) /* use TERM environment var to initialize display */, connecting_notification(),
+      network(), display( true ) /* use TERM environment var to initialize display */,
+      osc52_input(), expecting_osc52_reply( false ),
+      forwarder( StreamForwarder::ClientSide, stream_delay_ms, stream_rate_bytes_per_second ),
+      bulk_control( "client" ), state_zstd( s_state_zstd ), state_zstd_level( s_state_zstd_level ),
+      state_zstd_threshold( s_state_zstd_threshold ), state_sample_log( s_state_sample_log ),
+      state_sample_min_size( s_state_sample_min_size ),
+      connecting_notification(),
       repaint_requested( false ), lf_entered( false ), quit_sequence_started( false ), clean_shutdown( false ),
       verbose( s_verbose )
   {
+    std::string error;
+    for ( std::vector<std::string>::const_iterator it = local_forwards.begin(); it != local_forwards.end(); it++ ) {
+      if ( !forwarder.add_tcp_forward( *it, error ) ) {
+        fprintf( stderr, "Bad -L forwarding spec: %s\n", error.c_str() );
+        exit( 1 );
+      }
+    }
+    for ( std::vector<std::string>::const_iterator it = dynamic_forwards.begin(); it != dynamic_forwards.end(); it++ ) {
+      if ( !forwarder.add_dynamic_forward( *it, error ) ) {
+        fprintf( stderr, "Bad -D forwarding spec: %s\n", error.c_str() );
+        exit( 1 );
+      }
+    }
+    if ( agent_forwarding && !forwarder.enable_agent_forwarding( error ) ) {
+      fprintf( stderr, "Cannot enable agent forwarding: %s\n", error.c_str() );
+      exit( 1 );
+    }
+    if ( x11_forwarding && !forwarder.enable_x11_forwarding( error ) ) {
+      fprintf( stderr, "Cannot enable X11 forwarding: %s\n", error.c_str() );
+      exit( 1 );
+    }
+
     if ( predict_mode ) {
       if ( !strcmp( predict_mode, "always" ) ) {
         overlays.get_prediction_engine().set_display_preference( Overlay::PredictionEngine::Always );

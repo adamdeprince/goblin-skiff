@@ -37,6 +37,9 @@
 #include <string>
 #include <vector>
 
+#include "src/terminal/kittygraphics.h"
+#include "src/terminal/osc52.h"
+
 namespace Parser {
 class Action;
 class Param;
@@ -48,6 +51,9 @@ class Execute;
 class OSC_Start;
 class OSC_Put;
 class OSC_End;
+class APC_Start;
+class APC_Put;
+class APC_End;
 }
 
 namespace Terminal {
@@ -96,8 +102,16 @@ private:
 
   std::string dispatch_chars;
   std::vector<wchar_t> OSC_string;
+  bool OSC_overflow;
+  std::vector<ClipboardEvent> clipboard_events;
+  std::string APC_string;
+  bool APC_overflow;
+  bool kitty_uploading;
+  KittyCommand kitty_partial;
+  std::string kitty_payload;
 
   void parse_params( void );
+  void finish_kitty_upload( Framebuffer* fb );
 
 public:
   static const int PARAM_MAX = 65535;
@@ -122,6 +136,12 @@ public:
   void OSC_put( const Parser::OSC_Put* act );
   void OSC_start( const Parser::OSC_Start* act );
   void OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb );
+
+  void APC_put( const Parser::APC_Put* act );
+  void APC_start( const Parser::APC_Start* act );
+  void APC_dispatch( const Parser::APC_End* act, Framebuffer* fb );
+
+  std::vector<ClipboardEvent> take_clipboard_events( void );
 
   bool operator==( const Dispatcher& x ) const;
 };

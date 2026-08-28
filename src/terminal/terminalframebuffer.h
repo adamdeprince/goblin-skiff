@@ -38,10 +38,13 @@
 #include <cstdint>
 #include <deque>
 #include <list>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "src/terminal/kittygraphics.h"
 
 /* Terminal framebuffer */
 
@@ -419,6 +422,10 @@ private:
   title_type clipboard;
   unsigned int bell_count;
   bool title_initialized; /* true if the window title has been set via an OSC */
+  std::map<uint32_t, KittyImage> kitty_images;
+  std::vector<KittyPlacement> kitty_placements;
+  uint32_t kitty_next_id;
+  uint64_t kitty_serial;
 
   row_pointer newrow( void )
   {
@@ -512,10 +519,22 @@ public:
   void ring_bell( void ) { bell_count++; }
   unsigned int get_bell_count( void ) const { return bell_count; }
 
+  uint32_t allocate_kitty_id( void );
+  uint32_t put_kitty_image( const KittyImage& image );
+  const std::map<uint32_t, KittyImage>& get_kitty_images( void ) const { return kitty_images; }
+  const KittyImage* find_kitty_image( uint32_t id ) const;
+  KittyImage* find_newest_kitty_number( uint32_t number );
+  void put_kitty_placement( const KittyPlacement& placement );
+  const std::vector<KittyPlacement>& get_kitty_placements( void ) const { return kitty_placements; }
+  void delete_kitty( const KittyCommand& cmd );
+  void scroll_kitty_placements( int first_row, int count, bool inserting );
+  void evict_kitty_images( void );
+
   bool operator==( const Framebuffer& x ) const
   {
     return ( rows == x.rows ) && ( window_title == x.window_title ) && ( clipboard == x.clipboard )
-           && ( bell_count == x.bell_count ) && ( ds == x.ds );
+           && ( bell_count == x.bell_count ) && ( ds == x.ds ) && ( kitty_images == x.kitty_images )
+           && ( kitty_placements == x.kitty_placements );
   }
 };
 }

@@ -50,6 +50,11 @@ std::string Emulator::read_octets_to_host( void )
   return ret;
 }
 
+std::vector<ClipboardEvent> Emulator::take_clipboard_events( void )
+{
+  return dispatch.take_clipboard_events();
+}
+
 void Emulator::execute( const Parser::Execute* act )
 {
   dispatch.dispatch( CONTROL, act, &fb );
@@ -152,6 +157,11 @@ void Emulator::CSI_dispatch( const Parser::CSI_Dispatch* act )
 void Emulator::OSC_end( const Parser::OSC_End* act )
 {
   dispatch.OSC_dispatch( act, &fb );
+}
+
+void Emulator::APC_end( const Parser::APC_End* act )
+{
+  dispatch.APC_dispatch( act, &fb );
 }
 
 void Emulator::Esc_dispatch( const Parser::Esc_Dispatch* act )

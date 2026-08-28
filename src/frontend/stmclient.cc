@@ -52,6 +52,9 @@
 #include <util.h>
 #endif
 
+#include "src/protobufs/clipboard.pb.h"
+#include "src/protobufs/hostinput.pb.h"
+#include "src/statesync/clipboard.h"
 #include "src/statesync/completeterminal.h"
 #include "src/statesync/user.h"
 #include "src/util/fatal_assert.h"
@@ -86,7 +89,7 @@ void STMClient::init( void )
     std::string native_charset( locale_charset() );
 
     fprintf( stderr,
-             "mosh-client needs a UTF-8 native locale to run.\n\n"
+             "adam-mosh-client needs a UTF-8 native locale to run.\n\n"
              "Unfortunately, the client's environment (%s) specifies\n"
              "the character set \"%s\".\n\n",
              native_ctype.str().c_str(),
@@ -124,7 +127,7 @@ void STMClient::init( void )
 
   /* Add our name to window title */
   if ( !getenv( "MOSH_TITLE_NOPREFIX" ) ) {
-    overlays.set_title_prefix( std::wstring( L"[mosh] " ) );
+    overlays.set_title_prefix( std::wstring( L"[adam-mosh] " ) );
   }
 
   /* Set terminal escape key. */
@@ -221,14 +224,14 @@ void STMClient::shutdown( void )
     fprintf( stderr,
              "\nmosh did not make a successful connection to %s:%s.\n"
              "Please verify that UDP port %s is not firewalled and can reach the server.\n\n"
-             "(By default, mosh uses a UDP port between 60000 and 61000. The -p option\n"
+             "(By default, adam-mosh uses a UDP port between 60000 and 61000. The -p option\n"
              "selects a specific UDP port number.)\n",
              ip.c_str(),
              port.c_str(),
              port.c_str() );
   } else if ( network && !clean_shutdown ) {
     fputs( "\n\nmosh did not shut down cleanly. Please note that the\n"
-           "mosh-server process may still be running on the server.\n",
+           "adam-mosh-server process may still be running on the server.\n",
            stderr );
   }
 }
@@ -262,6 +265,10 @@ void STMClient::main_init( void )
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
   network = NetworkPointer( new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str() ) );
 
+  network->set_state_compression( state_zstd, state_zstd_level, state_zstd_threshold );
+  if ( !state_sample_log.empty() ) {
+    network->set_state_sample_log( state_sample_log, state_sample_min_size );
+  }
   network->set_send_delay( 1 ); /* minimal delay on outgoing keystrokes */
 
   /* tell server the size of the terminal */
@@ -270,6 +277,17 @@ void STMClient::main_init( void )
   /* be noisy as necessary */
   network->set_verbose( verbose );
   Select::set_verbose( verbose );
+
+  std::string error;
+  if ( !forwarder.listen( error ) ) {
+    fprintf( stderr, "Cannot set up stream forwarding: %s\n", error.c_str() );
+    exit( 1 );
+  }
+
+  setenv( "ADAM_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true );
+  if ( verbose ) {
+    fprintf( stderr, "adam-moshcp control socket: %s\n", bulk_control.socket_path().c_str() );
+  }
 }
 
 void STMClient::output_new_frame( void )
@@ -296,6 +314,34 @@ void STMClient::output_new_frame( void )
 void STMClient::process_network_input( void )
 {
   network->recv();
+
+  const std::string remote_diff( network->get_remote_diff() );
+  if ( !remote_diff.empty() ) {
+    HostBuffers::HostMessage input;
+    fatal_assert( input.ParseFromString( remote_diff ) );
+    for ( int i = 0; i < input.instruction_size(); i++ ) {
+      if ( input.instruction( i ).HasExtension( HostBuffers::stream ) ) {
+        forwarder.handle_remote_event( Network::stream_event_from_proto(
+          input.instruction( i ).GetExtension( HostBuffers::stream ) ) );
+      } else if ( input.instruction( i ).HasExtension( HostBuffers::clipboard ) ) {
+        const Terminal::ClipboardEvent ev = Terminal::clipboard_event_from_proto(
+          input.instruction( i ).GetExtension( HostBuffers::clipboard ) );
+        if ( ev.op == Terminal::ClipboardQuery || ev.op == Terminal::ClipboardSet
+             || ev.op == Terminal::ClipboardClear ) {
+          const std::string seq = Terminal::encode_osc52( ev );
+          swrite( STDOUT_FILENO, seq.data(), seq.size() );
+          if ( ev.op == Terminal::ClipboardQuery ) {
+            expecting_osc52_reply = true;
+          }
+        }
+      }
+    }
+  }
+
+  Network::Bulk::Datagram bulk;
+  while ( network->pop_bulk( bulk ) ) {
+    bulk_control.broadcast( bulk );
+  }
 
   /* Now give hints to the overlays */
   overlays.get_notification_engine().server_heard( network->get_latest_remote_state().timestamp );
@@ -328,14 +374,36 @@ bool STMClient::process_user_input( int fd )
   }
   overlays.get_prediction_engine().set_local_frame_sent( net.get_sent_state_last() );
 
+  const char* input = buf;
+  ssize_t input_len = bytes_read;
+  std::string filtered_input;
+  if ( expecting_osc52_reply ) {
+    Terminal::Osc52InputFilter::Output extracted = osc52_input.consume( buf, static_cast<size_t>( bytes_read ) );
+    if ( !extracted.events.empty() ) {
+      expecting_osc52_reply = false;
+      for ( size_t ev_i = 0; ev_i < extracted.events.size(); ev_i++ ) {
+        if ( Terminal::clipboard_should_transmit( extracted.events[ev_i] ) ) {
+          net.get_current_state().push_back( extracted.events[ev_i] );
+        }
+      }
+      if ( osc52_input.in_sequence() ) {
+        Terminal::Osc52InputFilter::Output rest = osc52_input.flush();
+        extracted.user_bytes.append( rest.user_bytes );
+      }
+    }
+    filtered_input.swap( extracted.user_bytes );
+    input = filtered_input.data();
+    input_len = static_cast<ssize_t>( filtered_input.size() );
+  }
+
   /* Don't predict for bulk data. */
-  bool paste = bytes_read > 100;
+  bool paste = input_len > 100;
   if ( paste ) {
     overlays.get_prediction_engine().reset();
   }
 
-  for ( int i = 0; i < bytes_read; i++ ) {
-    char the_byte = buf[i];
+  for ( int i = 0; i < input_len; i++ ) {
+    char the_byte = input[i];
 
     if ( !paste ) {
       overlays.get_prediction_engine().new_user_byte( the_byte, local_framebuffer );
@@ -359,7 +427,7 @@ bool STMClient::process_user_input( int fd )
           exit( 1 );
         }
 
-        fputs( "\n\033[37;44m[mosh is suspended.]\033[m\n", stdout );
+        fputs( "\n\033[37;44m[adam-mosh is suspended.]\033[m\n", stdout );
 
         fflush( NULL );
 
@@ -438,7 +506,7 @@ bool STMClient::main( void )
   /* Drop unnecessary privileges */
 #ifdef HAVE_PLEDGE
   /* OpenBSD pledge() syscall */
-  if ( pledge( "stdio inet tty", NULL ) ) {
+  if ( pledge( "stdio inet unix tty", NULL ) ) {
     perror( "pledge() failed" );
     exit( 1 );
   }
@@ -451,11 +519,20 @@ bool STMClient::main( void )
     try {
       output_new_frame();
 
+      uint64_t now = timestamp();
+      const bool reliable_data_pending = network->has_unsent_data();
       int wait_time = std::min( network->wait_time(), overlays.wait_time() );
+      if ( !reliable_data_pending ) {
+        wait_time = std::min( wait_time, forwarder.wait_time( now ) );
+      }
 
       /* Handle startup "Connecting..." message */
       if ( still_connecting() ) {
         wait_time = std::min( 250, wait_time );
+      }
+      if ( bulk_control.has_outgoing() && !reliable_data_pending && !forwarder.has_pending_network_data()
+           && wait_time > 20 ) {
+        wait_time = 20;
       }
 
       /* poll for events */
@@ -463,6 +540,14 @@ bool STMClient::main( void )
       sel.clear_fds();
       std::vector<int> fd_list( network->fds() );
       for ( std::vector<int>::const_iterator it = fd_list.begin(); it != fd_list.end(); it++ ) {
+        sel.add_fd( *it );
+      }
+      std::vector<int> forward_fds( forwarder.fds() );
+      for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {
+        sel.add_fd( *it );
+      }
+      std::vector<int> bulk_fds( bulk_control.fds() );
+      for ( std::vector<int>::const_iterator it = bulk_fds.begin(); it != bulk_fds.end(); it++ ) {
         sel.add_fd( *it );
       }
       sel.add_fd( STDIN_FILENO );
@@ -485,6 +570,18 @@ bool STMClient::main( void )
 
       if ( network_ready_to_read ) {
         process_network_input();
+      }
+
+      for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {
+        if ( sel.read( *it ) ) {
+          forwarder.process_readable_fd( *it );
+        }
+      }
+
+      for ( std::vector<int>::const_iterator it = bulk_fds.begin(); it != bulk_fds.end(); it++ ) {
+        if ( sel.read( *it ) ) {
+          bulk_control.process_readable_fd( *it );
+        }
       }
 
       if ( sel.read( STDIN_FILENO )
@@ -550,7 +647,19 @@ bool STMClient::main( void )
         overlays.get_notification_engine().set_notification_string( L"" );
       }
 
+      if ( !network->has_unsent_data() ) {
+        forwarder.flush(
+          network->get_current_state(), timestamp(), network->send_interval(), network->max_datagram_payload() );
+      }
+      const bool reliable_data_queued = network->has_unsent_data();
+      const int interactive_wait_before_tick = network->wait_time();
       network->tick();
+
+      Network::Bulk::Datagram bulk;
+      if ( !reliable_data_queued && interactive_wait_before_tick > 0 && network->wait_time() > 0
+           && !forwarder.has_pending_network_data() && bulk_control.pop_outgoing( bulk ) ) {
+        network->send_bulk( bulk );
+      }
 
       std::string& send_error = network->get_send_error();
       if ( !send_error.empty() ) {

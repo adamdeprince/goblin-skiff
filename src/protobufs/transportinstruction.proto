@@ -15,4 +15,7 @@ message Instruction {
   optional bytes diff = 6;
 
   optional bytes chaff = 7;
+
+  optional bool zstd_supported = 8;
+  optional bytes zstd_dict_id = 9;
 }

@@ -38,4 +38,5 @@ src/include/stamp-h1
 /VERSION
 /VERSION.stamp
 /scripts/mosh
+/scripts/adam-mosh
 src/include/version.h

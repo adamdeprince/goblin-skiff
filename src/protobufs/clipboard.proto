@@ -1,0 +1,19 @@
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package ClipboardBuffers;
+
+message ClipboardEvent {
+  enum Op {
+    SET = 1;
+    QUERY = 2;
+    CLEAR = 3;
+  }
+
+  optional Op op = 1;
+  optional uint32 targets = 2;
+  optional bytes payload = 3;
+  optional bool zstd = 4 [default = false];
+  optional bool truncated = 5 [default = false];
+}

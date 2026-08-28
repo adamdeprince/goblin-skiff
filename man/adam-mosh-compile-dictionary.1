@@ -1,0 +1,52 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.TH ADAM-MOSH-COMPILE-DICTIONARY 1 "May 2026"
+.SH NAME
+adam-mosh-compile-dictionary \- build a zstd dictionary for Mosh state updates
+.SH SYNOPSIS
+.B adam-mosh-compile-dictionary
+\-\-input=\fIFILE\fP
+\-\-output=\fIFILE\fP
+[\-\-dict-size=\fIBYTES\fP]
+[\-\-max-samples=\fIN\fP]
+.br
+.B adam-mosh-compile-dictionary
+[\fIoptions\fP]
+\fIINPUT\fP
+\fIOUTPUT\fP
+.SH DESCRIPTION
+\fBadam-mosh-compile-dictionary\fP reads a Mosh state sample log produced by
+\fBadam-mosh --state-sample-log\fP and trains a zstd dictionary for later
+terminal state compression. The output dictionary file is compressed
+with zstd level 22.
+
+The sample log contains received, uncompressed terminal state blobs in
+a zstd-compressed framed format. It can include terminal contents and
+should be treated as sensitive.
+
+Use the generated dictionary with
+.BR "adam-mosh --state-zstd-dict=" "FILE" .
+The wrapper uploads the dictionary over SSH during setup, and the
+server decompresses it and uses it for that Mosh session only.
+.SH OPTIONS
+.TP
+.B \-\-input=\fIFILE\fP
+Read samples from \fIFILE\fP.
+.TP
+.B \-\-output=\fIFILE\fP
+Write the compiled dictionary to \fIFILE\fP.
+.TP
+.B \-\-dict\-size=\fIBYTES\fP
+Maximum dictionary size. The default is 65536 bytes.
+.TP
+.B \-\-max\-samples=\fIN\fP
+Train from at most \fIN\fP samples. The default, 0, means all samples.
+.SH EXAMPLE
+.nf
+$ adam-mosh --state-sample-log=emacs.samples.zst host
+$ adam-mosh-compile-dictionary --input=emacs.samples.zst --output=emacs.dict
+$ adam-mosh --state-zstd-dict=emacs.dict host
+.fi
+.SH SEE ALSO
+.BR adam-mosh (1),
+.BR adam-mosh-client (1),
+.BR adam-mosh-server (1).

@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH MOSH 1 "April 2013"
+.TH ADAM-MOSH 1 "April 2013"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,9 +16,9 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-mosh \- mobile shell with roaming and intelligent local echo
+adam-mosh \- mobile shell with roaming and intelligent local echo
 .SH SYNOPSIS
-.B mosh
+.B adam-mosh
 .RI [ options ]
 [--]
 [user@]host
@@ -37,16 +37,16 @@ without waiting for a network round-trip.
 
 \fBmosh\fP uses \fBssh\fP to establish a connection to the remote host
 and authenticate with existing means (e.g., public-key authentication
-or a password). \fBmosh\fP executes the unprivileged \fBmosh-server\fP
+or a password). \fBadam-mosh\fP executes the unprivileged \fBadam-mosh-server\fP
 helper program on the server, then closes the SSH connection and
-starts the \fBmosh-client\fP, which establishes a long-lived datagram
+starts the \fBadam-mosh-client\fP, which establishes a long-lived datagram
 connection over UDP.
 
-To improve responsiveness, \fBmosh\fP runs a predictive model of the
+To improve responsiveness, \fBadam-mosh\fP runs a predictive model of the
 server's behavior in the background, trying to guess the effect of
 each keystroke on the screen. It makes predictions for normal typing,
 backspace, and the left- and right-arrow keys. When it is confident,
-\fBmosh\fP displays the predictions without waiting for the
+\fBadam-mosh\fP displays the predictions without waiting for the
 server. The predictive model must prove itself anew on each row of the
 terminal and after each control character, so \fBmosh\fP avoids
 echoing passwords or non-echoing editor commands.
@@ -57,12 +57,13 @@ links, the predicted cells are underlined until confirmed by the
 server.) Occasional echo mistakes are corrected within a network
 round-trip and do not cause lasting effect.
 
-\fBmosh\fP does not support X forwarding or the non-interactive uses
-of SSH, including port forwarding or sshfs. \fBmosh\fP works through
-typical client-side network address translators but requires UDP to
-pass between client and server. By default, \fBmosh\fP uses the ports
-between 60000 and 61000, but allows the user to request a particular
-UDP port instead.
+\fBmosh\fP does not support sshfs. This build includes experimental
+stream forwarding for local TCP forwards, remote TCP forwards, SOCKS5
+dynamic forwards, SSH agent forwarding, and basic X11 forwarding.
+\fBmosh\fP works through typical client-side network address
+translators but requires UDP to pass between client and server. By
+default, \fBmosh\fP uses the ports between 60000 and 61000, but allows
+the user to request a particular UDP port instead.
 
 Currently, \fBmosh\fP has limited support for IPv6, dual-stack
 networks, and servers with multiple addresses.  At session start, it
@@ -72,12 +73,12 @@ lifetime of the session.
 \fBmosh\fP will do its best to arrange a UTF-8 character set locale on
 the client and server. The client must have locale-related environment
 variables that specify UTF-8. \fBmosh\fP will pass these client
-variables to the \fBmosh-server\fP on its command line, but in most
-cases they will not need to be used. \fBmosh-server\fP first attempts
+variables to the \fBadam-mosh-server\fP on its command line, but in most
+cases they will not need to be used. \fBadam-mosh-server\fP first attempts
 to use its own locale-related environment variables, which come from
 the system default configuration (sometimes /etc/default/locale) or
 from having been passed over the SSH connection. But if these
-variables don't call for the use of UTF-8, \fBmosh-server\fP will
+variables don't call for the use of UTF-8, \fBadam-mosh-server\fP will
 apply the locale-related environment variables from the client and try
 again.
 
@@ -92,11 +93,11 @@ Command to run on remote host. By default, \fBmosh\fP executes a login shell.
 
 .TP
 .B \-\-client=\fIPATH\fP
-path to client helper on local machine (default: "mosh-client")
+path to client helper on local machine (default: "adam-mosh-client")
 
 .TP
 .B \-\-server=\fICOMMAND\fP
-command to run server helper on remote machine (default: "mosh-server")
+command to run server helper on remote machine (default: "adam-mosh-server")
 
 The server helper is unprivileged and can be installed in the user's
 home directory.
@@ -105,12 +106,12 @@ This option can be used to set environment variables for the server by
 using the
 .BR env (1)
 command to wrap the actual server command.  See
-.BR mosh-server (1)
+.BR adam-mosh-server (1)
 for available environment variables.
 
 .TP
 .B \-\-ssh=\fICOMMAND\fP
-OpenSSH command to remotely execute mosh-server on remote machine (default: "ssh")
+OpenSSH command to remotely execute adam-mosh-server on remote machine (default: "ssh")
 
 An alternate ssh port can be specified with, \fIe.g.\fP, \-\-ssh="ssh \-p 2222".
 
@@ -207,8 +208,122 @@ available UDP port. Otherwise, \fBmosh\fP will choose a port between 60000 and
 port used by SSH.
 
 .TP
+.B \-L [\fIBIND\fP:]\fIPORT\fP:\fIHOST\fP:\fIHOSTPORT\fP
+Forward a local TCP port to the remote side of the Mosh session. This
+is similar to OpenSSH's
+.B \-L
+option: connections accepted on the client are carried over the Mosh
+UDP connection and opened from the server side to
+\fIHOST\fP:\fIHOSTPORT\fP.
+
+.TP
+.B \-R [\fIBIND\fP:]\fIPORT\fP:\fIHOST\fP:\fIHOSTPORT\fP
+Forward a remote TCP port to the local side of the Mosh session. This
+is similar to OpenSSH's
+.B \-R
+option: connections accepted by \fBadam-mosh-server\fP are carried over the
+Mosh UDP connection and opened from the client side to
+\fIHOST\fP:\fIHOSTPORT\fP.
+
+.TP
+.B \-D [\fIBIND\fP:]\fIPORT\fP
+Open a local SOCKS5 dynamic forward. SOCKS connections accepted on the
+client are carried over the Mosh UDP connection and opened from the
+server side.
+
+.TP
+.B \-A
+Forward the local SSH authentication agent to the remote login
+session. The forwarded agent socket is exposed through
+.B SSH_AUTH_SOCK
+inside the remote session.
+
+.TP
+.B \-X
+Forward X11 connections from the remote login session to the client's
+local X server. The remote session receives a forwarded
+.B DISPLAY
+and a temporary
+.B XAUTHORITY
+file. This is basic trusted X11 forwarding; it does not implement
+OpenSSH's untrusted X11 security extension handling. The client must
+have MIT-MAGIC-COOKIE-1 data for its local
+.B DISPLAY
+in
+.B XAUTHORITY
+or
+.IR ~/.Xauthority .
+
+.TP
+.B \-\-stream\-delay=\fIMS\fP
+Coalesce forwarded stream bytes for up to \fIMS\fP milliseconds before
+sending a Mosh datagram. The default is 75 ms. Raising this value can
+reduce packet overhead on very slow links; lowering it can improve
+latency for interactive forwarded connections.
+
+.TP
+.B \-\-stream\-bandwidth=\fIBPS\fP
+Cap forwarded stream payload bytes per second. The default is 2048
+bytes per second. This limit applies to stream forwarding traffic, not
+to terminal state updates.
+
+.TP
+.B \-\-state\-zstd
+Enable negotiated zstd compression for large terminal state updates
+when both peers support it. This is the default when Mosh was built
+with libzstd.
+
+.TP
+.B \-\-no\-state\-zstd
+Disable negotiated zstd compression for terminal state updates.
+
+.TP
+.B \-\-state\-zstd\-level=\fIN\fP
+Set the zstd compression level for terminal state updates. The default
+is 12. Values from 0 through 22 are accepted.
+
+.TP
+.B \-\-state\-zstd\-threshold=\fIBYTES\fP
+Only try zstd for serialized terminal state updates at least this
+large. The default is 2048 bytes. Initial packets are still zlib
+compressed so older peers remain compatible; zstd is used only after
+both sides advertise support.
+
+.TP
+.B \-\-state\-zstd\-dict=\fIFILE\fP
+Use \fIFILE\fP as a zstd dictionary for terminal state updates. The
+dictionary file is normally produced by
+.BR adam-mosh-compile-dictionary (1)
+and stored compressed with zstd level 22. The wrapper uploads the
+compressed dictionary file to the server over SSH during setup. The
+server decompresses it, uses it for this session, and removes the
+uploaded copy; there is no server-side dictionary cache. Dictionary
+compression is used only when both peers advertise the same dictionary
+id.
+
+.TP
+.B \-\-state\-sample\-log=\fIFILE\fP
+Write received, uncompressed terminal state samples to \fIFILE\fP in a
+zstd-compressed framed format suitable for
+.BR adam-mosh-compile-dictionary (1).
+This file can contain terminal contents and should be treated as
+sensitive.
+
+.TP
+.B \-\-state\-sample\-min\-size=\fIBYTES\fP
+Only log received state samples at least this large. The default is 0.
+
+Terminal screen updates and keystrokes are highest priority. X11 and
+SSH agent forwarding are medium priority and use a separate stream
+token bucket from local, remote, and SOCKS5 TCP forwarding, which are
+low priority. Mosh emits at most one forwarded stream event per
+reliable send opportunity and caps forwarded stream chunks below the
+path-MTU payload budget. \fBadam-moshcp\fP bulk datagrams are sent only
+when no reliable terminal or stream-forwarding data is queued.
+
+.TP
 .B \-\-bind\-server={ssh|any|\fIIP\fP}
-Control the IP address that the \fBmosh-server\fP binds to.
+Control the IP address that the \fBadam-mosh-server\fP binds to.
 
 The default is `ssh', in which case the server will reply from the IP
 address that the SSH connection came from (as found in the
@@ -231,14 +346,14 @@ this disables alternate screen mode.
 
 .TP
 .B \-\-local
-Invoke \fBmosh-server\fP locally, without using \fBssh\fP.  This
+Invoke \fBadam-mosh-server\fP locally, without using \fBssh\fP.  This
 option requires the \fBhost\fP argument to be a local, numeric
 IPv4/IPv6 address.  This option is useful for testing.
 
 .TP
 .B \-\-experimental\-remote\-ip={proxy|local|remote}
 Select the method used to discover the IP address that the
-\fBmosh-client\fP connects to.
+\fBadam-mosh-client\fP connects to.
 
 The default is \fBproxy\fP, which uses SSH's
 .B \-\-ssh\-proxy\-command
@@ -291,11 +406,8 @@ The escape sequence to shut down the connection is
 Any other sequence passes both characters through to the server.
 
 .SH ENVIRONMENT VARIABLES
-These variables are not actually interpreted by
-.BR mosh (1)
-itself, but are passed through to
-.BR mosh-server (1).
-They are described here for ease of use.
+These variables configure the client, server, or both. They are
+described here for ease of use.
 
 .TP
 .B MOSH_ESCAPE_KEY
@@ -312,11 +424,45 @@ overrides this variable.
 
 .TP
 .B MOSH_TITLE_NOPREFIX
-When set, inhibits prepending "[mosh]" to window title.
+When set, inhibits prepending "[adam-mosh]" to window title.
+
+.TP
+.B MOSH_STREAM_DELAY
+Default coalescing delay, in milliseconds, for forwarded stream
+traffic. The
+.B \-\-stream\-delay
+command-line option overrides this value.
+
+.TP
+.B MOSH_STREAM_BANDWIDTH
+Default payload-byte-per-second cap for forwarded stream traffic. The
+.B \-\-stream\-bandwidth
+command-line option overrides this value.
+
+.SH FILE TRANSFER
+\fBadam-moshcp\fP transfers files over an active Mosh session using adjacent
+bulk datagrams on the same encrypted and authenticated UDP connection.
+Bulk datagrams are lowest priority and are scheduled only when
+terminal updates and forwarded streams are idle. Oversized bulk
+datagrams are rejected instead of being handed to UDP fragmentation.
+
+Start the receiver on one side of the Mosh session and the sender on
+the other:
+
+.nf
+remote$ adam-moshcp receive .
+local$  adam-moshcp send --rate=2k --redundancy=20% file.bin
+.fi
+
+See
+.BR adam-moshcp (1)
+for details.
 
 .SH SEE ALSO
-.BR mosh-client (1),
-.BR mosh-server (1).
+.BR adam-mosh-client (1),
+.BR adam-mosh-server (1),
+.BR adam-moshcp (1),
+.BR adam-mosh-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org

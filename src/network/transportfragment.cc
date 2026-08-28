@@ -33,6 +33,7 @@
 #include <cassert>
 
 #include "compressor.h"
+#include "src/network/statesamples.h"
 #include "src/crypto/byteorder.h"
 #include "src/protobufs/transportinstruction.pb.h"
 #include "src/util/fatal_assert.h"
@@ -126,7 +127,7 @@ bool FragmentAssembly::add_fragment( Fragment& frag )
   return fragments_arrived == fragments_total;
 }
 
-Instruction FragmentAssembly::get_assembly( void )
+Instruction FragmentAssembly::get_assembly( StateSampleWriter* sample_writer )
 {
   assert( fragments_arrived == fragments_total );
 
@@ -138,7 +139,11 @@ Instruction FragmentAssembly::get_assembly( void )
   }
 
   Instruction ret;
-  fatal_assert( ret.ParseFromString( get_compressor().uncompress_str( encoded ) ) );
+  const std::string decoded = get_compressor().uncompress_str( encoded );
+  if ( sample_writer != NULL ) {
+    sample_writer->write_record( decoded );
+  }
+  fatal_assert( ret.ParseFromString( decoded ) );
 
   fragments.clear();
   fragments_arrived = 0;
@@ -153,14 +158,25 @@ bool Fragment::operator==( const Fragment& x ) const
          && ( initialized == x.initialized ) && ( contents == x.contents );
 }
 
-std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst, size_t MTU )
+std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
+                                                  size_t MTU,
+                                                  bool allow_zstd,
+                                                  bool allow_zstd_dictionary,
+                                                  const std::string& zstd_dictionary_id,
+                                                  unsigned int zstd_level,
+                                                  size_t zstd_threshold )
 {
   MTU -= Fragment::frag_header_len;
   if ( ( inst.old_num() != last_instruction.old_num() ) || ( inst.new_num() != last_instruction.new_num() )
        || ( inst.ack_num() != last_instruction.ack_num() )
        || ( inst.throwaway_num() != last_instruction.throwaway_num() )
        || ( inst.chaff() != last_instruction.chaff() )
-       || ( inst.protocol_version() != last_instruction.protocol_version() ) || ( last_MTU != MTU ) ) {
+       || ( inst.protocol_version() != last_instruction.protocol_version() )
+       || ( inst.zstd_supported() != last_instruction.zstd_supported() )
+       || ( inst.zstd_dict_id() != last_instruction.zstd_dict_id() ) || ( last_MTU != MTU )
+       || ( allow_zstd != last_allow_zstd ) || ( allow_zstd_dictionary != last_allow_zstd_dictionary )
+       || ( zstd_dictionary_id != last_zstd_dictionary_id ) || ( zstd_level != last_zstd_level )
+       || ( zstd_threshold != last_zstd_threshold ) ) {
     next_instruction_id++;
   }
 
@@ -170,8 +186,14 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst, size_
 
   last_instruction = inst;
   last_MTU = MTU;
+  last_allow_zstd = allow_zstd;
+  last_allow_zstd_dictionary = allow_zstd_dictionary;
+  last_zstd_dictionary_id = zstd_dictionary_id;
+  last_zstd_level = zstd_level;
+  last_zstd_threshold = zstd_threshold;
 
-  std::string payload = get_compressor().compress_str( inst.SerializeAsString() );
+  std::string payload = get_compressor().compress_str(
+    inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary, zstd_level, zstd_threshold );
   uint16_t fragment_num = 0;
   std::vector<Fragment> ret;
 

@@ -33,7 +33,10 @@
 #include <cassert>
 #include <typeinfo>
 
+#include "src/protobufs/clipboard.pb.h"
+#include "src/protobufs/stream.pb.h"
 #include "src/protobufs/userinput.pb.h"
+#include "src/statesync/clipboard.h"
 #include "src/statesync/user.h"
 #include "src/util/fatal_assert.h"
 
@@ -89,6 +92,26 @@ std::string UserStream::diff_from( const UserStream& existing ) const
         new_inst->MutableExtension( resize )->set_width( my_it->resize.width );
         new_inst->MutableExtension( resize )->set_height( my_it->resize.height );
       } break;
+      case UserStreamEventType: {
+        if ( my_it->stream.type == StreamDataType && output.instruction_size() > 0
+             && output.instruction( output.instruction_size() - 1 ).HasExtension( ClientBuffers::stream ) ) {
+          StreamBuffers::StreamEvent* previous = output.mutable_instruction( output.instruction_size() - 1 )
+                                                   ->MutableExtension( ClientBuffers::stream );
+          if ( previous->type() == StreamBuffers::StreamEvent::DATA
+               && previous->stream_id() == my_it->stream.stream_id
+               && previous->priority() == my_it->stream.priority ) {
+            previous->mutable_data()->append( my_it->stream.data );
+            break;
+          }
+        }
+        Instruction* new_inst = output.add_instruction();
+        stream_event_to_proto( new_inst->MutableExtension( ClientBuffers::stream ), my_it->stream );
+      } break;
+      case UserClipboardEventType: {
+        Instruction* new_inst = output.add_instruction();
+        Terminal::clipboard_event_to_proto( new_inst->MutableExtension( ClientBuffers::clipboard ),
+                                            my_it->clipboard );
+      } break;
       default:
         assert( !"unexpected event type" );
         break;
@@ -114,6 +137,12 @@ void UserStream::apply_string( const std::string& diff )
     } else if ( input.instruction( i ).HasExtension( resize ) ) {
       actions.push_back( UserEvent( Resize( input.instruction( i ).GetExtension( resize ).width(),
                                             input.instruction( i ).GetExtension( resize ).height() ) ) );
+    } else if ( input.instruction( i ).HasExtension( ClientBuffers::stream ) ) {
+      actions.push_back( UserEvent( stream_event_from_proto(
+        input.instruction( i ).GetExtension( ClientBuffers::stream ) ) ) );
+    } else if ( input.instruction( i ).HasExtension( ClientBuffers::clipboard ) ) {
+      actions.push_back( UserEvent(
+        Terminal::clipboard_event_from_proto( input.instruction( i ).GetExtension( ClientBuffers::clipboard ) ) ) );
     }
   }
 }
@@ -125,6 +154,11 @@ const Parser::Action& UserStream::get_action( unsigned int i ) const
       return actions[i].userbyte;
     case ResizeType:
       return actions[i].resize;
+    case UserStreamEventType:
+    case UserClipboardEventType: {
+      static const Parser::Ignore nothing = Parser::Ignore();
+      return nothing;
+    }
     default:
       assert( !"unexpected action type" );
       static const Parser::Ignore nothing = Parser::Ignore();

@@ -32,6 +32,7 @@
 
 #include <cstdio>
 
+#include "src/terminal/kittygraphics.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldisplay.h"
 
@@ -100,16 +101,6 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
       }
       frame.append( '\007' );
     }
-  }
-
-  /* has clipboard changed? */
-  if ( f.get_clipboard() != frame.last_frame.get_clipboard() ) {
-    frame.append( "\033]52;c;" );
-    const title_type& clipboard( f.get_clipboard() );
-    for ( title_type::const_iterator i = clipboard.begin(); i != clipboard.end(); i++ ) {
-      frame.append( *i );
-    }
-    frame.append( '\007' );
   }
 
   /* has reverse video state changed? */
@@ -253,6 +244,12 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
   bool wrap = false;
   for ( ; frame_y < f.ds.get_height(); frame_y++ ) {
     wrap = put_row( initialized, frame, f, frame_y, *rows.at( frame_y ), wrap );
+  }
+
+  const size_t before_kitty = frame.str.size();
+  append_kitty_frame( frame.str, initialized, frame.last_frame, f );
+  if ( frame.str.size() != before_kitty ) {
+    frame.cursor_x = frame.cursor_y = -1;
   }
 
   /* has cursor location changed? */

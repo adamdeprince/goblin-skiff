@@ -34,8 +34,11 @@
 #define COMPLETE_TERMINAL_HPP
 
 #include <cstdint>
+#include <deque>
 #include <list>
 
+#include "src/statesync/stream.h"
+#include "src/terminal/osc52.h"
 #include "src/terminal/parser.h"
 #include "src/terminal/terminal.h"
 
@@ -57,18 +60,27 @@ private:
   using input_history_type = std::list<std::pair<uint64_t, uint64_t>>;
   input_history_type input_history;
   uint64_t echo_ack;
+  std::deque<Network::StreamEvent> stream_events;
+  std::deque<ClipboardEvent> clipboard_events;
 
   static const int ECHO_TIMEOUT = 50; /* for late ack */
 
 public:
   Complete( size_t width, size_t height )
-    : parser(), terminal( width, height ), display( false ), actions(), input_history(), echo_ack( 0 )
+    : parser(), terminal( width, height ), display( false ), actions(), input_history(), echo_ack( 0 ),
+      stream_events(), clipboard_events()
   {}
 
   std::string act( const std::string& str );
   std::string act( const Parser::Action& act );
+  void push_back( const Network::StreamEvent& event ) { stream_events.push_back( event ); }
+  void push_back( const ClipboardEvent& event ) { clipboard_events.push_back( event ); }
 
   const Framebuffer& get_fb( void ) const { return terminal.get_fb(); }
+  std::vector<ClipboardEvent> take_parser_clipboard_events( void ) { return terminal.take_clipboard_events(); }
+  const std::deque<Network::StreamEvent>& get_stream_events( void ) const { return stream_events; }
+  const std::deque<ClipboardEvent>& get_clipboard_events( void ) const { return clipboard_events; }
+  void replace_terminal_state( const Complete& x );
   void reset_input( void ) { parser.reset_input(); }
   uint64_t get_echo_ack( void ) const { return echo_ack; }
   bool set_echo_ack( uint64_t now );
@@ -76,7 +88,7 @@ public:
   int wait_time( uint64_t now ) const;
 
   /* interface for Network::Transport */
-  void subtract( const Complete* ) const {}
+  void subtract( const Complete* prefix );
   std::string diff_from( const Complete& existing ) const;
   std::string init_diff( void ) const;
   void apply_string( const std::string& diff );

@@ -35,11 +35,14 @@
 
 #include <csignal>
 #include <ctime>
+#include <deque>
 #include <list>
 #include <string>
 #include <vector>
 
+#include "src/network/bulkdatagram.h"
 #include "src/network/network.h"
+#include "src/network/statesamples.h"
 #include "src/network/transportsender.h"
 #include "transportfragment.h"
 
@@ -59,9 +62,11 @@ private:
 
   /* simple receiver */
   std::list<TimestampedState<RemoteState>> received_states;
+  std::deque<Bulk::Datagram> bulk_datagrams;
   uint64_t receiver_quench_timer;
   RemoteState last_receiver_state; /* the state we were in when user last queried state */
   FragmentAssembly fragments;
+  StateSampleWriter state_sample_writer;
   unsigned int verbose;
 
 public:
@@ -80,9 +85,14 @@ public:
 
   /* Returns the number of ms to wait until next possible event. */
   int wait_time( void ) { return sender.wait_time(); }
+  bool has_unsent_data( void ) const { return sender.has_unsent_data(); }
+  size_t max_datagram_payload( void ) const;
 
   /* Blocks waiting for a packet. */
   void recv( void );
+
+  void send_bulk( const Bulk::Datagram& datagram );
+  bool pop_bulk( Bulk::Datagram& datagram );
 
   /* Find diff between last receiver state and current remote state, then rationalize states. */
   std::string get_remote_diff( void );
@@ -109,11 +119,23 @@ public:
   const TimestampedState<RemoteState>& get_latest_remote_state( void ) const { return received_states.back(); }
 
   const std::vector<int> fds( void ) const { return connection.fds(); }
+  int get_MTU( void ) const { return connection.get_MTU(); }
+  double get_SRTT( void ) const { return connection.get_SRTT(); }
 
   void set_verbose( unsigned int s_verbose )
   {
     sender.set_verbose( s_verbose );
     verbose = s_verbose;
+  }
+
+  void set_state_compression( bool zstd_enabled, unsigned int zstd_level, size_t zstd_threshold )
+  {
+    sender.set_state_compression( zstd_enabled, zstd_level, zstd_threshold );
+  }
+
+  void set_state_sample_log( const std::string& path, size_t min_size )
+  {
+    state_sample_writer.open( path, min_size );
   }
 
   void set_send_delay( int new_delay ) { sender.set_send_delay( new_delay ); }

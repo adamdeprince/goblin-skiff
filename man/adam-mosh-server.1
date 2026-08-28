@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH MOSH 1 "October 2012"
+.TH ADAM-MOSH-SERVER 1 "October 2012"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,38 +16,43 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-mosh-server \- server-side helper for mosh
+adam-mosh-server \- server-side helper for mosh
 .SH SYNOPSIS
-.B mosh-server
+.B adam-mosh-server
 new
 [\-s]
 [\-v]
 [\-i \fIIP\fP]
 [\-p \fIPORT\fP[:\fIPORT2\fP]]
 [\-c \fICOLORS\fP]
+[\-R \fISPEC\fP]
+[\-A]
+[\-X]
+[\-t \fIMS\fP]
+[\-b \fIBPS\fP]
 [\-\- command...]
 .br
 .SH DESCRIPTION
-\fBmosh-server\fP is a helper program for the 
+\fBadam-mosh-server\fP is a helper program for the
 .BR mosh(1)
 remote terminal application.
 
-\fBmosh-server\fP binds to a high UDP port and chooses an encryption
+\fBadam-mosh-server\fP binds to a high UDP port and chooses an encryption
 key to protect the session. It prints both on standard output,
-detaches from the terminal, and waits for the \fBmosh-client\fP to
+detaches from the terminal, and waits for the \fBadam-mosh-client\fP to
 establish a connection. It will exit if no client has contacted
 it within 60 seconds.
 
-By default, \fBmosh-server\fP binds to a port between 60000 and
+By default, \fBadam-mosh-server\fP binds to a port between 60000 and
 61000 and executes the user's login shell.
 
-On platforms with \fButempter\fP, \fBmosh-server\fP maintains an entry
+On platforms with \fButempter\fP, \fBadam-mosh-server\fP maintains an entry
 in the
 .BR utmp(5)
 file to indicate its process ID, whether the session is connected,
 and the client's current IP address.
 
-\fBmosh-server\fP exits when the client terminates the connection.
+\fBadam-mosh-server\fP exits when the client terminates the connection.
 
 .SH OPTIONS
 
@@ -84,22 +89,51 @@ Locale-related environment variable to try as part of a fallback
 environment, if the startup environment does not specify a character
 set of UTF-8.
 
+.TP
+.B \-R \fISPEC\fP
+Request a remote TCP forward. See
+.BR adam-mosh (1)
+for the format.
+
+.TP
+.B \-A
+Enable SSH agent forwarding for the login session, using the stream
+forward supplied by the client.
+
+.TP
+.B \-X
+Enable X11 forwarding for the login session, using the stream forward
+supplied by the client. The login session receives
+.B DISPLAY
+and
+.B XAUTHORITY
+values for a temporary forwarded display.
+
+.TP
+.B \-t \fIMS\fP
+Coalesce forwarded stream bytes for up to \fIMS\fP milliseconds before
+sending.
+
+.TP
+.B \-b \fIBPS\fP
+Cap forwarded stream payload bytes per second.
+
 .SH ENVIRONMENT VARIABLES
 These variables allow server-side configuration of Mosh's behavior.
 They may be set by administrators in system login/rc files,
 /etc/login.conf, or similar mechanisms, or users in their shell's
-login/rc files.  \fBmosh-server\fP passes these variables to the login
+login/rc files.  \fBadam-mosh-server\fP passes these variables to the login
 session and shell that it starts, but changing them there will have no
 effect.
 
 .TP
 .B MOSH_SERVER_NETWORK_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBmosh-server\fP will wait to receive an update from the
+long (in seconds) \fBadam-mosh-server\fP will wait to receive an update from the
 client before exiting.  Since \fPmosh\fP is very useful for mobile
 clients with intermittent operation and connectivity, we suggest
 setting this variable to a high value, such as 604800 (one week) or
-2592000 (30 days).  Otherwise, \fBmosh-server\fP will wait
+2592000 (30 days).  Otherwise, \fBadam-mosh-server\fP will wait
 indefinitely for a client to reappear.  This variable is somewhat
 similar to the \fBTMOUT\fP variable found in many Bourne shells.
 However, it is not a login-session inactivity timeout; it only applies
@@ -108,35 +142,78 @@ to network connectivity.
 .TP
 .B MOSH_SERVER_SIGNAL_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBmosh-server\fP will ignore SIGUSR1 while waiting
+long (in seconds) \fBadam-mosh-server\fP will ignore SIGUSR1 while waiting
 to receive an update from the client.  Otherwise, \fBSIGUSR1\fP will
-always terminate \fBmosh-server\fP.  Users and administrators may
+always terminate \fBadam-mosh-server\fP.  Users and administrators may
 implement scripts to clean up disconnected Mosh sessions.  With this
 variable set, a user or administrator can issue
 
 .nf
-$ pkill -SIGUSR1 mosh-server
+$ pkill -SIGUSR1 adam-mosh-server
 .fi
 
 to kill disconnected sessions without killing connected login
 sessions.
 
+.TP
+.B MOSH_STREAM_DELAY
+Default forwarded-stream coalescing delay in milliseconds. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STREAM_BANDWIDTH
+Default forwarded-stream payload-byte-per-second cap. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_ZSTD
+Default zstd state-compression setting. Use 0 to disable or 1 to
+enable negotiation.
+
+.TP
+.B MOSH_STATE_ZSTD_LEVEL
+Default zstd level for state compression. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_ZSTD_THRESHOLD
+Default minimum serialized state-update size for zstd. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_ZSTD_DICT
+Path to a zstd dictionary file to use for this server process. Files
+produced by
+.BR adam-mosh-compile-dictionary (1)
+are stored compressed with zstd level 22 and are decompressed before
+use. The \fBmosh\fP wrapper sets this to a temporary uploaded copy
+when \fB\-\-state\-zstd\-dict\fP is used.
+
+.TP
+.B MOSH_STATE_ZSTD_DICT_UNLINK
+If set to 1, remove the file named by
+.B MOSH_STATE_ZSTD_DICT
+after reading it. The wrapper uses this so dictionaries are not cached
+server-side.
+
 .SH EXAMPLE
 
 .nf
-$ mosh-server
+$ adam-mosh-server
 
 MOSH CONNECT 60001 UAkFedSsVJs2LfMeKyQB5g
 
-mosh-server (mosh 1.1)
+adam-mosh-server (mosh 1.1)
 [...] (copyright notice omitted)
 
-[mosh-server detached, pid = 20443]
+[adam-mosh-server detached, pid = 20443]
 .fi
 
 .SH SEE ALSO
-.BR mosh (1),
-.BR mosh-client (1).
+.BR adam-mosh (1),
+.BR adam-mosh-client (1),
+.BR adam-moshcp (1),
+.BR adam-mosh-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org

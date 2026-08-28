@@ -32,7 +32,10 @@
 
 #include <climits>
 
+#include "src/protobufs/clipboard.pb.h"
 #include "src/protobufs/hostinput.pb.h"
+#include "src/protobufs/stream.pb.h"
+#include "src/statesync/clipboard.h"
 #include "src/statesync/completeterminal.h"
 #include "src/util/fatal_assert.h"
 
@@ -90,6 +93,47 @@ string Complete::diff_from( const Complete& existing ) const
     }
   }
 
+  std::deque<Network::StreamEvent>::const_iterator stream_it = stream_events.begin();
+  for ( std::deque<Network::StreamEvent>::const_iterator i = existing.stream_events.begin();
+        i != existing.stream_events.end();
+        i++ ) {
+    assert( stream_it != stream_events.end() );
+    assert( *i == *stream_it );
+    stream_it++;
+  }
+
+  while ( stream_it != stream_events.end() ) {
+    if ( stream_it->type == Network::StreamDataType && output.instruction_size() > 0
+         && output.instruction( output.instruction_size() - 1 ).HasExtension( HostBuffers::stream ) ) {
+      StreamBuffers::StreamEvent* previous = output.mutable_instruction( output.instruction_size() - 1 )
+                                               ->MutableExtension( HostBuffers::stream );
+      if ( previous->type() == StreamBuffers::StreamEvent::DATA && previous->stream_id() == stream_it->stream_id
+           && previous->priority() == stream_it->priority ) {
+        previous->mutable_data()->append( stream_it->data );
+        stream_it++;
+        continue;
+      }
+    }
+    Instruction* new_inst = output.add_instruction();
+    Network::stream_event_to_proto( new_inst->MutableExtension( HostBuffers::stream ), *stream_it );
+    stream_it++;
+  }
+
+  std::deque<ClipboardEvent>::const_iterator clip_it = clipboard_events.begin();
+  for ( std::deque<ClipboardEvent>::const_iterator i = existing.clipboard_events.begin();
+        i != existing.clipboard_events.end();
+        i++ ) {
+    assert( clip_it != clipboard_events.end() );
+    assert( *i == *clip_it );
+    clip_it++;
+  }
+
+  while ( clip_it != clipboard_events.end() ) {
+    Instruction* new_inst = output.add_instruction();
+    clipboard_event_to_proto( new_inst->MutableExtension( HostBuffers::clipboard ), *clip_it );
+    clip_it++;
+  }
+
   return output.SerializeAsString();
 }
 
@@ -114,6 +158,12 @@ void Complete::apply_string( const string& diff )
       uint64_t inst_echo_ack_num = input.instruction( i ).GetExtension( echoack ).echo_ack_num();
       assert( inst_echo_ack_num >= echo_ack );
       echo_ack = inst_echo_ack_num;
+    } else if ( input.instruction( i ).HasExtension( HostBuffers::stream ) ) {
+      stream_events.push_back(
+        Network::stream_event_from_proto( input.instruction( i ).GetExtension( HostBuffers::stream ) ) );
+    } else if ( input.instruction( i ).HasExtension( HostBuffers::clipboard ) ) {
+      clipboard_events.push_back(
+        clipboard_event_from_proto( input.instruction( i ).GetExtension( HostBuffers::clipboard ) ) );
     }
   }
 }
@@ -121,7 +171,43 @@ void Complete::apply_string( const string& diff )
 bool Complete::operator==( Complete const& x ) const
 {
   //  assert( parser == x.parser ); /* parser state is irrelevant for us */
-  return ( terminal == x.terminal ) && ( echo_ack == x.echo_ack );
+  return ( terminal == x.terminal ) && ( echo_ack == x.echo_ack ) && ( stream_events == x.stream_events )
+         && ( clipboard_events == x.clipboard_events );
+}
+
+void Complete::subtract( const Complete* prefix )
+{
+  if ( this == prefix ) {
+    stream_events.clear();
+    clipboard_events.clear();
+    return;
+  }
+
+  for ( std::deque<Network::StreamEvent>::const_iterator i = prefix->stream_events.begin();
+        i != prefix->stream_events.end();
+        i++ ) {
+    assert( !stream_events.empty() );
+    assert( *i == stream_events.front() );
+    stream_events.pop_front();
+  }
+
+  for ( std::deque<ClipboardEvent>::const_iterator i = prefix->clipboard_events.begin();
+        i != prefix->clipboard_events.end();
+        i++ ) {
+    assert( !clipboard_events.empty() );
+    assert( *i == clipboard_events.front() );
+    clipboard_events.pop_front();
+  }
+}
+
+void Complete::replace_terminal_state( const Complete& x )
+{
+  std::deque<Network::StreamEvent> saved_stream_events( stream_events );
+  std::deque<ClipboardEvent> saved_clipboard_events( clipboard_events );
+  *this = x;
+  stream_events = saved_stream_events;
+  clipboard_events = saved_clipboard_events;
+  reset_input();
 }
 
 bool Complete::set_echo_ack( uint64_t now )

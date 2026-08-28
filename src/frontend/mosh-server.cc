@@ -40,8 +40,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <sstream>
 #include <typeinfo>
+#include <vector>
 
 #include <err.h>
 #include <fcntl.h>
@@ -80,6 +82,7 @@
 #include <libutil.h>
 #endif
 
+#include "src/statesync/clipboard.h"
 #include "src/statesync/completeterminal.h"
 #include "src/statesync/user.h"
 #include "src/util/fatal_assert.h"
@@ -94,6 +97,9 @@
 #endif
 
 #include "src/network/networktransport-impl.h"
+#include "src/network/bulkcontrol.h"
+#include "src/network/compressor.h"
+#include "streamforward.h"
 
 using ServerConnection = Network::Transport<Terminal::Complete, Network::UserStream>;
 
@@ -101,6 +107,8 @@ static void serve( int host_fd,
                    int pipe_fd,
                    Terminal::Complete& terminal,
                    ServerConnection& network,
+                   StreamForwarder& forwarder,
+                   Network::Bulk::ControlServer& bulk_control,
                    long network_timeout,
                    long network_signaled_timeout );
 
@@ -110,11 +118,21 @@ static int run_server( const char* desired_ip,
                        char* command_argv[],
                        const int colors,
                        unsigned int verbose,
-                       bool with_motd );
+                       bool with_motd,
+                       const std::vector<std::string>& remote_forwards,
+                       bool agent_forwarding,
+                       bool x11_forwarding,
+                       unsigned int stream_delay_ms,
+                       unsigned int stream_rate_bytes_per_second,
+                       bool state_zstd,
+                       unsigned int state_zstd_level,
+                       unsigned int state_zstd_threshold,
+                       const std::string& state_zstd_dictionary,
+                       bool unlink_state_zstd_dictionary );
 
 static void print_version( FILE* file )
 {
-  fputs( "mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "adam-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -125,7 +143,7 @@ static void print_version( FILE* file )
 static void print_usage( FILE* stream, const char* argv0 )
 {
   fprintf( stream,
-           "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-- COMMAND...]\n",
+           "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [-- COMMAND...]\n",
            argv0 );
 }
 
@@ -133,6 +151,51 @@ static bool print_motd( const char* filename );
 static void chdir_homedir( void );
 static bool motd_hushed( void );
 static void warn_unattached( const std::string& ignore_entry );
+
+static unsigned int parse_uint_option( const char* name, const char* value )
+{
+  char* end = NULL;
+  errno = 0;
+  unsigned long parsed = strtoul( value, &end, 10 );
+  if ( errno || *end || parsed > UINT_MAX ) {
+    fprintf( stderr, "Bad %s (%s)\n", name, value );
+    exit( 1 );
+  }
+  return parsed;
+}
+
+static unsigned int uint_from_env( const char* name, unsigned int fallback )
+{
+  const char* value = getenv( name );
+  if ( !value || !*value ) {
+    return fallback;
+  }
+  return parse_uint_option( name, value );
+}
+
+static bool bool_from_env( const char* name, bool fallback )
+{
+  const char* value = getenv( name );
+  if ( !value || !*value ) {
+    return fallback;
+  }
+  if ( 0 == strcmp( value, "1" ) || 0 == strcmp( value, "yes" ) || 0 == strcmp( value, "true" ) ) {
+    return true;
+  }
+  if ( 0 == strcmp( value, "0" ) || 0 == strcmp( value, "no" ) || 0 == strcmp( value, "false" ) ) {
+    return false;
+  }
+  fprintf( stderr, "Bad %s (%s)\n", name, value );
+  exit( 1 );
+}
+
+static void validate_state_zstd_level( unsigned int level )
+{
+  if ( level > 22 ) {
+    fputs( "MOSH_STATE_ZSTD_LEVEL must be between 0 and 22\n", stderr );
+    exit( 1 );
+  }
+}
 
 /* Simple spinloop */
 static void spin( void )
@@ -190,7 +253,19 @@ int main( int argc, char* argv[] )
   char** command_argv = NULL;
   int colors = 0;
   unsigned int verbose = 0; /* don't close stdin/stdout/stderr */
-  /* Will cause mosh-server not to correctly detach on old versions of sshd. */
+  std::vector<std::string> remote_forwards;
+  bool agent_forwarding = false;
+  bool x11_forwarding = false;
+  unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
+  unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 2048 );
+  bool state_zstd = bool_from_env( "MOSH_STATE_ZSTD", true );
+  unsigned int state_zstd_level = uint_from_env( "MOSH_STATE_ZSTD_LEVEL", 12 );
+  unsigned int state_zstd_threshold = uint_from_env( "MOSH_STATE_ZSTD_THRESHOLD", 2048 );
+  const char* state_zstd_dictionary_env = getenv( "MOSH_STATE_ZSTD_DICT" );
+  std::string state_zstd_dictionary = state_zstd_dictionary_env ? state_zstd_dictionary_env : "";
+  bool unlink_state_zstd_dictionary = bool_from_env( "MOSH_STATE_ZSTD_DICT_UNLINK", false );
+  validate_state_zstd_level( state_zstd_level );
+  /* Will cause adam-mosh-server not to correctly detach on old versions of sshd. */
   std::list<std::string> locale_vars;
 
   /* strip off command */
@@ -216,14 +291,14 @@ int main( int argc, char* argv[] )
   if ( ( argc >= 2 ) && ( strcmp( argv[1], "new" ) == 0 ) ) {
     /* new option syntax */
     int opt;
-    while ( ( opt = getopt( argc - 1, argv + 1, "@:i:p:c:svl:" ) ) != -1 ) {
+    while ( ( opt = getopt( argc - 1, argv + 1, "@:i:p:c:svl:R:AXt:b:" ) ) != -1 ) {
       switch ( opt ) {
           /*
            * This undocumented option does nothing but eat its argument.
            * Useful in scripting where you prepend something to a
-           * mosh-server argv, and might end up with something like
-           * "mosh-server new -v new -c 256", now you can say
-           * "mosh-server new -v -@ new -c 256" to discard the second
+           * adam-mosh-server argv, and might end up with something like
+           * "adam-mosh-server new -v new -c 256", now you can say
+           * "adam-mosh-server new -v -@ new -c 256" to discard the second
            * "new".
            */
         case '@':
@@ -256,6 +331,25 @@ int main( int argc, char* argv[] )
           break;
         case 'l':
           locale_vars.push_back( std::string( optarg ) );
+          break;
+        case 'R':
+          remote_forwards.push_back( std::string( optarg ) );
+          break;
+        case 'A':
+          agent_forwarding = true;
+          break;
+        case 'X':
+          x11_forwarding = true;
+          break;
+        case 't':
+          stream_delay_ms = parse_uint_option( "-t", optarg );
+          break;
+        case 'b':
+          stream_rate_bytes_per_second = parse_uint_option( "-b", optarg );
+          if ( stream_rate_bytes_per_second == 0 ) {
+            fputs( "-b stream bandwidth must be greater than zero\n", stderr );
+            exit( 1 );
+          }
           break;
         default:
           /* don't die on unknown options */
@@ -357,7 +451,7 @@ int main( int argc, char* argv[] )
       std::string client_charset( locale_charset() );
 
       fprintf( stderr,
-               "mosh-server needs a UTF-8 native locale to run.\n\n"
+               "adam-mosh-server needs a UTF-8 native locale to run.\n\n"
                "Unfortunately, the local environment (%s) specifies\n"
                "the character set \"%s\",\n\n"
                "The client-supplied environment (%s) specifies\n"
@@ -372,12 +466,31 @@ int main( int argc, char* argv[] )
   }
 
   try {
-    return run_server( desired_ip, desired_port, command_path, command_argv, colors, verbose, with_motd );
+    return run_server( desired_ip,
+                       desired_port,
+                       command_path,
+                       command_argv,
+                       colors,
+                       verbose,
+                       with_motd,
+                       remote_forwards,
+                       agent_forwarding,
+                       x11_forwarding,
+                       stream_delay_ms,
+                       stream_rate_bytes_per_second,
+                       state_zstd,
+                       state_zstd_level,
+                       state_zstd_threshold,
+                       state_zstd_dictionary,
+                       unlink_state_zstd_dictionary );
   } catch ( const Network::NetworkException& e ) {
     fprintf( stderr, "Network exception: %s\n", e.what() );
     return 1;
   } catch ( const Crypto::CryptoException& e ) {
     fprintf( stderr, "Crypto exception: %s\n", e.what() );
+    return 1;
+  } catch ( const std::exception& e ) {
+    fprintf( stderr, "Error: %s\n", e.what() );
     return 1;
   }
 }
@@ -388,8 +501,27 @@ static int run_server( const char* desired_ip,
                        char* command_argv[],
                        const int colors,
                        unsigned int verbose,
-                       bool with_motd )
+                       bool with_motd,
+                       const std::vector<std::string>& remote_forwards,
+                       bool agent_forwarding,
+                       bool x11_forwarding,
+                       unsigned int stream_delay_ms,
+                       unsigned int stream_rate_bytes_per_second,
+                       bool state_zstd,
+                       unsigned int state_zstd_level,
+                       unsigned int state_zstd_threshold,
+                       const std::string& state_zstd_dictionary,
+                       bool unlink_state_zstd_dictionary )
 {
+  if ( !state_zstd_dictionary.empty() ) {
+    Network::get_compressor().set_zstd_dictionary_from_file( state_zstd_dictionary );
+    if ( unlink_state_zstd_dictionary && unlink( state_zstd_dictionary.c_str() ) < 0 ) {
+      fprintf( stderr, "Warning: could not remove uploaded zstd dictionary %s: %s\n",
+               state_zstd_dictionary.c_str(),
+               strerror( errno ) );
+    }
+  }
+
   /* get network idle timeout */
   long network_timeout = 0;
   char* timeout_envar = getenv( "MOSH_SERVER_NETWORK_TMOUT" );
@@ -435,12 +567,34 @@ static int run_server( const char* desired_ip,
   Network::UserStream blank;
   using NetworkPointer = std::shared_ptr<ServerConnection>;
   NetworkPointer network( new ServerConnection( terminal, blank, desired_ip, desired_port ) );
+  network->set_state_compression( state_zstd, state_zstd_level, state_zstd_threshold );
+
+  StreamForwarder forwarder( StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second );
+  std::string forward_error;
+  for ( std::vector<std::string>::const_iterator it = remote_forwards.begin(); it != remote_forwards.end(); it++ ) {
+    if ( !forwarder.add_tcp_forward( *it, forward_error ) ) {
+      fprintf( stderr, "Bad -R forwarding spec: %s\n", forward_error.c_str() );
+      exit( 1 );
+    }
+  }
+  if ( agent_forwarding && !forwarder.enable_agent_forwarding( forward_error ) ) {
+    fprintf( stderr, "Cannot enable agent forwarding: %s\n", forward_error.c_str() );
+    exit( 1 );
+  }
+  if ( x11_forwarding && !forwarder.enable_x11_forwarding( forward_error ) ) {
+    fprintf( stderr, "Cannot enable X11 forwarding: %s\n", forward_error.c_str() );
+    exit( 1 );
+  }
+  if ( !forwarder.listen( forward_error ) ) {
+    fprintf( stderr, "Cannot set up stream forwarding: %s\n", forward_error.c_str() );
+    exit( 1 );
+  }
 
   network->set_verbose( verbose );
   Select::set_verbose( verbose );
 
   /*
-   * If mosh-server is run on a pty, then typeahead may echo and break mosh.pl's
+   * If adam-mosh-server is run on a pty, then typeahead may echo and break adam-mosh's
    * detection of the MOSH CONNECT message.  Print it on a new line to bodge
    * around that.
    */
@@ -463,14 +617,14 @@ static int run_server( const char* desired_ip,
   if ( the_pid < 0 ) {
     perror( "fork" );
   } else if ( the_pid > 0 ) {
-    fputs( "\nmosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+    fputs( "\nadam-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
            "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
            "This is free software: you are free to change and redistribute it.\n"
            "There is NO WARRANTY, to the extent permitted by law.\n\n",
            stderr );
 
-    fprintf( stderr, "[mosh-server detached, pid = %d]\n", static_cast<int>( the_pid ) );
+    fprintf( stderr, "[adam-mosh-server detached, pid = %d]\n", static_cast<int>( the_pid ) );
 #ifndef HAVE_IUTF8
     fputs( "\nWarning: termios IUTF8 flag not defined.\n"
            "Character-erase of multibyte character sequence\n"
@@ -513,8 +667,10 @@ static int run_server( const char* desired_ip,
     }
   }
 
+  Network::Bulk::ControlServer bulk_control( "server" );
+
   char utmp_entry[64] = { 0 };
-  snprintf( utmp_entry, 64, "mosh [%ld]", static_cast<long int>( getpid() ) );
+  snprintf( utmp_entry, 64, "adam-mosh [%ld]", static_cast<long int>( getpid() ) );
 
   /* Fork child process */
   int pipes[2];
@@ -583,6 +739,32 @@ static int run_server( const char* desired_ip,
       exit( 1 );
     }
 
+    if ( !forwarder.agent_socket_path().empty() ) {
+      if ( setenv( "SSH_AUTH_SOCK", forwarder.agent_socket_path().c_str(), true ) < 0 ) {
+        perror( "setenv" );
+        exit( 1 );
+      }
+    }
+
+    if ( !forwarder.x11_display().empty() ) {
+      if ( setenv( "DISPLAY", forwarder.x11_display().c_str(), true ) < 0 ) {
+        perror( "setenv" );
+        exit( 1 );
+      }
+    }
+
+    if ( !forwarder.x11_authority_path().empty() ) {
+      if ( setenv( "XAUTHORITY", forwarder.x11_authority_path().c_str(), true ) < 0 ) {
+        perror( "setenv" );
+        exit( 1 );
+      }
+    }
+
+    if ( setenv( "ADAM_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true ) < 0 ) {
+      perror( "setenv" );
+      exit( 1 );
+    }
+
     /* clear STY environment variable so GNU screen regards us as top level */
     if ( unsetenv( "STY" ) < 0 ) {
       perror( "unsetenv" );
@@ -596,7 +778,7 @@ static int run_server( const char* desired_ip,
 #ifndef __sun
       // For Ubuntu, try and print one of {,/var}/run/motd.dynamic.
       // This file is only updated when pam_motd is run, but when
-      // mosh-server is run in the usual way with ssh via the script,
+      // adam-mosh-server is run in the usual way with ssh via the script,
       // this always happens.
       // XXX Hackish knowledge of Ubuntu PAM configuration.
       // But this seems less awful than build-time detection with autoconf.
@@ -641,7 +823,7 @@ static int run_server( const char* desired_ip,
     /* Drop unnecessary privileges */
 #ifdef HAVE_PLEDGE
     /* OpenBSD pledge() syscall */
-    if ( pledge( "stdio inet tty", NULL ) ) {
+    if ( pledge( "stdio inet unix tty", NULL ) ) {
       perror( "pledge() failed" );
       exit( 1 );
     }
@@ -653,7 +835,7 @@ static int run_server( const char* desired_ip,
 #endif
 
     try {
-      serve( master, pipes[1], terminal, *network, network_timeout, network_signaled_timeout );
+      serve( master, pipes[1], terminal, *network, forwarder, bulk_control, network_timeout, network_signaled_timeout );
     } catch ( const Network::NetworkException& e ) {
       fprintf( stderr, "Network exception: %s\n", e.what() );
     } catch ( const Crypto::CryptoException& e ) {
@@ -670,7 +852,7 @@ static int run_server( const char* desired_ip,
     }
   }
 
-  fputs( "\n[mosh-server is exiting.]\n", stdout );
+  fputs( "\n[adam-mosh-server is exiting.]\n", stdout );
 
   return 0;
 }
@@ -679,6 +861,8 @@ static void serve( int host_fd,
                    int pipe_fd,
                    Terminal::Complete& terminal,
                    ServerConnection& network,
+                   StreamForwarder& forwarder,
+                   Network::Bulk::ControlServer& bulk_control,
                    long network_timeout,
                    long network_signaled_timeout )
 {
@@ -717,9 +901,13 @@ static void serve( int host_fd,
       static const uint64_t timeout_if_no_client = 60000;
       int timeout = INT_MAX;
       uint64_t now = Network::timestamp();
+      const bool reliable_data_pending = network.has_unsent_data();
 
       timeout = std::min( timeout, network.wait_time() );
       timeout = std::min( timeout, terminal.wait_time( now ) );
+      if ( !reliable_data_pending ) {
+        timeout = std::min( timeout, forwarder.wait_time( now ) );
+      }
       if ( ( !network.get_remote_state_num() ) || network.shutdown_in_progress() ) {
         timeout = std::min( timeout, 5000 );
       }
@@ -737,6 +925,10 @@ static void serve( int host_fd,
         }
         timeout = std::min( timeout, static_cast<int>( network_sleep ) );
       }
+      if ( bulk_control.has_outgoing() && !reliable_data_pending && !forwarder.has_pending_network_data()
+           && timeout > 20 ) {
+        timeout = 20;
+      }
 
       /* poll for events */
       sel.clear_fds();
@@ -744,6 +936,14 @@ static void serve( int host_fd,
       assert( fd_list.size() == 1 ); /* servers don't hop */
       int network_fd = fd_list.back();
       sel.add_fd( network_fd );
+      std::vector<int> forward_fds( forwarder.fds() );
+      for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {
+        sel.add_fd( *it );
+      }
+      std::vector<int> bulk_fds( bulk_control.fds() );
+      for ( std::vector<int>::const_iterator it = bulk_fds.begin(); it != bulk_fds.end(); it++ ) {
+        sel.add_fd( *it );
+      }
       if ( !network.shutdown_in_progress() ) {
         sel.add_fd( host_fd );
       }
@@ -762,6 +962,11 @@ static void serve( int host_fd,
         /* packet received from the network */
         network.recv();
 
+        Network::Bulk::Datagram bulk;
+        while ( network.pop_bulk( bulk ) ) {
+          bulk_control.broadcast( bulk );
+        }
+
         /* is new user input available for the terminal? */
         if ( network.get_remote_state_num() != last_remote_num ) {
           last_remote_num = network.get_remote_state_num();
@@ -770,6 +975,20 @@ static void serve( int host_fd,
           us.apply_string( network.get_remote_diff() );
           /* apply userstream to terminal */
           for ( size_t i = 0; i < us.size(); i++ ) {
+            if ( us.is_stream_event( i ) ) {
+              forwarder.handle_remote_event( us.get_stream_event( i ) );
+              continue;
+            }
+            if ( us.is_clipboard_event( i ) ) {
+              const Terminal::ClipboardEvent& ev = us.get_clipboard_event( i );
+              if ( ev.op == Terminal::ClipboardSet || ev.op == Terminal::ClipboardClear ) {
+                /* Reply to a host OSC 52 query, or a client-initiated set.
+                   Write to the PTY; do not re-parse into the emulator or we
+                   would echo the payload back to the client. */
+                terminal_to_host += Terminal::encode_osc52( ev );
+              }
+              continue;
+            }
             const Parser::Action& action = us.get_action( i );
             if ( typeid( action ) == typeid( Parser::Resize ) ) {
               /* apply only the last consecutive Resize action */
@@ -803,7 +1022,7 @@ static void serve( int host_fd,
 
           /* update client with new state of terminal */
           if ( !network.shutdown_in_progress() ) {
-            network.set_current_state( terminal );
+            network.get_current_state().replace_terminal_state( terminal );
           }
 #if defined( HAVE_SYSLOG ) || defined( HAVE_UTEMPTER )
 #ifdef HAVE_UTEMPTER
@@ -836,7 +1055,7 @@ static void serve( int host_fd,
 #ifdef HAVE_UTEMPTER
             utempter_remove_record( host_fd );
             char tmp[64 + NI_MAXHOST];
-            snprintf( tmp, 64 + NI_MAXHOST, "%s via mosh [%ld]", host, static_cast<long int>( getpid() ) );
+            snprintf( tmp, 64 + NI_MAXHOST, "%s via adam-mosh [%ld]", host, static_cast<long int>( getpid() ) );
             utempter_add_record( host_fd, tmp );
 
             connected_utmp = true;
@@ -858,6 +1077,18 @@ static void serve( int host_fd,
         }
       }
 
+      for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {
+        if ( sel.read( *it ) ) {
+          forwarder.process_readable_fd( *it );
+        }
+      }
+
+      for ( std::vector<int>::const_iterator it = bulk_fds.begin(); it != bulk_fds.end(); it++ ) {
+        if ( sel.read( *it ) ) {
+          bulk_control.process_readable_fd( *it );
+        }
+      }
+
       if ( ( !network.shutdown_in_progress() ) && sel.read( host_fd ) ) {
         /* input from the host needs to be fed to the terminal */
         const int buf_size = 16384;
@@ -874,7 +1105,18 @@ static void serve( int host_fd,
           terminal_to_host += terminal.act( std::string( buf, bytes_read ) );
 
           /* update client with new state of terminal */
-          network.set_current_state( terminal );
+          network.get_current_state().replace_terminal_state( terminal );
+        }
+      }
+
+      /* One-shot OSC 52 events from the host PTY. These ride the
+         reliable hostbytes/keystroke channel once, not framebuffer state. */
+      std::vector<Terminal::ClipboardEvent> clipboard_events = terminal.take_parser_clipboard_events();
+      if ( !network.shutdown_in_progress() ) {
+        for ( size_t i = 0; i < clipboard_events.size(); i++ ) {
+          if ( Terminal::clipboard_should_transmit( clipboard_events[i] ) ) {
+            network.get_current_state().push_back( clipboard_events[i] );
+          }
         }
       }
 
@@ -928,7 +1170,7 @@ static void serve( int host_fd,
         utempter_remove_record( host_fd );
 
         char tmp[64];
-        snprintf( tmp, 64, "mosh [%ld]", static_cast<long int>( getpid() ) );
+        snprintf( tmp, 64, "adam-mosh [%ld]", static_cast<long int>( getpid() ) );
         utempter_add_record( host_fd, tmp );
 
         connected_utmp = false;
@@ -937,7 +1179,7 @@ static void serve( int host_fd,
 
       if ( terminal.set_echo_ack( now ) && !network.shutdown_in_progress() ) {
         /* update client with new echo ack */
-        network.set_current_state( terminal );
+        network.get_current_state().replace_terminal_state( terminal );
       }
 
       if ( !network.get_remote_state_num() && time_since_remote_state >= timeout_if_no_client ) {
@@ -947,7 +1189,18 @@ static void serve( int host_fd,
         break;
       }
 
+      if ( !network.has_unsent_data() ) {
+        forwarder.flush( network.get_current_state(), now, network.send_interval(), network.max_datagram_payload() );
+      }
+      const bool reliable_data_queued = network.has_unsent_data();
+      const int interactive_wait_before_tick = network.wait_time();
       network.tick();
+
+      Network::Bulk::Datagram bulk;
+      if ( !reliable_data_queued && interactive_wait_before_tick > 0 && network.wait_time() > 0
+           && !forwarder.has_pending_network_data() && bulk_control.pop_outgoing( bulk ) ) {
+        network.send_bulk( bulk );
+      }
     } catch ( const Network::NetworkException& e ) {
       fprintf( stderr, "%s\n", e.what() );
       spin();
@@ -1045,9 +1298,9 @@ static void warn_unattached( const std::string& ignore_entry )
 
   while ( struct utmpx* entry = getutxent() ) {
     if ( ( entry->ut_type == USER_PROCESS ) && ( username == std::string( entry->ut_user ) ) ) {
-      /* does line show unattached mosh session */
+      /* does line show unattached adam-mosh session */
       std::string text( entry->ut_host );
-      if ( ( text.size() >= 5 ) && ( text.substr( 0, 5 ) == "mosh " ) && ( text[text.size() - 1] == ']' )
+      if ( ( text.size() >= 10 ) && ( text.substr( 0, 10 ) == "adam-mosh " ) && ( text[text.size() - 1] == ']' )
            && ( text != ignore_entry ) && device_exists( entry->ut_line ) ) {
         unattached_mosh_servers.push_back( text );
       }

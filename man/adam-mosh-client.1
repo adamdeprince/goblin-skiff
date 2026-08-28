@@ -1,0 +1,252 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.\" First parameter, NAME, should be all caps
+.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
+.\" other parameters are allowed: see man(7), man(1)
+.TH ADAM-MOSH-CLIENT 1 "February 2012"
+.\" Please adjust this date whenever revising the manpage.
+.\"
+.\" Some roff macros, for reference:
+.\" .nh        disable hyphenation
+.\" .hy        enable hyphenation
+.\" .ad l      left justify
+.\" .ad b      justify to both left and right margins
+.\" .nf        disable filling
+.\" .fi        enable filling
+.\" .br        insert line break
+.\" .sp <n>    insert n+1 empty lines
+.\" for manpage-specific macros, see man(7)
+.SH NAME
+adam-mosh-client \- client-side helper for mosh
+.SH SYNOPSIS
+MOSH_KEY=KEY
+.B adam-mosh-client
+[\-v]
+[\-A]
+[\-X]
+[\-L \fISPEC\fP]
+[\-D \fISPEC\fP]
+[\-\-stream-delay=\fIMS\fP]
+[\-\-stream-bandwidth=\fIBPS\fP]
+[\-\-state-zstd-level=\fIN\fP]
+[\-\-state-zstd-dict=\fIFILE\fP]
+[\-\-state-sample-log=\fIFILE\fP]
+IP PORT
+.br
+.B adam-mosh-client
+\-c
+.br
+.SH DESCRIPTION
+\fBadam-mosh-client\fP is a helper program for the
+.BR adam-mosh (1)
+remote terminal application.
+
+\fBmosh\fP itself is a setup script that establishes an SSH
+connection, runs the server-side helper \fBadam-mosh-server\fP,
+and collects the server's port number and session key.
+
+\fBadam-mosh\fP then executes \fBadam-mosh-client\fP with the server's IP
+address, port, and session key. \fBadam-mosh-client\fP runs for
+the lifetime of the connection.
+
+The 22-byte base64 session key given by \fBadam-mosh-server\fP is supplied
+in the MOSH_KEY environment variable. This represents a 128-bit AES
+key that protects the integrity and confidentiality of the session.
+
+For constructing new setup wrappers for remote execution facilities
+other than SSH, it may be necessary to invoke \fBadam-mosh-client\fP
+directly.
+
+With the \-c option, \fBadam-mosh-client\fP instead prints the number of colors
+of the terminal given by the TERM environment variable.
+
+The \-v option will print some debugging information on standard
+error.  More instances of this flag will result in more debugging
+information.  If standard error is not redirected from the terminal,
+the display will be corrupted and quickly become unusable.
+
+.SH OPTIONS
+
+.TP
+.B \-c
+Print the number of colors supported by the local terminal and exit.
+
+.TP
+.B \-v
+Print debugging information. More instances increase verbosity.
+
+.TP
+.B \-L \fISPEC\fP
+Request a local TCP forward. See
+.BR adam-mosh (1)
+for the format.
+
+.TP
+.B \-D \fISPEC\fP
+Request a local SOCKS5 dynamic forward. See
+.BR adam-mosh (1).
+
+.TP
+.B \-A
+Request SSH agent forwarding.
+
+.TP
+.B \-X
+Request X11 forwarding. The local
+.B DISPLAY
+environment variable must be set, and the local X authority file must
+contain MIT-MAGIC-COOKIE-1 data for that display.
+
+.TP
+.B \-\-stream\-delay=\fIMS\fP
+Coalesce forwarded stream bytes for up to \fIMS\fP milliseconds before
+sending.
+
+.TP
+.B \-\-stream\-bandwidth=\fIBPS\fP
+Cap forwarded stream payload bytes per second.
+
+.TP
+.B \-\-state\-zstd
+Enable negotiated zstd compression for large state updates when both
+peers support it. This is the default when Mosh was built with
+libzstd.
+
+.TP
+.B \-\-no\-state\-zstd
+Disable negotiated zstd compression for state updates.
+
+.TP
+.B \-\-state\-zstd\-level=\fIN\fP
+Set the zstd compression level for state updates. The default is 12.
+Values from 0 through 22 are accepted.
+
+.TP
+.B \-\-state\-zstd\-threshold=\fIBYTES\fP
+Only try zstd for serialized state updates at least this large. The
+default is 2048 bytes.
+
+.TP
+.B \-\-state\-zstd\-dict=\fIFILE\fP
+Use \fIFILE\fP as the local zstd dictionary for state updates. Files
+produced by
+.BR adam-mosh-compile-dictionary (1)
+are stored compressed with zstd level 22 and are decompressed before
+use. This only enables dictionary compression if the peer advertises
+the same dictionary id.
+
+.TP
+.B \-\-state\-sample\-log=\fIFILE\fP
+Write received, uncompressed state samples to \fIFILE\fP in the framed
+zstd-compressed format consumed by
+.BR adam-mosh-compile-dictionary (1).
+The file can contain terminal contents and should be treated as
+sensitive.
+
+.TP
+.B \-\-state\-sample\-min\-size=\fIBYTES\fP
+Only log received state samples at least this large. The default is 0.
+
+.SH ENVIRONMENT VARIABLES
+
+.TP
+.B MOSH_KEY
+This variable must be set, and must contain a Base64-encoded cryptographic key from
+.BR adam-mosh-server (1).
+
+.TP
+.B MOSH_ESCAPE_KEY
+See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_PREDICTION_DISPLAY
+Controls local echo as described in
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_PREDICTION_OVERWRITE
+Controls local echo insert/overwrite as described in
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_TITLE_NOPREFIX
+See
+.BR adam-mosh (1).
+
+.TP
+.B DISPLAY
+Local X display used when
+.B \-X
+is enabled.
+
+.TP
+.B XAUTHORITY
+Local X authority file used for MIT-MAGIC-COOKIE-1 rewriting when
+.B \-X
+is enabled. If unset, \fBadam-mosh-client\fP tries
+.IR ~/.Xauthority .
+
+.TP
+.B MOSH_STREAM_DELAY
+Default forwarded-stream coalescing delay in milliseconds. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STREAM_BANDWIDTH
+Default forwarded-stream payload-byte-per-second cap. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_ZSTD
+Default zstd state-compression setting. Use 0 to disable or 1 to
+enable negotiation.
+
+.TP
+.B MOSH_STATE_ZSTD_LEVEL
+Default zstd level for state compression. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_ZSTD_THRESHOLD
+Default minimum serialized state-update size for zstd. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_ZSTD_DICT
+Default zstd state dictionary file. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_SAMPLE_LOG
+Default state sample log path. See
+.BR adam-mosh (1).
+
+.TP
+.B MOSH_STATE_SAMPLE_MIN_SIZE
+Default minimum serialized state sample size to log. See
+.BR adam-mosh (1).
+
+.SH SEE ALSO
+.BR adam-mosh (1),
+.BR adam-mosh-server (1),
+.BR adam-moshcp (1),
+.BR adam-mosh-compile-dictionary (1).
+
+Project home page:
+.I https://mosh.org
+
+.br
+.SH AUTHOR
+mosh was written by Keith Winstein <mosh-devel@mit.edu>.
+.SH BUGS
+Please report bugs to \fImosh-devel@mit.edu\fP. Users may also subscribe
+to the
+.nh
+.I mosh-users@mit.edu
+.hy
+mailing list, at
+.br
+.nh
+.I http://mailman.mit.edu/mailman/listinfo/mosh-users
+.hy
+.

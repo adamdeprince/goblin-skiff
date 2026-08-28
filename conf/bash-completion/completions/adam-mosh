@@ -1,4 +1,4 @@
-# Bash completions for Mosh, the mobile shell.         -*- shell-script -*-
+# Bash completions for adam-mosh, the mobile shell.         -*- shell-script -*-
 
 __mosh_init_completion()
 {
@@ -28,4 +28,4 @@ _mosh () {
     fi
 }
 
-complete -o nospace -F _mosh mosh
+complete -o nospace -F _mosh adam-mosh

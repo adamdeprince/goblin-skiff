@@ -1,0 +1,203 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.TH ADAM-MOSHCP 1 "May 2026"
+.SH NAME
+adam-moshcp \- transfer files over an active Mosh session
+.SH SYNOPSIS
+.B adam-moshcp
+.B send
+[\fIoptions\fP]
+\fISOURCE\fP...
+.br
+.B adam-moshcp
+.B receive
+[\fIoptions\fP]
+[\fIDEST\fP|\fIDESTDIR\fP]
+.SH DESCRIPTION
+\fBadam-moshcp\fP transfers files over an already-running
+.BR adam-mosh (1)
+session. It uses a local Unix-domain control socket exposed by
+\fBadam-mosh-client\fP or \fBadam-mosh-server\fP, then sends bulk datagrams over
+the existing encrypted and authenticated Mosh UDP connection.
+
+\fBadam-moshcp\fP is intended for hostile or expensive networks where a
+small, paced, forward-error-corrected transfer is preferable to opening
+a second transport. The default rate is conservative so terminal
+traffic remains usable while a transfer is running.
+
+Run \fBadam-moshcp receive\fP on one side of the Mosh session and
+\fBadam-moshcp send\fP on the other. The receiver writes to a temporary file
+and renames it into place after the file has been decoded. Multiple
+files and recursive directories are sent as one adam-moshcp archive payload.
+
+.SH EXAMPLES
+
+.nf
+remote$ adam-moshcp receive .
+local$  adam-moshcp send --rate=2k --redundancy=20% ./archive.tar
+.fi
+
+.nf
+remote$ adam-moshcp receive /tmp/output.bin
+local$  adam-moshcp send --fec=raptorq --rate=1500 ./output.bin
+.fi
+
+.nf
+remote$ adam-moshcp receive --multi incoming
+local$  adam-moshcp send -r -p -z --zstd-level=22 --rate=1500 photos notes.txt
+.fi
+
+.SH COMMANDS
+
+.TP
+.B send
+Read one or more \fISOURCE\fP paths, split the payload into FEC
+blocks, and send the manifest, source symbols, and repair symbols.
+For backward compatibility, a two-argument send where the second path
+does not exist is treated as a single source with a destination
+basename. New scripts should use
+.B \-\-dest\-name
+for that form.
+
+.TP
+.B receive
+Wait for a manifest, collect symbols, request extra repair symbols
+when decoding fails, and write the completed file. If \fIDEST\fP names
+an existing directory or ends in a slash, the sender's basename is
+created inside that directory. Otherwise \fIDEST\fP is used as the
+output path.
+
+.SH OPTIONS
+
+.TP
+.B \-\-socket=\fIPATH\fP
+Connect to a specific adam-moshcp control socket. By default,
+\fBadam-moshcp\fP uses
+.B ADAM_MOSHCP_SOCK
+if it is set, otherwise the latest adam-moshcp control socket in the
+user's runtime directory.
+
+.TP
+.B \-\-fec=reed-solomon|raptorq
+Select the FEC codec. The default is \fBreed-solomon\fP.
+\fBraptorq\fP requires a build configured with libRaptorQ support.
+
+.TP
+.B \-\-redundancy=\fIPERCENT\fP
+Send this percentage of repair symbols in the initial pass. The
+default is 20%. The receiver can still request extra repair symbols
+after the initial pass.
+
+.TP
+.B \-\-rate=\fIBYTES\fP
+Limit bulk send rate. A value of 0 disables the sender-side pacer. The
+default is 2048 bytes per second. The suffixes \fBK\fP, \fBM\fP, and
+\fBG\fP multiply by powers of 1024.
+
+.TP
+.B \-\-block-size=\fIBYTES\fP
+Set the FEC block size. The default is 32768 bytes.
+
+.TP
+.B \-\-symbol-size=\fIBYTES\fP
+Set the FEC symbol size and approximate payload size for symbol
+datagrams. The default is 512 bytes.
+
+.TP
+.B \-\-transfer\-id=\fIHEX\fP
+Use or accept only a specific transfer id. This is useful when several
+adam-moshcp transfers share the same Mosh session and a receiver should be
+pinned to one sender.
+
+.TP
+.B \-\-multi
+Keep
+.B adam-moshcp receive
+running after one transfer completes and track multiple simultaneous
+transfer ids. Without this option, the receiver exits after the first
+completed transfer.
+
+.TP
+.B \-r, \-\-recursive
+Allow directory sources. Directories are walked recursively and sent as
+a adam-moshcp archive payload.
+
+.TP
+.B \-p, \-\-preserve
+Preserve file modes and modification times when receiving. Without
+this option, files are created using normal local permissions and
+current timestamps.
+
+.TP
+.B \-\-dest\-name=\fINAME\fP
+Set the destination basename for a single source. For a directory
+source, this renames the top-level archived directory.
+
+.TP
+.B \-z, \-\-zstd
+Compress the payload with zstd before FEC encoding. This requires a
+build configured with libzstd support.
+
+.TP
+.B \-\-zstd\-level=\fIN\fP
+Set the zstd compression level and enable zstd compression. Levels 0
+through 22 are accepted; the default is 3. High levels can be useful on
+very slow uplinks, but they are CPU and memory intensive.
+
+.TP
+.B \-\-quiet
+Suppress periodic progress output. Errors are still reported.
+
+.SH DISCOVERY
+\fBadam-mosh-client\fP and \fBadam-mosh-server\fP expose a local control socket
+and set
+.B ADAM_MOSHCP_SOCK
+for processes they start when possible. A fallback symlink named
+\fBadam-moshcp.latest\fP is also created in the user's runtime directory.
+
+This discovery model is intentionally simple. It can point at the
+wrong Mosh connection if a shell is preserved by a multiplexer such as
+\fBtmux\fP after one Mosh client disconnects and another connects. This
+is similar to stale SSH agent forwarding state; use
+\fB\-\-socket\fP when the automatic choice is ambiguous.
+
+.SH NETWORK BEHAVIOR
+The manifest describes the file name, size, mode, mtime, FEC codec,
+block size, symbol size, compression settings, archive mode, and
+transfer id. Symbol datagrams carry one FEC symbol. ACK datagrams
+report decoded block ranges, request additional repair symbols, and
+carry lightweight counters for received symbols, duplicate symbols,
+and requested repair symbols. Finish datagrams report final status.
+
+Bulk datagrams are separate from terminal state datagrams but use the
+same Mosh encryption and authentication. Mosh sends bulk output only
+when no reliable terminal or stream-forwarding data is queued, and
+schedules it conservatively so large transfers do not intentionally
+fill slow queues. If a bulk datagram is larger than the current Mosh
+path-MTU payload budget, Mosh rejects it instead of handing it to UDP
+fragmentation; reduce
+.B \-\-symbol\-size
+if this happens.
+
+.SH SEE ALSO
+.BR adam-mosh (1),
+.BR adam-mosh-client (1),
+.BR adam-mosh-server (1).
+
+Project home page:
+.I https://mosh.org
+
+.br
+.SH AUTHOR
+mosh was written by Keith Winstein <mosh-devel@mit.edu>.
+.SH BUGS
+Please report bugs to \fImosh-devel@mit.edu\fP. Users may also subscribe
+to the
+.nh
+.I mosh-users@mit.edu
+.hy
+mailing list, at
+.br
+.nh
+.I http://mailman.mit.edu/mailman/listinfo/mosh-users
+.hy
+.

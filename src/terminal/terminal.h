@@ -38,6 +38,7 @@
 #include <deque>
 #include <vector>
 
+#include "src/terminal/osc52.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldispatcher.h"
@@ -57,6 +58,9 @@ class Emulator
   friend void Parser::OSC_Start::act_on_terminal( Emulator* ) const;
   friend void Parser::OSC_Put::act_on_terminal( Emulator* ) const;
   friend void Parser::OSC_End::act_on_terminal( Emulator* ) const;
+  friend void Parser::APC_Start::act_on_terminal( Emulator* ) const;
+  friend void Parser::APC_Put::act_on_terminal( Emulator* ) const;
+  friend void Parser::APC_End::act_on_terminal( Emulator* ) const;
 
   friend void Parser::UserByte::act_on_terminal( Emulator* ) const;
   friend void Parser::Resize::act_on_terminal( Emulator* ) const;
@@ -72,12 +76,14 @@ private:
   void CSI_dispatch( const Parser::CSI_Dispatch* act );
   void Esc_dispatch( const Parser::Esc_Dispatch* act );
   void OSC_end( const Parser::OSC_End* act );
+  void APC_end( const Parser::APC_End* act );
   void resize( size_t s_width, size_t s_height );
 
 public:
   Emulator( size_t s_width, size_t s_height );
 
   std::string read_octets_to_host( void );
+  std::vector<ClipboardEvent> take_clipboard_events( void );
 
   const Framebuffer& get_fb( void ) const { return fb; }
 

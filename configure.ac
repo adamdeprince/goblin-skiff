@@ -169,13 +169,13 @@ CXX="$saved_CXX"
 LD="$saved_LD"
 
 AC_ARG_ENABLE([client],
-  [AS_HELP_STRING([--enable-client], [Build the mosh-client program @<:@yes@:>@])],
+  [AS_HELP_STRING([--enable-client], [Build the adam-mosh-client program @<:@yes@:>@])],
   [build_client="$enableval"],
   [build_client="yes"])
 AM_CONDITIONAL([BUILD_CLIENT], [test x"$build_client" != xno])
 
 AC_ARG_ENABLE([server],
-  [AS_HELP_STRING([--enable-server], [Build the mosh-server program @<:@yes@:>@])],
+  [AS_HELP_STRING([--enable-server], [Build the adam-mosh-server program @<:@yes@:>@])],
   [build_server="$enableval"],
   [build_server="yes"])
 AM_CONDITIONAL([BUILD_SERVER], [test x"$build_server" != xno])
@@ -252,6 +252,85 @@ AC_CHECK_LIB([z], [compress],
      [ZLIB_LIBS="-Wl,-Bstatic $ZLIB_LIBS -Wl,-Bdynamic"])
    LIBS="$ZLIB_LIBS $LIBS"],
   [AC_MSG_ERROR([Unable to find zlib.])])
+
+AC_ARG_WITH([zstd],
+  [AS_HELP_STRING([--with-zstd], [Enable zstd compression for moshcp and transport state @<:@check@:>@])],
+  [with_zstd="$withval"],
+  [with_zstd="check"])
+have_zstd=no
+AS_IF([test x"$with_zstd" != xno], [
+  PKG_CHECK_MODULES([ZSTD], [libzstd],
+    [have_zstd=yes],
+    [AC_CHECK_HEADERS([zstd.h],
+      [AC_CHECK_LIB([zstd], [ZSTD_compress],
+        [ZSTD_LIBS=-lzstd
+         have_zstd=yes],
+        [:])],
+      [:])])
+  AS_IF([test x"$with_zstd" != xcheck && test x"$have_zstd" != xyes],
+    [AC_MSG_ERROR([--with-zstd was given, but libzstd could not be found])])
+])
+AS_IF([test x"$have_zstd" = xyes],
+  [AC_DEFINE([HAVE_ZSTD], [1], [Define if libzstd is available.])])
+AM_CONDITIONAL([HAVE_ZSTD], [test x"$have_zstd" = xyes])
+AC_SUBST([ZSTD_CFLAGS])
+AC_SUBST([ZSTD_LIBS])
+
+RAPTORQ_CPPFLAGS=""
+RAPTORQ_CXXFLAGS=""
+AC_ARG_WITH([libraptorq],
+  [AS_HELP_STRING([--with-libraptorq@<:@=DIR@:>@],
+    [Enable RFC6330 FEC using libRaptorQ headers in DIR @<:@check@:>@])],
+  [with_libraptorq="$withval"],
+  [with_libraptorq="check"])
+have_libraptorq=no
+AS_IF([test x"$with_libraptorq" != xno], [
+  AS_IF([test x"$with_libraptorq" != xcheck && test x"$with_libraptorq" != xyes], [
+    RAPTORQ_CPPFLAGS="-I$with_libraptorq/src -I$with_libraptorq/external/eigen3"
+  ])
+
+  old_CPPFLAGS="$CPPFLAGS"
+  old_CXXFLAGS="$CXXFLAGS"
+  CPPFLAGS="$CPPFLAGS $RAPTORQ_CPPFLAGS"
+  AC_MSG_CHECKING([for libRaptorQ RFC6330 header])
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#if !defined(RQ_LITTLE_ENDIAN) && !defined(RQ_BIG_ENDIAN)
+# if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#  define RQ_BIG_ENDIAN
+# else
+#  define RQ_LITTLE_ENDIAN
+# endif
+#endif
+#include <RaptorQ/RFC6330_v1_hdr.hpp>
+    ]], [[]])],
+    [have_libraptorq=yes
+     AC_MSG_RESULT([yes])],
+    [CXXFLAGS="$CXXFLAGS -fpermissive"
+     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#if !defined(RQ_LITTLE_ENDIAN) && !defined(RQ_BIG_ENDIAN)
+# if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#  define RQ_BIG_ENDIAN
+# else
+#  define RQ_LITTLE_ENDIAN
+# endif
+#endif
+#include <RaptorQ/RFC6330_v1_hdr.hpp>
+      ]], [[]])],
+      [have_libraptorq=yes
+       RAPTORQ_CXXFLAGS="-fpermissive"
+       AC_MSG_RESULT([yes, with -fpermissive])],
+      [AC_MSG_RESULT([no])])])
+  CPPFLAGS="$old_CPPFLAGS"
+  CXXFLAGS="$old_CXXFLAGS"
+
+  AS_IF([test x"$with_libraptorq" != xcheck && test x"$have_libraptorq" != xyes],
+    [AC_MSG_ERROR([--with-libraptorq was given, but RaptorQ/RFC6330_v1_hdr.hpp could not be compiled])])
+])
+AS_IF([test x"$have_libraptorq" = xyes],
+  [AC_DEFINE([HAVE_LIBRAPTORQ], [1], [Define if libRaptorQ RFC6330 headers are available.])])
+AM_CONDITIONAL([HAVE_LIBRAPTORQ], [test x"$have_libraptorq" = xyes])
+AC_SUBST([RAPTORQ_CPPFLAGS])
+AC_SUBST([RAPTORQ_CXXFLAGS])
 
 AC_SEARCH_LIBS([socket], [socket network])
 AC_SEARCH_LIBS([inet_addr], [nsl])
@@ -537,7 +616,7 @@ PKG_CHECK_MODULES([protobuf], [protobuf])
 # On Debian Sid 2016-03-16ish at least, "pkgconfig --libs protobuf"
 # gives us the bogus "-lprotobuf -pthread -lpthread"; remove
 # "-lpthread" which misconfigures compile, causing a segfault in
-# mosh-server.
+# adam-mosh-server.
 AS_IF([echo "$protobuf_LIBS" | grep -q -- -pthread],
   [protobuf_LIBS="`echo $protobuf_LIBS | sed 's/-lpthread//g'`"])
 
@@ -584,6 +663,8 @@ AC_CONFIG_FILES([
   Makefile
   src/Makefile
   src/crypto/Makefile
+  src/fec/Makefile
+  src/moshcp/Makefile
   src/frontend/Makefile
   src/fuzz/Makefile
   src/include/Makefile
@@ -607,4 +688,6 @@ AC_MSG_NOTICE([Warning CXXFLAGS:    $WARNING_CXXFLAGS])
 AC_MSG_NOTICE([Picky CXXFLAGS:      $PICKY_CXXFLAGS])
 AC_MSG_NOTICE([Harden CFLAGS:       $HARDEN_CFLAGS])
 AC_MSG_NOTICE([Cryptography:        $human_readable_cryptography_description])
+AC_MSG_NOTICE([FEC RFC6330:         $have_libraptorq])
+AC_MSG_NOTICE([moshcp zstd:         $have_zstd])
 AC_MSG_NOTICE([ =============================])

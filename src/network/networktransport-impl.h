@@ -46,7 +46,8 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             const char* desired_port )
   : connection( desired_ip, desired_port ), sender( &connection, initial_state ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
-    receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(), verbose( 0 )
+    bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
+    state_sample_writer(), verbose( 0 )
 {
   /* server */
 }
@@ -59,23 +60,40 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             const char* port )
   : connection( key_str, ip, port ), sender( &connection, initial_state ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
-    receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(), verbose( 0 )
+    bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
+    state_sample_writer(), verbose( 0 )
 {
   /* client */
+}
+
+template<class MyState, class RemoteState>
+size_t Transport<MyState, RemoteState>::max_datagram_payload( void ) const
+{
+  const int payload = connection.get_MTU() - Network::Connection::ADDED_BYTES - Crypto::Session::ADDED_BYTES;
+  return payload > 0 ? static_cast<size_t>( payload ) : 0;
 }
 
 template<class MyState, class RemoteState>
 void Transport<MyState, RemoteState>::recv( void )
 {
   std::string s( connection.recv() );
+  Bulk::Datagram bulk;
+  if ( Bulk::decode_datagram( s, bulk ) ) {
+    bulk_datagrams.push_back( bulk );
+    return;
+  }
+
   Fragment frag( s );
 
   if ( fragments.add_fragment( frag ) ) { /* complete packet */
-    Instruction inst = fragments.get_assembly();
+    Instruction inst = fragments.get_assembly( &state_sample_writer );
 
     if ( inst.protocol_version() != MOSH_PROTOCOL_VERSION ) {
       throw NetworkException( "mosh protocol version mismatch", 0 );
     }
+
+    sender.set_peer_zstd_capabilities( inst.has_zstd_supported() && inst.zstd_supported(),
+                                       inst.has_zstd_dict_id() ? inst.zstd_dict_id() : "" );
 
     sender.process_acknowledgment_through( inst.ack_num() );
 
@@ -172,6 +190,29 @@ void Transport<MyState, RemoteState>::recv( void )
       sender.set_data_ack();
     }
   }
+}
+
+template<class MyState, class RemoteState>
+void Transport<MyState, RemoteState>::send_bulk( const Bulk::Datagram& datagram )
+{
+  const std::string encoded = Bulk::encode_datagram( datagram );
+  if ( encoded.size() > max_datagram_payload() ) {
+    connection.get_send_error() = "bulk datagram too large for path MTU";
+    return;
+  }
+  connection.send( encoded );
+}
+
+template<class MyState, class RemoteState>
+bool Transport<MyState, RemoteState>::pop_bulk( Bulk::Datagram& datagram )
+{
+  if ( bulk_datagrams.empty() ) {
+    return false;
+  }
+
+  datagram = bulk_datagrams.front();
+  bulk_datagrams.pop_front();
+  return true;
 }
 
 /* The sender uses throwaway_num to tell us the earliest received state that we need to keep around */

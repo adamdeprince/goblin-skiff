@@ -36,16 +36,17 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "src/terminal/kittygraphics.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldispatcher.h"
 
 using namespace Terminal;
 
-static const size_t MAXIMUM_CLIPBOARD_SIZE = 16 * 1024;
-
 Dispatcher::Dispatcher()
-  : params(), parsed_params(), parsed( false ), dispatch_chars(), OSC_string(), terminal_to_host()
+  : params(), parsed_params(), parsed( false ), dispatch_chars(), OSC_string(), OSC_overflow( false ),
+    clipboard_events(), APC_string(), APC_overflow( false ), kitty_uploading( false ), kitty_partial(),
+    kitty_payload(), terminal_to_host()
 {}
 
 void Dispatcher::newparamchar( const Parser::Param* act )
@@ -240,19 +241,243 @@ void Dispatcher::dispatch( Function_Type type, const Parser::Action* act, Frameb
 void Dispatcher::OSC_put( const Parser::OSC_Put* act )
 {
   assert( act->char_present );
-  if ( OSC_string.size() < MAXIMUM_CLIPBOARD_SIZE ) {
+  if ( OSC_string.size() < OSC52_MAX_OSC_CHARS ) {
     OSC_string.push_back( act->ch );
+  } else {
+    OSC_overflow = true;
   }
 }
 
 void Dispatcher::OSC_start( const Parser::OSC_Start* act __attribute( ( unused ) ) )
 {
   OSC_string.clear();
+  OSC_overflow = false;
+}
+
+std::vector<ClipboardEvent> Dispatcher::take_clipboard_events( void )
+{
+  std::vector<ClipboardEvent> out;
+  out.swap( clipboard_events );
+  return out;
+}
+
+void Dispatcher::APC_put( const Parser::APC_Put* act )
+{
+  assert( act->char_present );
+  if ( APC_string.size() < KITTY_MAX_APC_CHARS ) {
+    APC_string.push_back( static_cast<char>( act->ch ) );
+  } else {
+    APC_overflow = true;
+  }
+}
+
+void Dispatcher::APC_start( const Parser::APC_Start* act __attribute( ( unused ) ) )
+{
+  APC_string.clear();
+  APC_overflow = false;
 }
 
 bool Dispatcher::operator==( const Dispatcher& x ) const
 {
   return ( params == x.params ) && ( parsed_params == x.parsed_params ) && ( parsed == x.parsed )
          && ( dispatch_chars == x.dispatch_chars ) && ( OSC_string == x.OSC_string )
+         && ( OSC_overflow == x.OSC_overflow ) && ( clipboard_events == x.clipboard_events )
+         && ( APC_string == x.APC_string ) && ( APC_overflow == x.APC_overflow )
+         && ( kitty_uploading == x.kitty_uploading ) && ( kitty_payload == x.kitty_payload )
          && ( terminal_to_host == x.terminal_to_host );
+}
+
+static void kitty_reply( Dispatcher* dispatch, const KittyCommand& cmd, uint32_t image_id, const std::string& msg )
+{
+  if ( cmd.quiet >= 2 ) {
+    return;
+  }
+  const bool ok = msg.size() >= 2 && msg[0] == 'O' && msg[1] == 'K';
+  if ( ok && cmd.quiet >= 1 ) {
+    return;
+  }
+  dispatch->terminal_to_host.append( kitty_response( image_id, cmd.placement_id, msg ) );
+}
+
+static uint32_t resolve_kitty_id( Framebuffer* fb, const KittyCommand& cmd, bool creating )
+{
+  if ( cmd.image_id != 0 ) {
+    return cmd.image_id;
+  }
+  if ( cmd.image_number != 0 && !creating ) {
+    KittyImage* newest = fb->find_newest_kitty_number( cmd.image_number );
+    return newest ? newest->id : 0;
+  }
+  return 0;
+}
+
+void Dispatcher::finish_kitty_upload( Framebuffer* fb )
+{
+  KittyCommand cmd = kitty_partial;
+  cmd.payload.swap( kitty_payload );
+  kitty_uploading = false;
+  kitty_payload.clear();
+
+  if ( cmd.compression == 'z' ) {
+    std::string inflated;
+    if ( !kitty_inflate( cmd.payload, inflated, cmd.data_size ) ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL: zlib inflate failed" );
+      return;
+    }
+    cmd.payload.swap( inflated );
+    cmd.compression = 0;
+  }
+
+  std::string data, error;
+  if ( !kitty_read_medium( cmd, data, error ) ) {
+    kitty_reply( this, cmd, cmd.image_id, error.empty() ? "EINVAL: transmit failed" : error );
+    return;
+  }
+
+  const bool query_only = cmd.action == KittyQuery;
+  if ( query_only ) {
+    kitty_reply( this, cmd, cmd.image_id ? cmd.image_id : 1, "OK" );
+    return;
+  }
+
+  if ( cmd.action != KittyTransmit && cmd.action != KittyTransmitAndDisplay ) {
+    kitty_reply( this, cmd, cmd.image_id, "EINVAL: unexpected action at upload end" );
+    return;
+  }
+
+  KittyImage image;
+  image.id = cmd.image_id;
+  image.number = cmd.image_number;
+  image.format = cmd.format ? cmd.format : 32;
+  image.width = cmd.width;
+  image.height = cmd.height;
+  image.data = std::make_shared<std::string>( data );
+  if ( image.id == 0 && image.number == 0 ) {
+    /* assign internally so the image can live in terminal state */
+  }
+  image.id = fb->put_kitty_image( image );
+
+  std::string ok = "OK";
+  if ( cmd.image_number != 0 ) {
+    /* include assigned id; kitty_response already has i= */
+  }
+  kitty_reply( this, cmd, image.id, ok );
+
+  if ( cmd.action == KittyTransmitAndDisplay ) {
+    KittyPlacement place;
+    place.image_id = image.id;
+    place.placement_id = cmd.placement_id;
+    place.row = fb->ds.get_cursor_row();
+    place.col = fb->ds.get_cursor_col();
+    place.columns = cmd.columns;
+    place.rows = cmd.rows;
+    place.src_x = cmd.src_x;
+    place.src_y = cmd.src_y;
+    place.src_w = cmd.src_w;
+    place.src_h = cmd.src_h;
+    place.cell_x = cmd.cell_x;
+    place.cell_y = cmd.cell_y;
+    place.z = cmd.z;
+    place.cursor_hold = cmd.cursor_hold != 0 || cmd.parent_image != 0;
+    place.unicode_placeholder = cmd.unicode_placeholder != 0;
+    place.parent_image = cmd.parent_image;
+    place.parent_placement = cmd.parent_placement;
+    place.H = cmd.H;
+    place.V = cmd.V;
+    fb->put_kitty_placement( place );
+    if ( !place.cursor_hold && !place.unicode_placeholder && place.parent_image == 0 ) {
+      const int cols = place.columns ? static_cast<int>( place.columns ) : 1;
+      const int rows = place.rows ? static_cast<int>( place.rows ) : 1;
+      fb->ds.move_col( cols, true, false );
+      fb->ds.move_row( rows, true );
+    }
+  }
+}
+
+void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused ) ), Framebuffer* fb )
+{
+  if ( APC_overflow || APC_string.empty() ) {
+    APC_string.clear();
+    APC_overflow = false;
+    return;
+  }
+
+  KittyCommand cmd;
+  if ( !parse_kitty_command( APC_string, cmd ) ) {
+    APC_string.clear();
+    return;
+  }
+  APC_string.clear();
+
+  if ( kitty_uploading ) {
+    if ( cmd.action == KittyDelete ) {
+      kitty_uploading = false;
+      kitty_payload.clear();
+      fb->delete_kitty( cmd );
+      return;
+    }
+    kitty_payload.append( cmd.payload );
+    if ( cmd.more == 0 ) {
+      finish_kitty_upload( fb );
+    }
+    return;
+  }
+
+  if ( cmd.action == KittyDelete ) {
+    fb->delete_kitty( cmd );
+    return;
+  }
+
+  if ( cmd.action == KittyPut ) {
+    uint32_t id = resolve_kitty_id( fb, cmd, false );
+    if ( id == 0 || fb->find_kitty_image( id ) == NULL ) {
+      kitty_reply( this, cmd, cmd.image_id, "ENOENT: image not found" );
+      return;
+    }
+    KittyPlacement place;
+    place.image_id = id;
+    place.placement_id = cmd.placement_id;
+    place.row = fb->ds.get_cursor_row();
+    place.col = fb->ds.get_cursor_col();
+    place.columns = cmd.columns;
+    place.rows = cmd.rows;
+    place.src_x = cmd.src_x;
+    place.src_y = cmd.src_y;
+    place.src_w = cmd.src_w;
+    place.src_h = cmd.src_h;
+    place.cell_x = cmd.cell_x;
+    place.cell_y = cmd.cell_y;
+    place.z = cmd.z;
+    place.cursor_hold = cmd.cursor_hold != 0 || cmd.parent_image != 0;
+    place.unicode_placeholder = cmd.unicode_placeholder != 0;
+    place.parent_image = cmd.parent_image;
+    place.parent_placement = cmd.parent_placement;
+    place.H = cmd.H;
+    place.V = cmd.V;
+    fb->put_kitty_placement( place );
+    kitty_reply( this, cmd, id, "OK" );
+    if ( !place.cursor_hold && !place.unicode_placeholder && place.parent_image == 0 ) {
+      const int cols = place.columns ? static_cast<int>( place.columns ) : 1;
+      const int rows = place.rows ? static_cast<int>( place.rows ) : 1;
+      fb->ds.move_col( cols, true, false );
+      fb->ds.move_row( rows, true );
+    }
+    return;
+  }
+
+  if ( cmd.action == KittyQuery || cmd.action == KittyTransmit || cmd.action == KittyTransmitAndDisplay ) {
+    if ( cmd.image_id != 0 && cmd.image_number != 0 ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL: both i and I specified" );
+      return;
+    }
+    kitty_uploading = true;
+    kitty_partial = cmd;
+    kitty_payload = cmd.payload;
+    if ( cmd.more == 0 ) {
+      finish_kitty_upload( fb );
+    }
+    return;
+  }
+
+  /* animation / compose: ignore for now */
 }

@@ -38,6 +38,7 @@
 
 #include <unistd.h>
 
+#include "src/terminal/osc52.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldispatcher.h"
@@ -626,13 +627,16 @@ static void OSC_8( const std::string& OSC_string, Framebuffer* fb )
 /* xterm uses an Operating System Command to set the window title */
 void Dispatcher::OSC_dispatch( const Parser::OSC_End* act __attribute( ( unused ) ), Framebuffer* fb )
 {
-  /* handle osc copy clipboard sequence 52;c; */
-  if ( OSC_string.size() >= 5 && OSC_string[0] == L'5' && OSC_string[1] == L'2' && OSC_string[2] == L';'
-       && OSC_string[3] == L'c' && OSC_string[4] == L';' ) {
-    Terminal::Framebuffer::title_type clipboard( OSC_string.begin() + 5, OSC_string.end() );
-    fb->set_clipboard( clipboard );
-    /* handle osc terminal title sequence */
-  } else if ( OSC_string.size() >= 1 ) {
+  ClipboardEvent ev;
+  if ( parse_osc52_string( OSC_string, ev, OSC_overflow ) ) {
+    /* Clipboard is a one-shot event. Do not park it in framebuffer
+       state or every later screen diff will retransmit it. */
+    (void)fb;
+    clipboard_events.push_back( ev );
+    return;
+  }
+
+  if ( OSC_string.size() >= 1 ) {
     long cmd_num = -1;
     int offset = 0;
     if ( OSC_string[0] == L';' ) {

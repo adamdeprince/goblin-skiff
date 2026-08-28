@@ -30,27 +30,242 @@
     also delete it here.
 */
 
+#include "src/include/config.h"
+
+#include <limits>
+#include <stdexcept>
+
 #include <zlib.h>
 
+#ifdef HAVE_ZSTD
+#include <zstd.h>
+#endif
+
 #include "compressor.h"
+#include "src/network/statesamples.h"
 #include "src/util/dos_assert.h"
 
 using namespace Network;
 
-std::string Compressor::compress_str( const std::string& input )
+namespace {
+const int COMPRESSOR_BUFFER_SIZE = 2048 * 2048;
+
+std::string zlib_compress_str( unsigned char* buffer, const std::string& input )
 {
-  long unsigned int len = BUFFER_SIZE;
+  long unsigned int len = COMPRESSOR_BUFFER_SIZE;
   dos_assert( Z_OK
               == compress( buffer, &len, reinterpret_cast<const unsigned char*>( input.data() ), input.size() ) );
   return std::string( reinterpret_cast<char*>( buffer ), len );
 }
 
-std::string Compressor::uncompress_str( const std::string& input )
+std::string zlib_uncompress_str( unsigned char* buffer, const std::string& input )
 {
-  long unsigned int len = BUFFER_SIZE;
+  long unsigned int len = COMPRESSOR_BUFFER_SIZE;
   dos_assert( Z_OK
               == uncompress( buffer, &len, reinterpret_cast<const unsigned char*>( input.data() ), input.size() ) );
   return std::string( reinterpret_cast<char*>( buffer ), len );
+}
+
+bool looks_like_zstd_frame( const std::string& input )
+{
+  return input.size() >= 4 && static_cast<unsigned char>( input[0] ) == 0x28
+         && static_cast<unsigned char>( input[1] ) == 0xb5 && static_cast<unsigned char>( input[2] ) == 0x2f
+         && static_cast<unsigned char>( input[3] ) == 0xfd;
+}
+
+#ifdef HAVE_ZSTD
+std::string zstd_compress_str( const std::string& input, unsigned int level )
+{
+  const size_t bound = ZSTD_compressBound( input.size() );
+  std::string compressed( bound, '\0' );
+  const size_t written = ZSTD_compress( &compressed[0], compressed.size(), input.data(), input.size(), level );
+  if ( ZSTD_isError( written ) ) {
+    throw std::runtime_error( std::string( "zstd compression failed: " ) + ZSTD_getErrorName( written ) );
+  }
+  compressed.resize( written );
+  return compressed;
+}
+
+std::string zstd_compress_str( const std::string& input,
+                               unsigned int level,
+                               const std::string& dictionary,
+                               void*& cached_cdict,
+                               unsigned int& cached_level )
+{
+  if ( dictionary.empty() ) {
+    return zstd_compress_str( input, level );
+  }
+
+  if ( cached_cdict == NULL || cached_level != level ) {
+    if ( cached_cdict != NULL ) {
+      ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( cached_cdict ) );
+    }
+    cached_cdict = ZSTD_createCDict( dictionary.data(), dictionary.size(), level );
+    cached_level = level;
+    if ( cached_cdict == NULL ) {
+      throw std::runtime_error( "could not allocate zstd compression dictionary" );
+    }
+  }
+
+  const size_t bound = ZSTD_compressBound( input.size() );
+  std::string compressed( bound, '\0' );
+  ZSTD_CCtx* ctx = ZSTD_createCCtx();
+  if ( ctx == NULL ) {
+    throw std::runtime_error( "could not allocate zstd compressor" );
+  }
+  const size_t written = ZSTD_compress_usingCDict(
+    ctx, &compressed[0], compressed.size(), input.data(), input.size(), reinterpret_cast<ZSTD_CDict*>( cached_cdict ) );
+  ZSTD_freeCCtx( ctx );
+  if ( ZSTD_isError( written ) ) {
+    throw std::runtime_error( std::string( "zstd dictionary compression failed: " ) + ZSTD_getErrorName( written ) );
+  }
+  compressed.resize( written );
+  return compressed;
+}
+
+std::string zstd_uncompress_str( const std::string& input, void* zstd_ddict )
+{
+  const unsigned long long frame_size = ZSTD_getFrameContentSize( input.data(), input.size() );
+  if ( frame_size == ZSTD_CONTENTSIZE_ERROR || frame_size == ZSTD_CONTENTSIZE_UNKNOWN ) {
+    throw std::runtime_error( "zstd transport frame has no usable content size" );
+  }
+  if ( frame_size > static_cast<unsigned long long>( COMPRESSOR_BUFFER_SIZE ) ) {
+    throw std::runtime_error( "zstd transport frame exceeds decompression limit" );
+  }
+
+  std::string decompressed( static_cast<size_t>( frame_size ), '\0' );
+  void* output = decompressed.empty() ? NULL : &decompressed[0];
+  if ( zstd_ddict != NULL ) {
+    ZSTD_DCtx* ctx = ZSTD_createDCtx();
+    if ( ctx == NULL ) {
+      throw std::runtime_error( "could not allocate zstd decompressor" );
+    }
+    const size_t written = ZSTD_decompress_usingDDict(
+      ctx, output, decompressed.size(), input.data(), input.size(), reinterpret_cast<ZSTD_DDict*>( zstd_ddict ) );
+    ZSTD_freeDCtx( ctx );
+    if ( !ZSTD_isError( written ) && written == decompressed.size() ) {
+      return decompressed;
+    }
+  }
+
+  const size_t written = ZSTD_decompress( output, decompressed.size(), input.data(), input.size() );
+  if ( ZSTD_isError( written ) ) {
+    throw std::runtime_error( std::string( "zstd decompression failed: " ) + ZSTD_getErrorName( written ) );
+  }
+  if ( written != decompressed.size() ) {
+    throw std::runtime_error( "zstd transport frame size mismatch" );
+  }
+  return decompressed;
+}
+#endif
+}
+
+Compressor::Compressor()
+  : buffer(), zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdict( NULL ), zstd_ddict( NULL ), zstd_cdict_level( 0 )
+{}
+
+Compressor::~Compressor()
+{
+#ifdef HAVE_ZSTD
+  if ( zstd_cdict != NULL ) {
+    ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( zstd_cdict ) );
+  }
+  if ( zstd_ddict != NULL ) {
+    ZSTD_freeDDict( reinterpret_cast<ZSTD_DDict*>( zstd_ddict ) );
+  }
+#endif
+}
+
+std::string Compressor::compress_str( const std::string& input )
+{
+  return zlib_compress_str( buffer, input );
+}
+
+std::string Compressor::compress_str( const std::string& input,
+                                      bool allow_zstd,
+                                      bool allow_zstd_dictionary,
+                                      unsigned int zstd_level,
+                                      size_t zstd_threshold )
+{
+  const std::string zlib = zlib_compress_str( buffer, input );
+#ifdef HAVE_ZSTD
+  if ( !allow_zstd || input.size() < zstd_threshold ) {
+    return zlib;
+  }
+
+  const std::string zstd = zstd_compress_str( input, zstd_level );
+  std::string best = zstd;
+  if ( allow_zstd_dictionary && !zstd_dictionary.empty() ) {
+    const std::string zstd_dict
+      = zstd_compress_str( input, zstd_level, zstd_dictionary, zstd_cdict, zstd_cdict_level );
+    if ( zstd_dict.size() < best.size() ) {
+      best = zstd_dict;
+    }
+  }
+  if ( best.size() < zlib.size()
+       && ( zlib.size() - best.size() >= 64 || best.size() * 100 <= zlib.size() * 95 ) ) {
+    return best;
+  }
+#else
+  (void)allow_zstd;
+  (void)allow_zstd_dictionary;
+  (void)zstd_level;
+  (void)zstd_threshold;
+#endif
+  return zlib;
+}
+
+std::string Compressor::uncompress_str( const std::string& input )
+{
+#ifdef HAVE_ZSTD
+  if ( looks_like_zstd_frame( input ) ) {
+    return zstd_uncompress_str( input, zstd_ddict );
+  }
+#endif
+  return zlib_uncompress_str( buffer, input );
+}
+
+bool Compressor::zstd_available( void ) const
+{
+#ifdef HAVE_ZSTD
+  return true;
+#else
+  return false;
+#endif
+}
+
+void Compressor::set_zstd_dictionary( const std::string& dictionary )
+{
+#ifdef HAVE_ZSTD
+  if ( zstd_cdict != NULL ) {
+    ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( zstd_cdict ) );
+    zstd_cdict = NULL;
+  }
+  if ( zstd_ddict != NULL ) {
+    ZSTD_freeDDict( reinterpret_cast<ZSTD_DDict*>( zstd_ddict ) );
+    zstd_ddict = NULL;
+  }
+  zstd_cdict_level = 0;
+
+  zstd_dictionary = dictionary;
+  zstd_dictionary_id_value = state_dictionary_id( zstd_dictionary );
+  if ( !zstd_dictionary.empty() ) {
+    zstd_ddict = ZSTD_createDDict( zstd_dictionary.data(), zstd_dictionary.size() );
+    if ( zstd_ddict == NULL ) {
+      zstd_dictionary.clear();
+      zstd_dictionary_id_value.clear();
+      throw std::runtime_error( "could not allocate zstd decompression dictionary" );
+    }
+  }
+#else
+  (void)dictionary;
+  throw std::runtime_error( "zstd dictionary support was not enabled at configure time" );
+#endif
+}
+
+void Compressor::set_zstd_dictionary_from_file( const std::string& path )
+{
+  set_zstd_dictionary( read_state_dictionary_file( path ) );
 }
 
 /* construct on first use */

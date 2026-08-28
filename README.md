@@ -33,8 +33,10 @@ It aims to support the typical interactive uses of SSH, plus:
      underlines its predictions while they are outstanding and removes
      the underline when they are confirmed by the server.
 
-Mosh does not support X forwarding or the non-interactive uses of SSH,
-including port forwarding.
+Mosh does not support sshfs.  This version also includes experimental stream
+forwarding for selected SSH-like uses: local TCP forwards (`-L`), remote TCP
+forwards (`-R`), local SOCKS5 dynamic forwards (`-D`), SSH agent forwarding
+(`-A`), and basic X11 forwarding (`-X`).
 
 Other features
 --------------
@@ -63,7 +65,7 @@ Getting Mosh
   packages for many operating systems, as well as instructions for building
   from source.
 
-  Note that `mosh-client` receives an AES session key as an environment
+  Note that `adam-mosh-client` receives an AES session key as an environment
   variable.  If you are porting Mosh to a new operating system, please make
   sure that a running process's environment variables are not readable by other
   users.  We have confirmed that this is the case on GNU/Linux, OS X, and
@@ -72,16 +74,71 @@ Getting Mosh
 Usage
 -----
 
-  The `mosh-client` binary must exist on the user's machine, and the
-  `mosh-server` binary on the remote host.
+  The `adam-mosh-client` binary must exist on the user's machine, and the
+  `adam-mosh-server` binary on the remote host.
 
   The user runs:
 
-    $ mosh [user@]host
+    $ adam-mosh [user@]host
 
-  If the `mosh-client` or `mosh-server` binaries live outside the user's
-  `$PATH`, `mosh` accepts the arguments `--client=PATH` and `--server=PATH` to
-  select alternate locations. More options are documented in the mosh(1) manual
+  Local forwarding follows the OpenSSH-style command line:
+
+    $ adam-mosh -L 8080:127.0.0.1:80 [user@]host
+    $ adam-mosh -R 2222:127.0.0.1:22 [user@]host
+    $ adam-mosh -D 1080 [user@]host
+    $ adam-mosh -A [user@]host
+    $ adam-mosh -X [user@]host
+
+  Forwarded stream bytes are coalesced before being sent and are rate
+  limited separately from terminal updates.  The coalescing delay and stream
+  payload cap can be tuned with `--stream-delay=MS` and
+  `--stream-bandwidth=BPS`.  Terminal screen updates and keystrokes are
+  scheduled ahead of forwarded streams.  X11 and SSH agent forwarding are
+  medium priority with their own stream token bucket; TCP and SOCKS
+  forwarding are low priority with a separate bucket.  Mosh emits at most one
+  forwarded stream event per reliable send opportunity and caps stream chunks
+  below the path-MTU payload budget.  `adam-moshcp` bulk datagrams are sent only
+  when no reliable terminal or forwarded stream traffic is queued.
+
+  `adam-moshcp` transfers files over an active Mosh session.  Start a receiver on
+  one side of the session and a sender on the other:
+
+    remote$ adam-moshcp receive .
+    local$  adam-moshcp send --rate=2k --redundancy=20% ./file.bin
+
+  `adam-moshcp` discovers the active session through `ADAM_MOSHCP_SOCK` or the
+  latest `adam-moshcp.latest` control socket in the user's runtime directory.  This is intended
+  for the normal "one active Mosh session" case; like SSH agent forwarding,
+  it can point at the wrong session if a shell survives across tmux or
+  reconnect handoffs.  The default FEC codec is Reed-Solomon.  Builds
+  configured with `--with-libraptorq=DIR` can also use RFC 6330 RaptorQ with
+  `adam-moshcp --fec=raptorq`.  `adam-moshcp send` accepts multiple sources, `-r` for
+  recursive directories, `-p` to preserve modes and mtimes, and optional zstd
+  compression with `-z --zstd-level=N`.  `adam-moshcp receive --multi` keeps one
+  receiver open for several simultaneous transfer ids and prints lightweight
+  status counters unless `--quiet` is used.
+
+  Large terminal state updates can use negotiated zstd compression when both
+  peers support it.  Initial packets remain zlib-compressed for compatibility
+  with older Mosh peers.  The wrapper enables this by default with zstd level
+  12 for large state updates; use `--state-zstd-level=N`,
+  `--state-zstd-threshold=BYTES`, or `--no-state-zstd` to tune it.  For very
+  slow links, you can train a session-specific zstd dictionary from received
+  state samples:
+
+    $ adam-mosh --state-sample-log=alpine.samples.zst host
+    $ adam-mosh-compile-dictionary --input=alpine.samples.zst --output=alpine.dict
+    $ adam-mosh --state-zstd-dict=alpine.dict host
+
+  State sample logs contain the uncompressed terminal update stream and may
+  include sensitive terminal contents.  A dictionary passed with
+  `--state-zstd-dict=FILE` is stored as a zstd level-22 compressed file,
+  uploaded over SSH during setup, decompressed by `adam-mosh-server`, used for
+  that Mosh session only, and not cached by `adam-mosh-server`.
+
+  If the `adam-mosh-client` or `adam-mosh-server` binaries live outside the user's
+  `$PATH`, `adam-mosh` accepts the arguments `--client=PATH` and `--server=PATH` to
+  select alternate locations. More options are documented in the adam-mosh(1) manual
   page.
 
   There are [more examples](https://mosh.org/#usage) and a
@@ -90,11 +147,11 @@ Usage
 How it works
 ------------
 
-  The `mosh` program will SSH to `user@host` to establish the connection.
+  The `adam-mosh` program will SSH to `user@host` to establish the connection.
   SSH may prompt the user for a password or use public-key
   authentication to log in.
 
-  From this point, `mosh` runs the `mosh-server` process (as the user)
+  From this point, `adam-mosh` runs the `adam-mosh-server` process (as the user)
   on the server machine. The server process listens on a high UDP port
   and sends its port number and an AES-128 secret key back to the
   client over SSH. The SSH connection is then shut down and the
@@ -104,9 +161,15 @@ How it works
   to the client on the new IP address within a few seconds.
 
   To function, Mosh requires UDP datagrams to be passed between client
-  and server. By default, `mosh` uses a port number between 60000 and
+  and server. By default, `adam-mosh` uses a port number between 60000 and
   61000, but the user can select a particular port with the -p option.
   Please note that the -p option has no effect on the port used by SSH.
+
+  Forwarded streams, X11 forwarding, SSH agent forwarding, and `adam-moshcp` bulk
+  datagrams use the same encrypted and authenticated UDP session as terminal
+  traffic.  Bulk data is scheduled conservatively so that interactive terminal
+  updates remain responsive on slow or lossy links.  Oversized bulk datagrams
+  are rejected instead of being handed to UDP fragmentation.
 
 Advice to distributors
 ----------------------
@@ -141,8 +204,8 @@ the results suggest that `-O2` (the default) is preferable.
 
 Our Debian and Fedora packaging presents Mosh as a single package.
 Mosh has a Perl dependency that is only required for client use.  For
-some platforms, it may make sense to have separate mosh-server and
-mosh-client packages to allow mosh-server usage without Perl.
+some platforms, it may make sense to have separate adam-mosh-server and
+adam-mosh-client packages to allow adam-mosh-server usage without Perl.
 
 Notes for developers
 --------------------

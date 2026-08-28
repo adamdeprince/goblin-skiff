@@ -1,0 +1,24 @@
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package StreamBuffers;
+
+message StreamEvent {
+  enum Type {
+    OPEN = 1;
+    DATA = 2;
+    STREAM_EOF = 3;
+    CLOSE = 4;
+  }
+
+  optional Type type = 1;
+  optional uint64 stream_id = 2;
+  optional string host = 3;
+  optional uint32 port = 4;
+  optional bool agent = 5 [default = false];
+  optional bytes data = 6;
+  optional bool x11 = 7 [default = false];
+  optional bytes x11_auth_data = 8;
+  optional uint32 priority = 9 [default = 0];
+}

@@ -33,11 +33,17 @@
 #include "src/include/config.h"
 #include "src/include/version.h"
 
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
+#include <getopt.h>
 #include <unistd.h>
 
 #include "src/crypto/crypto.h"
+#include "src/network/compressor.h"
 #include "src/util/fatal_assert.h"
 #include "src/util/locale_utils.h"
 #include "stmclient.h"
@@ -73,7 +79,7 @@
 
 static void print_version( FILE* file )
 {
-  fputs( "mosh-client (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "adam-mosh-client (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -85,10 +91,61 @@ static void print_usage( FILE* file, const char* argv0 )
 {
   print_version( file );
   fprintf( file,
-           "\nUsage: %s [-# 'ARGS'] IP PORT\n"
+           "\nUsage: %s [-# 'ARGS'] [-A] [-X] [-L SPEC] [-D SPEC] [--stream-delay=MS] [--stream-bandwidth=BPS] [--state-zstd-level=N] [--state-zstd-dict=FILE] IP PORT\n"
            "       %s -c\n",
            argv0,
            argv0 );
+}
+
+static unsigned int parse_uint_option( const char* name, const char* value )
+{
+  char* end = NULL;
+  errno = 0;
+  unsigned long parsed = strtoul( value, &end, 10 );
+  if ( errno || *end || parsed > UINT_MAX ) {
+    fprintf( stderr, "Bad %s (%s)\n", name, value );
+    exit( 1 );
+  }
+  return parsed;
+}
+
+static unsigned int uint_from_env( const char* name, unsigned int fallback )
+{
+  const char* value = getenv( name );
+  if ( !value || !*value ) {
+    return fallback;
+  }
+  return parse_uint_option( name, value );
+}
+
+static std::string string_from_env( const char* name )
+{
+  const char* value = getenv( name );
+  return value ? value : "";
+}
+
+static bool bool_from_env( const char* name, bool fallback )
+{
+  const char* value = getenv( name );
+  if ( !value || !*value ) {
+    return fallback;
+  }
+  if ( 0 == strcmp( value, "1" ) || 0 == strcmp( value, "yes" ) || 0 == strcmp( value, "true" ) ) {
+    return true;
+  }
+  if ( 0 == strcmp( value, "0" ) || 0 == strcmp( value, "no" ) || 0 == strcmp( value, "false" ) ) {
+    return false;
+  }
+  fprintf( stderr, "Bad %s (%s)\n", name, value );
+  exit( 1 );
+}
+
+static void validate_state_zstd_level( unsigned int level )
+{
+  if ( level > 22 ) {
+    fputs( "--state-zstd-level must be between 0 and 22\n", stderr );
+    exit( 1 );
+  }
 }
 
 static void print_colorcount( void )
@@ -108,6 +165,19 @@ static void print_colorcount( void )
 int main( int argc, char* argv[] )
 {
   unsigned int verbose = 0;
+  std::vector<std::string> local_forwards;
+  std::vector<std::string> dynamic_forwards;
+  bool agent_forwarding = false;
+  bool x11_forwarding = false;
+  unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
+  unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 2048 );
+  bool state_zstd = bool_from_env( "MOSH_STATE_ZSTD", true );
+  unsigned int state_zstd_level = uint_from_env( "MOSH_STATE_ZSTD_LEVEL", 12 );
+  unsigned int state_zstd_threshold = uint_from_env( "MOSH_STATE_ZSTD_THRESHOLD", 2048 );
+  std::string state_zstd_dictionary = string_from_env( "MOSH_STATE_ZSTD_DICT" );
+  std::string state_sample_log = string_from_env( "MOSH_STATE_SAMPLE_LOG" );
+  unsigned int state_sample_min_size = uint_from_env( "MOSH_STATE_SAMPLE_MIN_SIZE", 0 );
+  validate_state_zstd_level( state_zstd_level );
   /* For security, make sure we don't dump core */
   Crypto::disable_dumping_core();
 
@@ -127,17 +197,73 @@ int main( int argc, char* argv[] )
   }
 
   int opt;
-  while ( ( opt = getopt( argc, argv, "#:cv" ) ) != -1 ) {
+  static const struct option long_options[] = {
+    { "stream-delay", required_argument, NULL, 256 },
+    { "stream-bandwidth", required_argument, NULL, 257 },
+    { "state-zstd", no_argument, NULL, 258 },
+    { "no-state-zstd", no_argument, NULL, 259 },
+    { "state-zstd-level", required_argument, NULL, 260 },
+    { "state-zstd-threshold", required_argument, NULL, 261 },
+    { "state-zstd-dict", required_argument, NULL, 262 },
+    { "state-sample-log", required_argument, NULL, 263 },
+    { "state-sample-min-size", required_argument, NULL, 264 },
+    { 0, 0, 0, 0 },
+  };
+  while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
     switch ( opt ) {
       case '#':
         // Ignore the original arguments to mosh wrapper
+        break;
+      case 'A':
+        agent_forwarding = true;
         break;
       case 'c':
         print_colorcount();
         exit( 0 );
         break;
+      case 'L':
+        local_forwards.push_back( optarg );
+        break;
+      case 'D':
+        dynamic_forwards.push_back( optarg );
+        break;
+      case 'X':
+        x11_forwarding = true;
+        break;
       case 'v':
         verbose++;
+        break;
+      case 256:
+        stream_delay_ms = parse_uint_option( "--stream-delay", optarg );
+        break;
+      case 257:
+        stream_rate_bytes_per_second = parse_uint_option( "--stream-bandwidth", optarg );
+        if ( stream_rate_bytes_per_second == 0 ) {
+          fputs( "--stream-bandwidth must be greater than zero\n", stderr );
+          exit( 1 );
+        }
+        break;
+      case 258:
+        state_zstd = true;
+        break;
+      case 259:
+        state_zstd = false;
+        break;
+      case 260:
+        state_zstd_level = parse_uint_option( "--state-zstd-level", optarg );
+        validate_state_zstd_level( state_zstd_level );
+        break;
+      case 261:
+        state_zstd_threshold = parse_uint_option( "--state-zstd-threshold", optarg );
+        break;
+      case 262:
+        state_zstd_dictionary = optarg;
+        break;
+      case 263:
+        state_sample_log = optarg;
+        break;
+      case 264:
+        state_sample_min_size = parse_uint_option( "--state-sample-min-size", optarg );
         break;
       default:
         print_usage( stderr, argv[0] );
@@ -190,7 +316,27 @@ int main( int argc, char* argv[] )
 
   bool success = false;
   try {
-    STMClient client( ip, desired_port, key.c_str(), predict_mode, verbose, predict_overwrite );
+    if ( !state_zstd_dictionary.empty() ) {
+      Network::get_compressor().set_zstd_dictionary_from_file( state_zstd_dictionary );
+    }
+
+    STMClient client( ip,
+                      desired_port,
+                      key.c_str(),
+                      predict_mode,
+                      verbose,
+                      predict_overwrite,
+                      local_forwards,
+                      dynamic_forwards,
+                      agent_forwarding,
+                      x11_forwarding,
+                      stream_delay_ms,
+                      stream_rate_bytes_per_second,
+                      state_zstd,
+                      state_zstd_level,
+                      state_zstd_threshold,
+                      state_sample_log,
+                      state_sample_min_size );
     client.init();
 
     try {
@@ -212,7 +358,7 @@ int main( int argc, char* argv[] )
     success = false;
   }
 
-  printf( "[mosh is exiting.]\n" );
+  printf( "[adam-mosh is exiting.]\n" );
 
   return !success;
 }

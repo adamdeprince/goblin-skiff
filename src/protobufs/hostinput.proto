@@ -4,6 +4,9 @@ option optimize_for = LITE_RUNTIME;
 
 package HostBuffers;
 
+import "stream.proto";
+import "clipboard.proto";
+
 message HostMessage {
   repeated Instruction instruction = 1;
 }
@@ -29,4 +32,6 @@ extend Instruction {
   optional HostBytes hostbytes = 2;
   optional ResizeMessage resize = 3;
   optional EchoAck echoack = 7;
+  optional StreamBuffers.StreamEvent stream = 9;
+  optional ClipboardBuffers.ClipboardEvent clipboard = 10;
 }

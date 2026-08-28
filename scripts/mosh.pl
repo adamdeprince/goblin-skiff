@@ -36,10 +36,14 @@ use warnings;
 use strict;
 use Getopt::Long;
 use IO::Socket;
+use IPC::Open3;
 use Text::ParseWords;
 use Socket qw(IPPROTO_TCP);
 use Errno qw(EINTR);
 use POSIX qw(_exit);
+use Symbol qw(gensym);
+
+Getopt::Long::Configure( 'no_ignore_case' );
 
 BEGIN {
   my @gai_reqs = qw( getaddrinfo getnameinfo AI_CANONNAME AI_NUMERICHOST NI_NUMERICHOST );
@@ -61,8 +65,8 @@ my $have_ipv6 = eval {
 
 $|=1;
 
-my $client = 'mosh-client';
-my $server = 'mosh-server';
+my $client = 'adam-mosh-client';
+my $server = 'adam-mosh-server';
 
 my $predict = undef;
 
@@ -76,6 +80,21 @@ my $family = 'prefer-inet';
 my $port_request = undef;
 
 my @ssh = ('ssh');
+my @local_forwards;
+my @remote_forwards;
+my @dynamic_forwards;
+my $agent_forwarding = 0;
+my $x11_forwarding = 0;
+my $stream_delay = undef;
+my $stream_bandwidth = undef;
+my $state_zstd = 1;
+my $state_zstd_level = undef;
+my $state_zstd_threshold = undef;
+my $state_zstd_dict = undef;
+my $state_sample_log = undef;
+my $state_sample_min_size = undef;
+my $remote_state_zstd_dict = undef;
+my $uploaded_state_zstd_dict = 0;
 
 my $term_init = 1;
 
@@ -90,10 +109,10 @@ my @cmdline = @ARGV;
 
 my $usage =
 qq{Usage: $0 [options] [--] [user@]host [command...]
-        --client=PATH        mosh client on local machine
-                                (default: "mosh-client")
-        --server=COMMAND     mosh server on remote machine
-                                (default: "mosh-server")
+        --client=PATH        adam-mosh client on local machine
+                                (default: "adam-mosh-client")
+        --server=COMMAND     adam-mosh server on remote machine
+                                (default: "adam-mosh-server")
 
         --predict=adaptive      local echo for slower links [default]
 -a      --predict=always        use local echo even on fast links
@@ -111,6 +130,36 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 -p PORT[:PORT2]
         --port=PORT[:PORT2]  server-side UDP port or range
                                 (No effect on server-side SSH port)
+-L [BIND:]PORT:HOST:HOSTPORT
+                            forward a local TCP port to the remote side
+-R [BIND:]PORT:HOST:HOSTPORT
+                            forward a remote TCP port to the local side
+-D [BIND:]PORT             open a local SOCKS5 dynamic forward
+-A                         forward the local SSH authentication agent
+-X                         forward X11 connections
+        --stream-delay=MS   coalesce forwarded stream bytes before sending
+                                (default: 75)
+        --stream-bandwidth=BPS
+                            cap forwarded stream payload bytes per second
+                                (default: 2048)
+        --state-zstd / --no-state-zstd
+                            enable negotiated zstd for large state updates
+                                (default: enabled when both sides support it)
+        --state-zstd-level=N
+                            zstd level for large state updates
+                                (default: 12, valid range: 0..22)
+        --state-zstd-threshold=BYTES
+                            minimum serialized state update size for zstd
+                                (default: 2048)
+        --state-zstd-dict=FILE
+                            use a compiled zstd dictionary for state updates;
+                                the wrapper uploads the compressed file to the server
+        --state-sample-log=FILE
+                            write received uncompressed state samples to FILE
+                                for dictionary training
+        --state-sample-min-size=BYTES
+                            only log state samples at least this large
+                                (default: 0)
         --bind-server={ssh|any|IP}  ask the server to reply from an IP address
                                        (default: "ssh")
 
@@ -122,7 +171,7 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 
         --no-init            do not send terminal initialization string
 
-        --local              run mosh-server locally without using ssh
+        --local              run adam-mosh-server locally without using ssh
 
         --experimental-remote-ip=(local|remote|proxy)  select the method for
                              discovering the remote IP address to use for mosh
@@ -163,6 +212,19 @@ GetOptions( 'client=s' => \$client,
 	    '4' => sub { $family = 'inet' },
 	    '6' => sub { $family = 'inet6' },
 	    'p=s' => \$port_request,
+	    'L=s@' => \@local_forwards,
+	    'R=s@' => \@remote_forwards,
+	    'D=s@' => \@dynamic_forwards,
+	    'A' => \$agent_forwarding,
+	    'X' => \$x11_forwarding,
+	    'stream-delay=i' => \$stream_delay,
+	    'stream-bandwidth=i' => \$stream_bandwidth,
+	    'state-zstd!' => \$state_zstd,
+	    'state-zstd-level=i' => \$state_zstd_level,
+	    'state-zstd-threshold=i' => \$state_zstd_threshold,
+	    'state-zstd-dict=s' => \$state_zstd_dict,
+	    'state-sample-log=s' => \$state_sample_log,
+	    'state-sample-min-size=i' => \$state_sample_min_size,
 	    'ssh=s' => sub { @ssh = shellwords($_[1]); },
 	    'ssh-pty!' => \$ssh_pty,
 	    'init!' => \$term_init,
@@ -208,6 +270,38 @@ if (!$have_ipv6) {
 }
 if ( $overwrite ) {
     $ENV{ "MOSH_PREDICTION_OVERWRITE" } = "yes";
+}
+
+if ( defined $stream_delay and $stream_delay < 0 ) {
+  die "$0: --stream-delay must be non-negative.\n";
+}
+
+if ( defined $stream_bandwidth and $stream_bandwidth <= 0 ) {
+  die "$0: --stream-bandwidth must be greater than zero.\n";
+}
+
+if ( defined $state_zstd_level and ( $state_zstd_level < 0 or $state_zstd_level > 22 ) ) {
+  die "$0: --state-zstd-level must be between 0 and 22.\n";
+}
+
+if ( defined $state_zstd_threshold and $state_zstd_threshold < 0 ) {
+  die "$0: --state-zstd-threshold must be non-negative.\n";
+}
+
+if ( defined $state_sample_min_size and $state_sample_min_size < 0 ) {
+  die "$0: --state-sample-min-size must be non-negative.\n";
+}
+
+if ( defined $state_zstd_dict and not -r $state_zstd_dict ) {
+  die "$0: --state-zstd-dict file is not readable: $state_zstd_dict\n";
+}
+
+if ( $agent_forwarding and not defined $ENV{ 'SSH_AUTH_SOCK' } ) {
+  die "$0: -A requested but SSH_AUTH_SOCK is not set.\n";
+}
+
+if ( $x11_forwarding and not defined $ENV{ 'DISPLAY' } ) {
+  die "$0: -X requested but DISPLAY is not set.\n";
 }
 
 if ( defined $port_request ) {
@@ -350,6 +444,15 @@ if ( $use_remote_ip eq 'local' ) {
   $userhost = "$user$ip";
 }
 
+if ( defined $state_zstd_dict ) {
+  if ( defined $localhost ) {
+    $remote_state_zstd_dict = $state_zstd_dict;
+  } else {
+    $remote_state_zstd_dict = upload_state_dictionary( $state_zstd_dict, $userhost, $family, $use_remote_ip );
+    $uploaded_state_zstd_dict = 1;
+  }
+}
+
 my $pid = open(my $pipe, "-|");
 die "$0: fork: $!\n" unless ( defined $pid );
 if ( $pid == 0 ) { # child
@@ -384,6 +487,26 @@ if ( $pid == 0 ) { # child
     push @server, ( '-p', $port_request );
   }
 
+  for ( @remote_forwards ) {
+    push @server, ( '-R', $_ );
+  }
+
+  if ( $agent_forwarding ) {
+    push @server, '-A';
+  }
+
+  if ( $x11_forwarding ) {
+    push @server, '-X';
+  }
+
+  if ( defined $stream_delay ) {
+    push @server, ( '-t', $stream_delay );
+  }
+
+  if ( defined $stream_bandwidth ) {
+    push @server, ( '-b', $stream_bandwidth );
+  }
+
   for ( &locale_vars ) {
     push @server, ( '-l', $_ );
   }
@@ -396,7 +519,7 @@ if ( $pid == 0 ) { # child
     delete $ENV{ 'SSH_CONNECTION' };
     chdir; # $HOME
     print "MOSH IP ${userhost}\n";
-    exec( "$server " . shell_quote( @server ) );
+    exec( server_command_string( $server, @server ) );
     die "Cannot exec $server: $!\n";
   }
   if ( $use_remote_ip eq 'proxy' ) {
@@ -406,7 +529,7 @@ if ( $pid == 0 ) { # child
     my $quoted_proxy_command = shell_quote( $0, "--family=$family" );
     push @sshopts, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
-  my @exec_argv = ( @ssh, @sshopts, $userhost, '--', $ssh_connection . "$server " . shell_quote( @server ) );
+  my @exec_argv = ( @ssh, @sshopts, $userhost, '--', $ssh_connection . server_command_string( $server, @server ) );
   exec @exec_argv;
   die "Cannot exec ssh: $!\n";
 } else { # parent
@@ -455,17 +578,118 @@ if ( $pid == 0 ) { # child
     if ( $bad_udp_port_warning ) {
       die "$0: Server does not support UDP port range option.\n";
     }
-    die "$0: Did not find mosh server startup message. (Have you installed mosh on your server?)\n";
+    die "$0: Did not find adam-mosh server startup message. (Have you installed adam-mosh on your server?)\n";
   }
 
-  # Now start real mosh client
+  # Now start real adam-mosh client
   $ENV{ 'MOSH_KEY' } = $key;
   $ENV{ 'MOSH_PREDICTION_DISPLAY' } = $predict;
   $ENV{ 'MOSH_NO_TERM_INIT' } = '1' if !$term_init;
-  exec {$client} ("$client", "-# @cmdline |", $ip, $port);
+  $ENV{ 'MOSH_STREAM_DELAY' } = $stream_delay if defined $stream_delay;
+  $ENV{ 'MOSH_STREAM_BANDWIDTH' } = $stream_bandwidth if defined $stream_bandwidth;
+  $ENV{ 'MOSH_STATE_ZSTD' } = $state_zstd ? 1 : 0;
+  $ENV{ 'MOSH_STATE_ZSTD_LEVEL' } = $state_zstd_level if defined $state_zstd_level;
+  $ENV{ 'MOSH_STATE_ZSTD_THRESHOLD' } = $state_zstd_threshold if defined $state_zstd_threshold;
+  $ENV{ 'MOSH_STATE_ZSTD_DICT' } = $state_zstd_dict if defined $state_zstd_dict;
+  $ENV{ 'MOSH_STATE_SAMPLE_LOG' } = $state_sample_log if defined $state_sample_log;
+  $ENV{ 'MOSH_STATE_SAMPLE_MIN_SIZE' } = $state_sample_min_size if defined $state_sample_min_size;
+  my @client_forwarding;
+  for ( @local_forwards ) {
+    push @client_forwarding, ( '-L', $_ );
+  }
+  for ( @dynamic_forwards ) {
+    push @client_forwarding, ( '-D', $_ );
+  }
+  if ( $agent_forwarding ) {
+    push @client_forwarding, '-A';
+  }
+  if ( $x11_forwarding ) {
+    push @client_forwarding, '-X';
+  }
+  exec {$client} ("$client", "-# @cmdline |", @client_forwarding, $ip, $port);
 }
 
 sub shell_quote { join ' ', map {(my $a = $_) =~ s/'/'\\''/g; "'$a'"} @_ }
+
+sub shell_assign {
+  my ( $name, $value ) = @_;
+  return $name . "=" . shell_quote( $value );
+}
+
+sub upload_state_dictionary {
+  my ( $path, $userhost, $family, $use_remote_ip ) = @_;
+
+  open my $dict_fh, '<:raw', $path or die "$0: cannot open $path: $!\n";
+  local $/ = undef;
+  my $dictionary = <$dict_fh>;
+  close $dict_fh or die "$0: cannot close $path: $!\n";
+
+  my @upload_ssh = ( @ssh, '-T' );
+  if ( $use_remote_ip eq 'remote' ) {
+    if ( $family eq 'inet' ) {
+      push @upload_ssh, '-4';
+    } elsif ( $family eq 'inet6' ) {
+      push @upload_ssh, '-6';
+    }
+  } elsif ( $use_remote_ip eq 'proxy' ) {
+    my $quoted_proxy_command = shell_quote( $0, "--family=$family" );
+    push @upload_ssh, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
+  }
+
+  my $script = 'tmp=$(mktemp "${TMPDIR:-/tmp}/adam-mosh-zstd-dict.XXXXXX") || exit 1; '
+    . 'chmod 600 "$tmp" || exit 1; '
+    . 'cat > "$tmp" || exit 1; '
+    . 'printf "MOSH DICT %s\n" "$tmp"';
+
+  my $remote_path;
+  {
+    local $ENV{ 'SHELL' } = $ENV{ 'SHELL' };
+    $ENV{ 'SHELL' } = '/bin/sh' if $use_remote_ip eq 'proxy';
+
+    my $errfh = gensym;
+    my $pid = open3( my $in, my $out, $errfh, @upload_ssh, $userhost, '--', 'sh -c ' . shell_quote( $script ) );
+    binmode( $in );
+    print {$in} $dictionary;
+    close $in or die "$0: failed writing zstd dictionary to ssh: $!\n";
+
+    local $/ = undef;
+    my $stdout = <$out>;
+    my $stderr = <$errfh>;
+    $stdout = "" if not defined $stdout;
+    $stderr = "" if not defined $stderr;
+    waitpid $pid, 0;
+    if ( $? != 0 ) {
+      die "$0: failed to upload zstd dictionary over ssh" . ( length $stderr ? ": $stderr" : "\n" );
+    }
+
+    ( $remote_path ) = $stdout =~ m{^MOSH DICT (.+)\s*$}m;
+    die "$0: bad zstd dictionary upload response: $stdout\n" if not defined $remote_path;
+  }
+  return $remote_path;
+}
+
+sub server_command_string {
+  my ( $server, @server_args ) = @_;
+  my $command = server_environment_prefix() . "$server " . shell_quote( @server_args );
+  if ( $uploaded_state_zstd_dict ) {
+    my $cleanup = "rc=\$?; rm -f " . shell_quote( $remote_state_zstd_dict ) . "; exit \$rc";
+    return "sh -c " . shell_quote( "$command; $cleanup" );
+  }
+  return $command;
+}
+
+sub server_environment_prefix {
+  my @assignments;
+  push @assignments, shell_assign( "MOSH_STREAM_DELAY", $stream_delay ) if defined $stream_delay;
+  push @assignments, shell_assign( "MOSH_STREAM_BANDWIDTH", $stream_bandwidth ) if defined $stream_bandwidth;
+  push @assignments, shell_assign( "MOSH_STATE_ZSTD", $state_zstd ? 1 : 0 );
+  push @assignments, shell_assign( "MOSH_STATE_ZSTD_LEVEL", $state_zstd_level ) if defined $state_zstd_level;
+  push @assignments, shell_assign( "MOSH_STATE_ZSTD_THRESHOLD", $state_zstd_threshold ) if defined $state_zstd_threshold;
+  push @assignments, shell_assign( "MOSH_STATE_ZSTD_DICT", $remote_state_zstd_dict ) if defined $remote_state_zstd_dict;
+  push @assignments, shell_assign( "MOSH_STATE_ZSTD_DICT_UNLINK", 1 ) if $uploaded_state_zstd_dict;
+  return "" if not @assignments;
+  return join( ' ', @assignments ) . " ";
+}
 
 sub locale_vars {
   my @names = qw[LANG LANGUAGE LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION LC_ALL];

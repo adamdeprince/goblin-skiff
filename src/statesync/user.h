@@ -38,13 +38,17 @@
 #include <list>
 #include <string>
 
+#include "src/statesync/stream.h"
+#include "src/terminal/osc52.h"
 #include "src/terminal/parseraction.h"
 
 namespace Network {
 enum UserEventType
 {
   UserByteType = 0,
-  ResizeType = 1
+  ResizeType = 1,
+  UserStreamEventType = 2,
+  UserClipboardEventType = 3
 };
 
 class UserEvent
@@ -53,10 +57,21 @@ public:
   UserEventType type;
   Parser::UserByte userbyte;
   Parser::Resize resize;
+  StreamEvent stream;
+  Terminal::ClipboardEvent clipboard;
 
-  UserEvent( const Parser::UserByte& s_userbyte ) : type( UserByteType ), userbyte( s_userbyte ), resize( -1, -1 )
+  UserEvent( const Parser::UserByte& s_userbyte )
+    : type( UserByteType ), userbyte( s_userbyte ), resize( -1, -1 ), stream(), clipboard()
   {}
-  UserEvent( const Parser::Resize& s_resize ) : type( ResizeType ), userbyte( 0 ), resize( s_resize ) {}
+  UserEvent( const Parser::Resize& s_resize )
+    : type( ResizeType ), userbyte( 0 ), resize( s_resize ), stream(), clipboard()
+  {}
+  UserEvent( const StreamEvent& s_stream )
+    : type( UserStreamEventType ), userbyte( 0 ), resize( -1, -1 ), stream( s_stream ), clipboard()
+  {}
+  UserEvent( const Terminal::ClipboardEvent& s_clipboard )
+    : type( UserClipboardEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard( s_clipboard )
+  {}
 
 private:
   UserEvent();
@@ -64,7 +79,8 @@ private:
 public:
   bool operator==( const UserEvent& x ) const
   {
-    return ( type == x.type ) && ( userbyte == x.userbyte ) && ( resize == x.resize );
+    return ( type == x.type ) && ( userbyte == x.userbyte ) && ( resize == x.resize ) && ( stream == x.stream )
+           && ( clipboard == x.clipboard );
   }
 };
 
@@ -78,10 +94,16 @@ public:
 
   void push_back( const Parser::UserByte& s_userbyte ) { actions.push_back( UserEvent( s_userbyte ) ); }
   void push_back( const Parser::Resize& s_resize ) { actions.push_back( UserEvent( s_resize ) ); }
+  void push_back( const StreamEvent& s_stream ) { actions.push_back( UserEvent( s_stream ) ); }
+  void push_back( const Terminal::ClipboardEvent& s_clipboard ) { actions.push_back( UserEvent( s_clipboard ) ); }
 
   bool empty( void ) const { return actions.empty(); }
   size_t size( void ) const { return actions.size(); }
   const Parser::Action& get_action( unsigned int i ) const;
+  bool is_stream_event( unsigned int i ) const { return actions[i].type == UserStreamEventType; }
+  const StreamEvent& get_stream_event( unsigned int i ) const { return actions[i].stream; }
+  bool is_clipboard_event( unsigned int i ) const { return actions[i].type == UserClipboardEventType; }
+  const Terminal::ClipboardEvent& get_clipboard_event( unsigned int i ) const { return actions[i].clipboard; }
 
   /* interface for Network::Transport */
   void subtract( const UserStream* prefix );

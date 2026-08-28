@@ -39,8 +39,8 @@ displaytests = \
 	unicode-later-combining.test \
 	window-resize.test
 
-check_PROGRAMS = ocb-aes encrypt-decrypt base64 nonce-incr inpty is-utf8-locale
-TESTS = ocb-aes encrypt-decrypt base64 nonce-incr local.test $(displaytests)
+check_PROGRAMS = ocb-aes encrypt-decrypt base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics
+TESTS = ocb-aes encrypt-decrypt base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics local.test $(displaytests)
 XFAIL_TESTS = \
 	e2e-failure.test \
 	emulation-attributes-256color8.test
@@ -72,6 +72,38 @@ inpty_LDADD = ../util/libmoshutil.a
 is_utf8_locale_SOURCES = is-utf8-locale.cc
 is_utf8_locale_CPPFLAGS = -I$(srcdir)/../util
 is_utf8_locale_LDADD = ../util/libmoshutil.a $(LIBUTIL)
+
+fec_codecs_SOURCES = fec-codecs.cc
+fec_codecs_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../fec
+fec_codecs_LDADD = ../fec/libmoshfec.a
+
+bulk_datagram_SOURCES = bulk-datagram.cc
+bulk_datagram_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network
+bulk_datagram_LDADD = ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
+
+moshcp_protocol_SOURCES = moshcp-protocol.cc
+moshcp_protocol_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../moshcp -I$(srcdir)/../fec
+moshcp_protocol_LDADD = ../moshcp/libmoshcp.a ../fec/libmoshfec.a
+
+bulk_loss_sim_SOURCES = bulk-loss-sim.cc
+bulk_loss_sim_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network -I$(srcdir)/../fec
+bulk_loss_sim_LDADD = ../fec/libmoshfec.a ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
+
+transport_compression_SOURCES = transport-compression.cc
+transport_compression_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network $(protobuf_CFLAGS)
+transport_compression_LDADD = ../network/libmoshnetwork.a ../protobufs/libmoshprotos.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(protobuf_LIBS) $(CRYPTO_LIBS) $(ZSTD_LIBS)
+
+state_samples_SOURCES = state-samples.cc
+state_samples_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network $(protobuf_CFLAGS)
+state_samples_LDADD = ../network/libmoshnetwork.a ../protobufs/libmoshprotos.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(protobuf_LIBS) $(CRYPTO_LIBS) $(ZSTD_LIBS)
+
+osc52_parse_SOURCES = osc52-parse.cc
+osc52_parse_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS) $(ZSTD_CFLAGS)
+osc52_parse_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS)
+
+kitty_graphics_SOURCES = kitty-graphics.cc
+kitty_graphics_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS)
+kitty_graphics_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS) -lz
 
 clean-local: clean-local-check
 .PHONY: clean-local-check

@@ -33,6 +33,7 @@
 #ifndef COMPRESSOR_H
 #define COMPRESSOR_H
 
+#include <cstddef>
 #include <string>
 
 namespace Network {
@@ -42,13 +43,28 @@ private:
   static const int BUFFER_SIZE = 2048 * 2048; /* effective limit on terminal size */
 
   unsigned char buffer[BUFFER_SIZE];
+  std::string zstd_dictionary;
+  std::string zstd_dictionary_id_value;
+  void* zstd_cdict;
+  void* zstd_ddict;
+  unsigned int zstd_cdict_level;
 
 public:
-  Compressor() : buffer() {}
-  ~Compressor() {}
+  Compressor();
+  ~Compressor();
 
   std::string compress_str( const std::string& input );
+  std::string compress_str( const std::string& input,
+                            bool allow_zstd,
+                            bool allow_zstd_dictionary,
+                            unsigned int zstd_level,
+                            size_t zstd_threshold );
   std::string uncompress_str( const std::string& input );
+  bool zstd_available( void ) const;
+  void set_zstd_dictionary( const std::string& dictionary );
+  void set_zstd_dictionary_from_file( const std::string& path );
+  bool has_zstd_dictionary( void ) const { return !zstd_dictionary.empty(); }
+  const std::string& zstd_dictionary_id( void ) const { return zstd_dictionary_id_value; }
 
   /* unused */
   Compressor( const Compressor& );

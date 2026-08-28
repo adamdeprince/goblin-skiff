@@ -4,6 +4,9 @@ option optimize_for = LITE_RUNTIME;
 
 package ClientBuffers;
 
+import "stream.proto";
+import "clipboard.proto";
+
 message UserMessage {
   repeated Instruction instruction = 1;
 }
@@ -24,4 +27,6 @@ message ResizeMessage {
 extend Instruction {
   optional Keystroke keystroke = 2;
   optional ResizeMessage resize = 3;
+  optional StreamBuffers.StreamEvent stream = 9;
+  optional ClipboardBuffers.ClipboardEvent clipboard = 10;
 }

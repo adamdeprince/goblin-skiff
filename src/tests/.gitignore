@@ -8,3 +8,11 @@
 /*.d/
 *.log
 *.trs
+/bulk-datagram
+/bulk-loss-sim
+/fec-codecs
+/kitty-graphics
+/moshcp-protocol
+/osc52-parse
+/state-samples
+/transport-compression
