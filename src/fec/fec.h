@@ -58,6 +58,8 @@ struct EncodedBlock
 {
   BlockMetadata metadata;
   std::vector<Symbol> symbols;
+
+  EncodedBlock() : metadata(), symbols() {}
 };
 
 class BlockCodec

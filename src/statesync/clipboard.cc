@@ -131,7 +131,7 @@ ClipboardEvent Terminal::clipboard_event_from_proto( const ClipboardBuffers::Cli
 {
   ClipboardEvent event;
   event.op = proto.has_op() ? native_op( proto.op() ) : ClipboardSet;
-  event.targets = proto.has_targets() ? proto.targets() : ClipboardClipboard;
+  event.targets = proto.has_targets() ? proto.targets() : static_cast<unsigned>( ClipboardClipboard );
   if ( event.targets == ClipboardNone ) {
     event.targets = ClipboardClipboard;
   }
