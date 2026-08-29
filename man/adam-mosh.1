@@ -311,6 +311,19 @@ reliable send opportunity and caps forwarded stream chunks below the
 path-MTU payload budget. \fBadam-moshcp\fP bulk datagrams are sent only
 when no reliable terminal or stream-forwarding data is queued.
 
+.PP
+Sustained terminal state updates are paced between 10 frames per
+second on low-RTT paths and 4 frames per second on high-RTT paths. The
+first update after an idle period is not held for a full frame
+interval. After 15 seconds without traffic, clients and servers that
+negotiate \fBkeepalive-v1\fP use an authenticated connection-layer ping
+and pong. Continued inactivity backs the interval off through 15
+seconds, 30 seconds, 1, 2, 4, 8, and 15 minutes. Real terminal,
+forwarding, or bulk traffic resets it to 15 seconds. These keepalives do
+not carry a serialized terminal state, compression frame, fragment
+header, or chaff. Mixed-version connections retain the legacy state
+heartbeat.
+
 .TP
 .B \-\-bind\-server={ssh|any|\fIIP\fP}
 Control the IP address that the \fBadam-mosh-server\fP binds to.

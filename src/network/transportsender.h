@@ -47,9 +47,9 @@ namespace Network {
 using namespace TransportBuffers;
 
 /* timing parameters */
-const int SEND_INTERVAL_MIN = 20;       /* ms between frames */
-const int SEND_INTERVAL_MAX = 250;      /* ms between frames */
-const int ACK_INTERVAL = 3000;          /* ms between empty acks */
+const int SEND_INTERVAL_MIN = 100;      /* ms between frames: at most 10 frames/s */
+const int SEND_INTERVAL_MAX = 250;      /* ms between frames: at least 4 frames/s */
+const int ACK_INTERVAL = 3000;          /* ms between legacy empty acks */
 const int ACK_DELAY = 100;              /* ms before delayed ack */
 const int SHUTDOWN_RETRIES = 16;        /* number of shutdown packets to send before giving up */
 const int ACTIVE_RETRY_TIMEOUT = 10000; /* attempt to resend at frame rate */
@@ -86,6 +86,7 @@ private:
   /* timing state */
   uint64_t next_ack_time;
   uint64_t next_send_time;
+  bool compact_keepalive;
 
   void calculate_timers( void );
 
@@ -113,7 +114,7 @@ private:
 
 public:
   /* constructor */
-  TransportSender( Connection* s_connection, MyState& initial_state );
+  TransportSender( Connection* s_connection, MyState& initial_state, bool s_compact_keepalive = false );
 
   /* Send data or an ack if necessary */
   void tick( void );

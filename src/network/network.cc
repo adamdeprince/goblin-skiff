@@ -32,6 +32,7 @@
 
 #include "src/include/config.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <cstring>
@@ -227,11 +228,13 @@ private:
   AddrInfo& operator=( const AddrInfo& );
 };
 
-Connection::Connection( const char* desired_ip, const char* desired_port ) /* server */
-  : socks(), has_remote_addr( false ), remote_addr(), remote_addr_len( 0 ), server( true ), MTU( DEFAULT_SEND_MTU ),
-    key(), session( key ), direction( TO_CLIENT ), saved_timestamp( -1 ), saved_timestamp_received_at( 0 ),
-    expected_receiver_seq( 0 ), last_heard( -1 ), last_port_choice( -1 ), last_roundtrip_success( -1 ),
-    RTT_hit( false ), SRTT( 1000 ), RTTVAR( 500 ), send_error()
+Connection::Connection( const char* desired_ip, const char* desired_port, bool s_compact_keepalive ) /* server */
+  : socks(), has_remote_addr( false ), remote_addr(), remote_addr_len( 0 ), server( true ),
+    compact_keepalive( s_compact_keepalive ), MTU( DEFAULT_SEND_MTU ), key(), session( key ), direction( TO_CLIENT ),
+    saved_timestamp( -1 ), saved_timestamp_received_at( 0 ), expected_receiver_seq( 0 ), last_heard( -1 ),
+    keepalive_interval( KEEPALIVE_INTERVAL_MIN ), next_keepalive( timestamp() + KEEPALIVE_INTERVAL_MIN ),
+    keepalive_outstanding( false ), last_port_choice( -1 ), last_roundtrip_success( -1 ), RTT_hit( false ),
+    SRTT( 1000 ), RTTVAR( 500 ), send_error()
 {
   setup();
 
@@ -338,11 +341,17 @@ bool Connection::try_bind( const char* addr, int port_low, int port_high )
   throw NetworkException( "bind", saved_errno );
 }
 
-Connection::Connection( const char* key_str, const char* ip, const char* port ) /* client */
+Connection::Connection( const char* key_str,
+                        const char* ip,
+                        const char* port,
+                        bool s_compact_keepalive ) /* client */
   : socks(), has_remote_addr( false ), remote_addr(), remote_addr_len( 0 ), server( false ),
-    MTU( DEFAULT_SEND_MTU ), key( key_str ), session( key ), direction( TO_SERVER ), saved_timestamp( -1 ),
-    saved_timestamp_received_at( 0 ), expected_receiver_seq( 0 ), last_heard( -1 ), last_port_choice( -1 ),
-    last_roundtrip_success( -1 ), RTT_hit( false ), SRTT( 1000 ), RTTVAR( 500 ), send_error()
+    compact_keepalive( s_compact_keepalive ), MTU( DEFAULT_SEND_MTU ), key( key_str ), session( key ),
+    direction( TO_SERVER ), saved_timestamp( -1 ),
+    saved_timestamp_received_at( 0 ), expected_receiver_seq( 0 ), last_heard( -1 ),
+    keepalive_interval( KEEPALIVE_INTERVAL_MIN ), next_keepalive( timestamp() + KEEPALIVE_INTERVAL_MIN ),
+    keepalive_outstanding( false ), last_port_choice( -1 ), last_roundtrip_success( -1 ), RTT_hit( false ),
+    SRTT( 1000 ), RTTVAR( 500 ), send_error()
 {
   setup();
 
@@ -387,15 +396,45 @@ void Connection::send( const std::string& s )
   }
 
   uint64_t now = timestamp();
+  if ( compact_keepalive && !server && !s.empty() ) {
+    keepalive_interval = KEEPALIVE_INTERVAL_MIN;
+    next_keepalive = now + keepalive_interval;
+  }
   if ( server ) {
-    if ( now - last_heard > SERVER_ASSOCIATION_TIMEOUT ) {
+    const unsigned int association_timeout
+      = compact_keepalive ? COMPACT_SERVER_ASSOCIATION_TIMEOUT : SERVER_ASSOCIATION_TIMEOUT;
+    if ( now - last_heard > association_timeout ) {
       has_remote_addr = false;
       fprintf( stderr, "Server now detached from client.\n" );
     }
-  } else { /* client */
+  } else if ( !compact_keepalive ) { /* legacy client */
     if ( ( now - last_port_choice > PORT_HOP_INTERVAL ) && ( now - last_roundtrip_success > PORT_HOP_INTERVAL ) ) {
       hop_port();
     }
+  }
+}
+
+int Connection::keepalive_wait_time( void ) const
+{
+  if ( !compact_keepalive || server || !has_remote_addr ) {
+    return INT_MAX;
+  }
+
+  const uint64_t now = timestamp();
+  return next_keepalive > now ? static_cast<int>( next_keepalive - now ) : 0;
+}
+
+void Connection::tick( void )
+{
+  const int keepalive_wait = keepalive_wait_time();
+  if ( compact_keepalive && !server && has_remote_addr && keepalive_wait == 0 ) {
+    if ( keepalive_outstanding ) {
+      hop_port();
+    }
+    send( "" );
+    keepalive_outstanding = true;
+    keepalive_interval = std::min( keepalive_interval * 2, KEEPALIVE_INTERVAL_MAX );
+    next_keepalive = timestamp() + keepalive_interval;
   }
 }
 
@@ -522,6 +561,13 @@ std::string Connection::recv_one( int sock_to_recv )
   /* auto-adjust to remote host */
   has_remote_addr = true;
   last_heard = timestamp();
+  if ( compact_keepalive && !server ) {
+    keepalive_outstanding = false;
+  }
+  if ( compact_keepalive && !server && !p.payload.empty() ) {
+    keepalive_interval = KEEPALIVE_INTERVAL_MIN;
+    next_keepalive = last_heard + keepalive_interval;
+  }
 
   if ( server && /* only client can roam */
        ( remote_addr_len != header.msg_namelen
@@ -540,6 +586,14 @@ std::string Connection::recv_one( int sock_to_recv )
       throw NetworkException( std::string( "recv_one: getnameinfo: " ) + gai_strerror( errcode ), 0 );
     }
     fprintf( stderr, "Server now attached to client at %s:%s\n", host, serv );
+  }
+
+  if ( compact_keepalive && p.payload.empty() ) {
+    if ( server ) {
+      send( "" );
+    } else {
+      last_roundtrip_success = timestamp();
+    }
   }
   return p.payload;
 }

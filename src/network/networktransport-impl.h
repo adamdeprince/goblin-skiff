@@ -43,8 +43,9 @@ template<class MyState, class RemoteState>
 Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             RemoteState& initial_remote,
                                             const char* desired_ip,
-                                            const char* desired_port )
-  : connection( desired_ip, desired_port ), sender( &connection, initial_state ),
+                                            const char* desired_port,
+                                            bool compact_keepalive )
+  : connection( desired_ip, desired_port, compact_keepalive ), sender( &connection, initial_state, compact_keepalive ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
     state_sample_writer(), verbose( 0 )
@@ -57,8 +58,9 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             RemoteState& initial_remote,
                                             const char* key_str,
                                             const char* ip,
-                                            const char* port )
-  : connection( key_str, ip, port ), sender( &connection, initial_state ),
+                                            const char* port,
+                                            bool compact_keepalive )
+  : connection( key_str, ip, port, compact_keepalive ), sender( &connection, initial_state, compact_keepalive ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
     state_sample_writer(), verbose( 0 )
@@ -77,6 +79,12 @@ template<class MyState, class RemoteState>
 void Transport<MyState, RemoteState>::recv( void )
 {
   std::string s( connection.recv() );
+  if ( s.empty() && connection.get_compact_keepalive() ) {
+    received_states.back().timestamp = timestamp();
+    sender.remote_heard( received_states.back().timestamp );
+    return;
+  }
+
   Bulk::Datagram bulk;
   if ( Bulk::decode_datagram( s, bulk ) ) {
     bulk_datagrams.push_back( bulk );
@@ -105,6 +113,9 @@ void Transport<MyState, RemoteState>::recv( void )
           i != received_states.end();
           i++ ) {
       if ( inst.new_num() == i->num ) {
+        if ( !inst.diff().empty() ) {
+          sender.set_data_ack();
+        }
         return;
       }
     }

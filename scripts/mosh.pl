@@ -306,6 +306,7 @@ if ( defined $port_request ) {
 }
 
 delete $ENV{ 'MOSH_PREDICTION_DISPLAY' };
+delete $ENV{ 'MOSH_COMPACT_KEEPALIVE' };
 
 my $userhost;
 my @command;
@@ -512,6 +513,7 @@ if ( $pid == 0 ) { # child
   die "Cannot exec ssh: $!\n";
 } else { # parent
   my ( $sship, $port, $key );
+  my $compact_keepalive = 0;
   my $bad_udp_port_warning = 0;
   LINE: while ( <$pipe> ) {
     chomp;
@@ -526,6 +528,12 @@ if ( $pid == 0 ) { # child
 	$sship = $words[4];
       } else {
 	die "Bad MOSH SSH_CONNECTION string: $_\n";
+      }
+    } elsif ( m{^MOSH CAPS } ) {
+      if ( m{^MOSH CAPS keepalive-v1\s*$} ) {
+	$compact_keepalive = 1;
+      } else {
+	die "Bad MOSH CAPS string: $_\n";
       }
     } elsif ( m{^MOSH CONNECT } ) {
       if ( ( $port, $key ) = m{^MOSH CONNECT (\d+?) ([A-Za-z0-9/+]{22})\s*$} ) {
@@ -568,6 +576,7 @@ if ( $pid == 0 ) { # child
   $ENV{ 'MOSH_STATE_ZSTD_DICT' } = $state_zstd_dict if defined $state_zstd_dict;
   $ENV{ 'MOSH_STATE_SAMPLE_LOG' } = $state_sample_log if defined $state_sample_log;
   $ENV{ 'MOSH_STATE_SAMPLE_MIN_SIZE' } = $state_sample_min_size if defined $state_sample_min_size;
+  $ENV{ 'MOSH_COMPACT_KEEPALIVE' } = '1' if $compact_keepalive;
   my @client_forwarding;
   for ( @local_forwards ) {
     push @client_forwarding, ( '-L', $_ );
@@ -655,6 +664,7 @@ sub server_command_string {
 
 sub server_environment_prefix {
   my @assignments;
+  push @assignments, shell_assign( "MOSH_CLIENT_CAPS", "keepalive-v1" );
   push @assignments, shell_assign( "MOSH_CLIENT_TERM", $client_term ) if defined $client_term and length $client_term;
   push @assignments, shell_assign( "MOSH_STREAM_DELAY", $stream_delay ) if defined $stream_delay;
   push @assignments, shell_assign( "MOSH_STREAM_BANDWIDTH", $stream_bandwidth ) if defined $stream_bandwidth;

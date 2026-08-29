@@ -48,11 +48,14 @@
 using namespace Network;
 
 template<class MyState>
-TransportSender<MyState>::TransportSender( Connection* s_connection, MyState& initial_state )
+TransportSender<MyState>::TransportSender( Connection* s_connection,
+                                           MyState& initial_state,
+                                           bool s_compact_keepalive )
   : connection( s_connection ), current_state( initial_state ),
     sent_states( 1, TimestampedState<MyState>( timestamp(), 0, initial_state ) ),
-    assumed_receiver_state( sent_states.begin() ), fragmenter(), next_ack_time( timestamp() ),
-    next_send_time( timestamp() ), verbose( 0 ), shutdown_in_progress( false ), shutdown_tries( 0 ),
+    assumed_receiver_state( sent_states.begin() ), fragmenter(),
+    next_ack_time( s_compact_keepalive ? uint64_t( -1 ) : timestamp() ), next_send_time( timestamp() ),
+    compact_keepalive( s_compact_keepalive ), verbose( 0 ), shutdown_in_progress( false ), shutdown_tries( 0 ),
     shutdown_start( -1 ), ack_num( 0 ), pending_data_ack( false ), SEND_MINDELAY( 8 ), last_heard( 0 ), prng(),
     mindelay_clock( -1 ), peer_zstd_supported( false ), peer_zstd_dictionary_id()
 {}
@@ -127,8 +130,13 @@ int TransportSender<MyState>::wait_time( void )
     return INT_MAX;
   }
 
+  if ( next_wakeup == uint64_t( -1 ) ) {
+    return INT_MAX;
+  }
+
   if ( next_wakeup > now ) {
-    return next_wakeup - now;
+    const uint64_t wait = next_wakeup - now;
+    return wait > INT_MAX ? INT_MAX : static_cast<int>( wait );
   } else {
     return 0;
   }
@@ -205,7 +213,7 @@ void TransportSender<MyState>::send_empty_ack( void )
   add_sent_state( now, new_num, current_state );
   send_in_fragments( "", new_num );
 
-  next_ack_time = now + ACK_INTERVAL;
+  next_ack_time = compact_keepalive ? uint64_t( -1 ) : now + ACK_INTERVAL;
   next_send_time = uint64_t( -1 );
 }
 
@@ -249,7 +257,7 @@ void TransportSender<MyState>::send_to_receiver( const std::string& diff )
   /* ("probably" because the FIRST size-exceeded datagram doesn't get an error) */
   assumed_receiver_state = sent_states.end();
   assumed_receiver_state--;
-  next_ack_time = timestamp() + ACK_INTERVAL;
+  next_ack_time = compact_keepalive ? uint64_t( -1 ) : timestamp() + ACK_INTERVAL;
   next_send_time = uint64_t( -1 );
 }
 

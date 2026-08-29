@@ -34,6 +34,7 @@
 #define NETWORK_HPP
 
 #include <cassert>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -51,6 +52,8 @@ using namespace Crypto;
 
 namespace Network {
 static const unsigned int MOSH_PROTOCOL_VERSION = 2; /* bumped for echo-ack */
+static const unsigned int KEEPALIVE_INTERVAL_MIN = 15000;  /* first idle client ping */
+static const unsigned int KEEPALIVE_INTERVAL_MAX = 900000; /* maximum idle ping interval */
 
 uint64_t timestamp( void );
 uint16_t timestamp16( void );
@@ -143,7 +146,8 @@ private:
   static const int PORT_RANGE_HIGH = 60999;
 
   static const unsigned int SERVER_ASSOCIATION_TIMEOUT = 40000;
-  static const unsigned int PORT_HOP_INTERVAL = 10000;
+  static const unsigned int COMPACT_SERVER_ASSOCIATION_TIMEOUT = KEEPALIVE_INTERVAL_MAX + 60000;
+  static const unsigned int PORT_HOP_INTERVAL = 30000;
 
   static const unsigned int MAX_PORTS_OPEN = 10;
   static const unsigned int MAX_OLD_SOCKET_AGE = 60000;
@@ -172,6 +176,7 @@ private:
   socklen_t remote_addr_len;
 
   bool server;
+  bool compact_keepalive;
 
   int MTU; /* application datagram MTU */
 
@@ -186,6 +191,9 @@ private:
   uint64_t expected_receiver_seq;
 
   uint64_t last_heard;
+  unsigned int keepalive_interval;
+  uint64_t next_keepalive;
+  bool keepalive_outstanding;
   uint64_t last_port_choice;
   uint64_t last_roundtrip_success; /* transport layer needs to tell us this */
 
@@ -216,17 +224,24 @@ public:
   /* Network transport overhead. */
   static const int ADDED_BYTES = 8 /* seqno/nonce */ + 4 /* timestamps */;
 
-  Connection( const char* desired_ip, const char* desired_port );      /* server */
-  Connection( const char* key_str, const char* ip, const char* port ); /* client */
+  Connection( const char* desired_ip, const char* desired_port, bool s_compact_keepalive = false ); /* server */
+  Connection( const char* key_str,
+              const char* ip,
+              const char* port,
+              bool s_compact_keepalive = false ); /* client */
 
   void send( const std::string& s );
   std::string recv( void );
+  int keepalive_wait_time( void ) const;
+  void tick( void );
   const std::vector<int> fds( void ) const;
   int get_MTU( void ) const { return MTU; }
 
   std::string port( void ) const;
   std::string get_key( void ) const { return key.printable_key(); }
   bool get_has_remote_addr( void ) const { return has_remote_addr; }
+  bool get_compact_keepalive( void ) const { return compact_keepalive; }
+  unsigned int get_keepalive_interval( void ) const { return keepalive_interval; }
 
   uint64_t timeout( void ) const;
   double get_SRTT( void ) const { return SRTT; }
@@ -236,7 +251,13 @@ public:
 
   std::string& get_send_error( void ) { return send_error; }
 
-  void set_last_roundtrip_success( uint64_t s_success ) { last_roundtrip_success = s_success; }
+  void set_last_roundtrip_success( uint64_t s_success )
+  {
+    if ( last_roundtrip_success == uint64_t( -1 ) || s_success > last_roundtrip_success ) {
+      last_roundtrip_success = s_success;
+    }
+  }
+  uint64_t get_last_roundtrip_success( void ) const { return last_roundtrip_success; }
 
   static bool parse_portrange( const char* desired_port_range, int& desired_port_low, int& desired_port_high );
 };

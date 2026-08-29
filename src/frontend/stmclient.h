@@ -53,6 +53,7 @@ private:
   std::string ip;
   std::string port;
   std::string key;
+  bool compact_keepalive;
 
   int escape_key;
   int escape_pass_key;
@@ -111,8 +112,10 @@ public:
              unsigned int stream_delay_ms,
              unsigned int stream_rate_bytes_per_second,
              const std::string& s_state_sample_log,
-             unsigned int s_state_sample_min_size )
-    : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ), key( s_key ? s_key : "" ), escape_key( 0x1E ),
+             unsigned int s_state_sample_min_size,
+             bool s_compact_keepalive )
+    : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ), key( s_key ? s_key : "" ),
+      compact_keepalive( s_compact_keepalive ), escape_key( 0x1E ),
       escape_pass_key( '^' ), escape_pass_key2( '^' ), escape_requires_lf( false ), escape_key_help( L"?" ),
       saved_termios(), raw_termios(), window_size(), local_framebuffer( 1, 1 ), new_state( 1, 1 ), overlays(),
       network(), display( true ) /* use TERM environment var to initialize display */,
@@ -123,6 +126,9 @@ public:
       repaint_requested( false ), lf_entered( false ), quit_sequence_started( false ), clean_shutdown( false ),
       verbose( s_verbose )
   {
+    overlays.get_notification_engine().set_keepalive_interval(
+      compact_keepalive ? Network::KEEPALIVE_INTERVAL_MIN : Network::ACK_INTERVAL );
+
     std::string error;
     for ( std::vector<std::string>::const_iterator it = local_forwards.begin(); it != local_forwards.end(); it++ ) {
       if ( !forwarder.add_tcp_forward( *it, error ) ) {

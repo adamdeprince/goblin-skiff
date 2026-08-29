@@ -126,7 +126,8 @@ static int run_server( const char* desired_ip,
                        unsigned int stream_delay_ms,
                        unsigned int stream_rate_bytes_per_second,
                        const std::string& state_zstd_dictionary,
-                       bool unlink_state_zstd_dictionary );
+                       bool unlink_state_zstd_dictionary,
+                       bool compact_keepalive );
 
 static void print_version( FILE* file )
 {
@@ -185,6 +186,29 @@ static bool bool_from_env( const char* name, bool fallback )
   }
   fprintf( stderr, "Bad %s (%s)\n", name, value );
   exit( 1 );
+}
+
+static bool has_capability( const char* list, const std::string& capability )
+{
+  if ( !list ) {
+    return false;
+  }
+
+  std::string normalized( list );
+  for ( std::string::iterator it = normalized.begin(); it != normalized.end(); it++ ) {
+    if ( *it == ',' ) {
+      *it = ' ';
+    }
+  }
+
+  std::istringstream capabilities( normalized );
+  std::string candidate;
+  while ( capabilities >> candidate ) {
+    if ( candidate == capability ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /* Simple spinloop */
@@ -253,6 +277,7 @@ int main( int argc, char* argv[] )
   const char* state_zstd_dictionary_env = getenv( "MOSH_STATE_ZSTD_DICT" );
   std::string state_zstd_dictionary = state_zstd_dictionary_env ? state_zstd_dictionary_env : "";
   bool unlink_state_zstd_dictionary = bool_from_env( "MOSH_STATE_ZSTD_DICT_UNLINK", false );
+  bool compact_keepalive = has_capability( getenv( "MOSH_CLIENT_CAPS" ), "keepalive-v1" );
   /* Will cause adam-mosh-server not to correctly detach on old versions of sshd. */
   std::list<std::string> locale_vars;
 
@@ -468,7 +493,8 @@ int main( int argc, char* argv[] )
                        stream_delay_ms,
                        stream_rate_bytes_per_second,
                        state_zstd_dictionary,
-                       unlink_state_zstd_dictionary );
+                       unlink_state_zstd_dictionary,
+                       compact_keepalive );
   } catch ( const Network::NetworkException& e ) {
     fprintf( stderr, "Network exception: %s\n", e.what() );
     return 1;
@@ -495,7 +521,8 @@ static int run_server( const char* desired_ip,
                        unsigned int stream_delay_ms,
                        unsigned int stream_rate_bytes_per_second,
                        const std::string& state_zstd_dictionary,
-                       bool unlink_state_zstd_dictionary )
+                       bool unlink_state_zstd_dictionary,
+                       bool compact_keepalive )
 {
   if ( !state_zstd_dictionary.empty() ) {
     Network::get_compressor().set_zstd_dictionary_from_file( state_zstd_dictionary );
@@ -550,7 +577,7 @@ static int run_server( const char* desired_ip,
   /* open network */
   Network::UserStream blank;
   using NetworkPointer = std::shared_ptr<ServerConnection>;
-  NetworkPointer network( new ServerConnection( terminal, blank, desired_ip, desired_port ) );
+  NetworkPointer network( new ServerConnection( terminal, blank, desired_ip, desired_port, compact_keepalive ) );
 
   StreamForwarder forwarder( StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second );
   std::string forward_error;
@@ -583,6 +610,9 @@ static int run_server( const char* desired_ip,
    */
   if ( isatty( STDIN_FILENO ) ) {
     puts( "\r\n" );
+  }
+  if ( compact_keepalive ) {
+    puts( "MOSH CAPS keepalive-v1" );
   }
   printf( "MOSH CONNECT %s %s\n", network->port().c_str(), network->get_key().c_str() );
 
@@ -717,6 +747,10 @@ static int run_server( const char* desired_ip,
       exit( 1 );
     }
     if ( unsetenv( "MOSH_CLIENT_TERM" ) < 0 ) {
+      perror( "unsetenv" );
+      exit( 1 );
+    }
+    if ( unsetenv( "MOSH_CLIENT_CAPS" ) < 0 ) {
       perror( "unsetenv" );
       exit( 1 );
     }

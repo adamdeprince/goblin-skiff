@@ -118,6 +118,22 @@ static unsigned int uint_from_env( const char* name, unsigned int fallback )
   return parse_uint_option( name, value );
 }
 
+static bool bool_from_env( const char* name, bool fallback )
+{
+  const char* value = getenv( name );
+  if ( !value || !*value ) {
+    return fallback;
+  }
+  if ( 0 == strcmp( value, "1" ) || 0 == strcmp( value, "yes" ) || 0 == strcmp( value, "true" ) ) {
+    return true;
+  }
+  if ( 0 == strcmp( value, "0" ) || 0 == strcmp( value, "no" ) || 0 == strcmp( value, "false" ) ) {
+    return false;
+  }
+  fprintf( stderr, "Bad %s (%s)\n", name, value );
+  exit( 1 );
+}
+
 static std::string string_from_env( const char* name )
 {
   const char* value = getenv( name );
@@ -150,6 +166,7 @@ int main( int argc, char* argv[] )
   std::string state_zstd_dictionary = string_from_env( "MOSH_STATE_ZSTD_DICT" );
   std::string state_sample_log = string_from_env( "MOSH_STATE_SAMPLE_LOG" );
   unsigned int state_sample_min_size = uint_from_env( "MOSH_STATE_SAMPLE_MIN_SIZE", 0 );
+  bool compact_keepalive = bool_from_env( "MOSH_COMPACT_KEEPALIVE", false );
   /* For security, make sure we don't dump core */
   Crypto::disable_dumping_core();
 
@@ -288,7 +305,8 @@ int main( int argc, char* argv[] )
                       stream_delay_ms,
                       stream_rate_bytes_per_second,
                       state_sample_log,
-                      state_sample_min_size );
+                      state_sample_min_size,
+                      compact_keepalive );
     client.init();
 
     try {

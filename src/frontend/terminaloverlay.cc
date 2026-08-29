@@ -153,8 +153,9 @@ void ConditionalCursorMove::apply( Framebuffer& fb, uint64_t confirmed_epoch ) c
 }
 
 NotificationEngine::NotificationEngine()
-  : last_word_from_server( timestamp() ), last_acked_state( timestamp() ), escape_key_string(), message(),
-    message_is_network_error( false ), message_expiration( -1 ), show_quit_keystroke( true )
+  : last_word_from_server( timestamp() ), last_acked_state( timestamp() ), keepalive_interval( Network::ACK_INTERVAL ),
+    escape_key_string(), message(), message_is_network_error( false ), message_expiration( -1 ),
+    show_quit_keystroke( true )
 {}
 
 static std::string human_readable_duration( int num_seconds, const std::string& seconds_abbr )
@@ -318,7 +319,7 @@ int NotificationEngine::wait_time( void ) const
     if ( ( now - last_word_from_server ) > 60000 ) {
       /* If we've been disconnected for 60 seconds, save power by updating the
          display less often.  See #243. */
-      countup_interval = Network::ACK_INTERVAL;
+      countup_interval = keepalive_interval;
     }
     next_expiry = std::min( next_expiry, countup_interval );
   }

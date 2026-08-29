@@ -33,6 +33,7 @@
 #ifndef NETWORK_TRANSPORT_HPP
 #define NETWORK_TRANSPORT_HPP
 
+#include <algorithm>
 #include <csignal>
 #include <ctime>
 #include <deque>
@@ -73,18 +74,24 @@ public:
   Transport( MyState& initial_state,
              RemoteState& initial_remote,
              const char* desired_ip,
-             const char* desired_port );
+             const char* desired_port,
+             bool compact_keepalive = false );
   Transport( MyState& initial_state,
              RemoteState& initial_remote,
              const char* key_str,
              const char* ip,
-             const char* port );
+             const char* port,
+             bool compact_keepalive = false );
 
   /* Send data or an ack if necessary. */
-  void tick( void ) { sender.tick(); }
+  void tick( void )
+  {
+    sender.tick();
+    connection.tick();
+  }
 
   /* Returns the number of ms to wait until next possible event. */
-  int wait_time( void ) { return sender.wait_time(); }
+  int wait_time( void ) { return std::min( sender.wait_time(), connection.keepalive_wait_time() ); }
   bool has_unsent_data( void ) const { return sender.has_unsent_data(); }
   size_t max_datagram_payload( void ) const;
 
@@ -136,6 +143,8 @@ public:
   void set_send_delay( int new_delay ) { sender.set_send_delay( new_delay ); }
 
   uint64_t get_sent_state_acked_timestamp( void ) const { return sender.get_sent_state_acked_timestamp(); }
+  uint64_t get_last_roundtrip_success( void ) const { return connection.get_last_roundtrip_success(); }
+  unsigned int get_keepalive_interval( void ) const { return connection.get_keepalive_interval(); }
   uint64_t get_sent_state_acked( void ) const { return sender.get_sent_state_acked(); }
   uint64_t get_sent_state_last( void ) const { return sender.get_sent_state_last(); }
 

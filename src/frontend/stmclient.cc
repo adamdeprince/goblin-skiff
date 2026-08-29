@@ -263,7 +263,8 @@ void STMClient::main_init( void )
   /* open network */
   Network::UserStream blank;
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
-  network = NetworkPointer( new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str() ) );
+  network = NetworkPointer(
+    new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive ) );
 
   if ( !state_sample_log.empty() ) {
     network->set_state_sample_log( state_sample_log, state_sample_min_size );
@@ -344,7 +345,12 @@ void STMClient::process_network_input( void )
 
   /* Now give hints to the overlays */
   overlays.get_notification_engine().server_heard( network->get_latest_remote_state().timestamp );
-  overlays.get_notification_engine().server_acked( network->get_sent_state_acked_timestamp() );
+  uint64_t last_reply = network->get_sent_state_acked_timestamp();
+  const uint64_t last_roundtrip = network->get_last_roundtrip_success();
+  if ( last_roundtrip != uint64_t( -1 ) && ( last_reply == uint64_t( -1 ) || last_roundtrip > last_reply ) ) {
+    last_reply = last_roundtrip;
+  }
+  overlays.get_notification_engine().server_acked( last_reply );
 
   overlays.get_prediction_engine().set_local_frame_acked( network->get_sent_state_acked() );
   overlays.get_prediction_engine().set_send_interval( network->send_interval() );
@@ -516,6 +522,9 @@ bool STMClient::main( void )
 
   while ( 1 ) {
     try {
+      if ( compact_keepalive ) {
+        overlays.get_notification_engine().set_keepalive_interval( network->get_keepalive_interval() );
+      }
       output_new_frame();
 
       uint64_t now = timestamp();

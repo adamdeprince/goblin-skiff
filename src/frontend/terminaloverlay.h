@@ -150,14 +150,25 @@ class NotificationEngine
 private:
   uint64_t last_word_from_server;
   uint64_t last_acked_state;
+  unsigned int keepalive_interval;
   std::string escape_key_string;
   std::wstring message;
   bool message_is_network_error;
   uint64_t message_expiration;
   bool show_quit_keystroke;
 
-  bool server_late( uint64_t ts ) const { return ( ts - last_word_from_server ) > 6500; }
-  bool reply_late( uint64_t ts ) const { return ( ts - last_acked_state ) > 10000; }
+  bool server_late( uint64_t ts ) const
+  {
+    const unsigned int threshold
+      = keepalive_interval == Network::ACK_INTERVAL ? 6500 : keepalive_interval + 5000;
+    return ( ts - last_word_from_server ) > threshold;
+  }
+  bool reply_late( uint64_t ts ) const
+  {
+    const unsigned int threshold
+      = keepalive_interval == Network::ACK_INTERVAL ? 10000 : keepalive_interval + 5000;
+    return ( ts - last_acked_state ) > threshold;
+  }
   bool need_countup( uint64_t ts ) const { return server_late( ts ) || reply_late( ts ); }
 
 public:
@@ -166,6 +177,7 @@ public:
   const std::wstring& get_notification_string( void ) const { return message; }
   void server_heard( uint64_t s_last_word ) { last_word_from_server = s_last_word; }
   void server_acked( uint64_t s_last_acked ) { last_acked_state = s_last_acked; }
+  void set_keepalive_interval( unsigned int s_interval ) { keepalive_interval = s_interval; }
   int wait_time( void ) const;
 
   void set_notification_string( const std::wstring& s_message,
@@ -196,7 +208,7 @@ public:
 
     message = tmp;
     message_is_network_error = true;
-    message_expiration = timestamp() + Network::ACK_INTERVAL + 100;
+    message_expiration = timestamp() + keepalive_interval + 100;
   }
 
   void clear_network_error()

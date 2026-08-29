@@ -100,6 +100,16 @@ Usage
   below the path-MTU payload budget.  `adam-moshcp` bulk datagrams are sent only
   when no reliable terminal or forwarded stream traffic is queued.
 
+  Sustained terminal state updates are paced between 10 frames per second on
+  low-RTT paths and 4 frames per second on high-RTT paths.  The first update
+  after an idle period still leaves promptly.  After 15 seconds with no
+  traffic, clients and servers that negotiate `keepalive-v1` use an
+  authenticated connection-layer ping and pong.  Continued inactivity backs
+  the interval off through 15 seconds, 30 seconds, 1, 2, 4, 8, and 15 minutes;
+  real terminal, forwarding, or bulk traffic resets it to 15 seconds.  These
+  keepalives bypass terminal state serialization, compression, fragmentation,
+  and chaff.  Mixed-version connections retain the legacy state heartbeat.
+
   `adam-moshcp` transfers files over an active Mosh session.  Start a receiver on
   one side of the session and a sender on the other:
 
