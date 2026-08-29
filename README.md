@@ -132,7 +132,11 @@ Usage
   Static Kitty graphics sent as RGB, RGBA, or PNG are normalized once to
   lossless WebP and synchronized as image and placement state.  Placement-only
   changes do not resend pixels.  The client decodes WebP and emits standard
-  Kitty RGBA commands to the local terminal.
+  Kitty RGBA commands to the local terminal.  The wrapper also exposes the
+  local terminal type to the remote login session, so a client running with
+  `TERM=xterm-ghostty` advertises Ghostty's Kitty graphics support to remote
+  applications.  The corresponding terminfo entry must be installed on the
+  remote host.
 
   State sample logs contain the uncompressed terminal update stream and may
   include sensitive terminal contents.  A dictionary passed with

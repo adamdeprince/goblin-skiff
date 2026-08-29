@@ -92,6 +92,7 @@ my $state_sample_log = undef;
 my $state_sample_min_size = undef;
 my $remote_state_zstd_dict = undef;
 my $uploaded_state_zstd_dict = 0;
+my $client_term = $ENV{ 'TERM' };
 
 my $term_init = 1;
 
@@ -654,6 +655,7 @@ sub server_command_string {
 
 sub server_environment_prefix {
   my @assignments;
+  push @assignments, shell_assign( "MOSH_CLIENT_TERM", $client_term ) if defined $client_term and length $client_term;
   push @assignments, shell_assign( "MOSH_STREAM_DELAY", $stream_delay ) if defined $stream_delay;
   push @assignments, shell_assign( "MOSH_STREAM_BANDWIDTH", $stream_bandwidth ) if defined $stream_bandwidth;
   push @assignments, shell_assign( "MOSH_STATE_ZSTD_DICT", $remote_state_zstd_dict ) if defined $remote_state_zstd_dict;

@@ -10,7 +10,9 @@ set -eu
 
 run_local()
 {
-    TERM=xterm \
+    client_term=$1
+    shift
+    TERM="$client_term" \
         ./inpty \
         ../../scripts/adam-mosh \
         --client="../frontend/adam-mosh-client" \
@@ -19,9 +21,15 @@ run_local()
         -- "$@"
 }
 
-out=$(run_local printf 'he%s\n' llo)
+out=$(run_local xterm printf 'he%s\n' llo)
 case "$out" in
     *hello*) ;;
+    *) exit 1;;
+esac
+
+out=$(run_local vt100 sh -c 'printf "client TERM: %s\n" "$TERM"')
+case "$out" in
+    *"client TERM: vt100"*) ;;
     *) exit 1;;
 esac
 

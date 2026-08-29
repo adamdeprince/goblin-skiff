@@ -42,6 +42,11 @@ helper program on the server, then closes the SSH connection and
 starts the \fBadam-mosh-client\fP, which establishes a long-lived datagram
 connection over UDP.
 
+The wrapper passes the client's \fBTERM\fP value to the remote login session.
+This lets remote applications detect client capabilities such as the Kitty
+graphics protocol advertised by \fBxterm\-ghostty\fP. The corresponding
+terminfo entry must be installed on the remote host.
+
 To improve responsiveness, \fBadam-mosh\fP runs a predictive model of the
 server's behavior in the background, trying to guess the effect of
 each keystroke on the screen. It makes predictions for normal typing,

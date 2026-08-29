@@ -161,6 +161,13 @@ Default forwarded-stream coalescing delay in milliseconds. See
 .BR adam-mosh (1).
 
 .TP
+.B MOSH_CLIENT_TERM
+Client terminal type supplied by the \fBadam-mosh\fP wrapper. The server uses
+this value as \fBTERM\fP for the login session. If it is unset or empty, the
+server falls back to \fBxterm\fP or \fBxterm\-256color\fP based on the detected
+color count.
+
+.TP
 .B MOSH_STREAM_BANDWIDTH
 Default forwarded-stream payload-byte-per-second cap. See
 .BR adam-mosh (1).

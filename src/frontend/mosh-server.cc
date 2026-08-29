@@ -117,6 +117,7 @@ static int run_server( const char* desired_ip,
                        const std::string& command_path,
                        char* command_argv[],
                        const int colors,
+                       const std::string& client_term,
                        unsigned int verbose,
                        bool with_motd,
                        const std::vector<std::string>& remote_forwards,
@@ -241,6 +242,8 @@ int main( int argc, char* argv[] )
   std::string command_path;
   char** command_argv = NULL;
   int colors = 0;
+  const char* client_term_env = getenv( "MOSH_CLIENT_TERM" );
+  std::string client_term = client_term_env ? client_term_env : "";
   unsigned int verbose = 0; /* don't close stdin/stdout/stderr */
   std::vector<std::string> remote_forwards;
   bool agent_forwarding = false;
@@ -456,6 +459,7 @@ int main( int argc, char* argv[] )
                        command_path,
                        command_argv,
                        colors,
+                       client_term,
                        verbose,
                        with_motd,
                        remote_forwards,
@@ -482,6 +486,7 @@ static int run_server( const char* desired_ip,
                        const std::string& command_path,
                        char* command_argv[],
                        const int colors,
+                       const std::string& client_term,
                        unsigned int verbose,
                        bool with_motd,
                        const std::vector<std::string>& remote_forwards,
@@ -706,8 +711,13 @@ static int run_server( const char* desired_ip,
     const char default_term[] = "xterm";
     const char color_term[] = "xterm-256color";
 
-    if ( setenv( "TERM", ( colors == 256 ) ? color_term : default_term, true ) < 0 ) {
+    const char* term = client_term.empty() ? ( ( colors == 256 ) ? color_term : default_term ) : client_term.c_str();
+    if ( setenv( "TERM", term, true ) < 0 ) {
       perror( "setenv" );
+      exit( 1 );
+    }
+    if ( unsetenv( "MOSH_CLIENT_TERM" ) < 0 ) {
+      perror( "unsetenv" );
       exit( 1 );
     }
 
