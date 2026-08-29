@@ -111,6 +111,8 @@ public:
   {
     std::string user_bytes;
     std::vector<ClipboardEvent> events;
+
+    Output() : user_bytes(), events() {}
   };
 
   Osc52InputFilter() : state_( Ground ), buf_(), overflow_( false ) {}
