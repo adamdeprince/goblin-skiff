@@ -62,7 +62,7 @@ def write_all(fd: int, data: bytes) -> None:
 
 
 def marker(text: str) -> None:
-    write_all(sys.stdout.fileno(), (f"\r\n{text}\r\n").encode("ascii"))
+    write_all(sys.stdout.fileno(), (f"\x1b]2;{text}\x07").encode("ascii"))
 
 
 def wait_for_go(token: str) -> None:

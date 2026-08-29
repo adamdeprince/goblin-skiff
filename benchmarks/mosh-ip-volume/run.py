@@ -79,6 +79,12 @@ class VisibleAscii:
     def __init__(self) -> None:
         self.data = bytearray()
         self.state = "text"
+        self.osc = bytearray()
+
+    def finish_osc(self) -> None:
+        self.data.extend(self.osc)
+        self.osc.clear()
+        self.state = "text"
 
     def feed(self, chunk: bytes) -> None:
         for byte in chunk:
@@ -87,14 +93,20 @@ class VisibleAscii:
                     self.state = "escape"
                 elif byte == 0x9B:
                     self.state = "csi"
-                elif byte in (0x90, 0x9D, 0x9E, 0x9F):
+                elif byte == 0x9D:
+                    self.osc.clear()
+                    self.state = "osc"
+                elif byte in (0x90, 0x9E, 0x9F):
                     self.state = "string"
                 elif 0x20 <= byte <= 0x7E:
                     self.data.append(byte)
             elif self.state == "escape":
                 if byte == ord("["):
                     self.state = "csi"
-                elif byte in (ord("P"), ord("]"), ord("^"), ord("_"), ord("X")):
+                elif byte == ord("]"):
+                    self.osc.clear()
+                    self.state = "osc"
+                elif byte in (ord("P"), ord("^"), ord("_"), ord("X")):
                     self.state = "string"
                 elif 0x20 <= byte <= 0x2F:
                     self.state = "escape-intermediate"
@@ -106,6 +118,18 @@ class VisibleAscii:
             elif self.state == "csi":
                 if 0x40 <= byte <= 0x7E:
                     self.state = "text"
+            elif self.state == "osc":
+                if byte in (0x07, 0x9C):
+                    self.finish_osc()
+                elif byte == 0x1B:
+                    self.state = "osc-escape"
+                elif len(self.osc) < 4096:
+                    self.osc.append(byte)
+            elif self.state == "osc-escape":
+                if byte == ord("\\"):
+                    self.finish_osc()
+                elif byte != 0x1B:
+                    self.state = "osc"
             elif self.state == "string":
                 if byte in (0x07, 0x9C):
                     self.state = "text"

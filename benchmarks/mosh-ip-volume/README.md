@@ -46,10 +46,11 @@ packets instead of reporting a misleading zero.
 The harness uploads `workload.py` to a private cache directory on the server,
 starts Mosh on a unique UDP port, and captures only UDP traffic for that server
 and port. Tcpdump runs in immediate mode so short runs are not left in libpcap's
-kernel buffer at shutdown. The remote workload prints a READY marker and waits.
-When the local runner sees it, it timestamps and sends a one-byte start signal.
-The workload then emits a fixed terminal byte stream and finishes with a DONE
-marker.
+kernel buffer at shutdown. The remote workload sets a READY terminal-title
+marker and waits. When the local runner sees it, it timestamps and sends a
+one-byte start signal. The workload then emits a fixed terminal byte stream and
+finishes with a DONE terminal-title marker. Title state is atomic, so
+screen-diff cursor motion cannot split or elide marker characters.
 
 Two accounting windows are recorded:
 

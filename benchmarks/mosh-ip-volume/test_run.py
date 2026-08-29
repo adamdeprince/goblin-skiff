@@ -42,6 +42,13 @@ class RunTest(unittest.TestCase):
             visible.data,
         )
 
+    def test_visible_ascii_collects_atomic_title_marker(self) -> None:
+        visible = benchmark.VisibleAscii()
+        marker = b"MOSH_IP_BENCH_DONE:abc123:1:" + b"x" * 43
+        visible.feed(b"\x1b]0;" + marker[:20])
+        visible.feed(marker[20:] + b"\x07")
+        self.assertIn(marker, visible.data)
+
     def test_matched_workloads_must_have_identical_output(self) -> None:
         expected: dict[tuple[str, int, int], tuple[int, str, str]] = {}
         patched = benchmark.Job(
