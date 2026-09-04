@@ -39,6 +39,7 @@
 
 #include "src/terminal/kittygraphics.h"
 #include "src/terminal/osc52.h"
+#include "src/terminal/terminalgeometry.h"
 
 namespace Parser {
 class Action;
@@ -109,6 +110,7 @@ private:
   bool kitty_uploading;
   KittyCommand kitty_partial;
   std::string kitty_payload;
+  const ClientGeometry* client_geometry;
 
   void parse_params( void );
   void finish_kitty_upload( Framebuffer* fb );
@@ -142,6 +144,9 @@ public:
   void APC_dispatch( const Parser::APC_End* act, Framebuffer* fb );
 
   std::vector<ClipboardEvent> take_clipboard_events( void );
+
+  void set_client_geometry( const ClientGeometry* geometry ) { client_geometry = geometry; }
+  const ClientGeometry* get_client_geometry( void ) const { return client_geometry; }
 
   bool operator==( const Dispatcher& x ) const;
 };

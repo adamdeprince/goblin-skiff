@@ -33,6 +33,14 @@ case "$out" in
     *) exit 1;;
 esac
 
+# The outer PTY advertises 800x480 pixels over an 80x24 cell grid. Verify
+# that attachment geometry reaches the remote PTY and answers CSI 16 t.
+out=$(run_local xterm "$PWD/terminal-geometry" --remote-query)
+case "$out" in
+    *terminal-geometry-query-ok*) ;;
+    *) exit 1;;
+esac
+
 # A command that produces no final terminal update used to enter shutdown
 # with an empty reliable queue, then try to append forwarding events after
 # TransportSender had frozen its state.  Bound this test so that regression

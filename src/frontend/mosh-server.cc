@@ -211,6 +211,28 @@ static bool has_capability( const char* list, const std::string& capability )
   return false;
 }
 
+static Terminal::ClientGeometry sanitize_client_geometry( const Terminal::ClientGeometry& geometry )
+{
+  static const uint32_t MAX_GEOMETRY_VALUE = 65535;
+  Terminal::ClientGeometry result = geometry;
+
+  if ( !result.has_grid() || result.columns > MAX_GEOMETRY_VALUE || result.rows > MAX_GEOMETRY_VALUE ) {
+    return Terminal::ClientGeometry();
+  }
+  if ( !result.has_pixel_size() || result.width_px > MAX_GEOMETRY_VALUE
+       || result.height_px > MAX_GEOMETRY_VALUE ) {
+    result.width_px = 0;
+    result.height_px = 0;
+  }
+  if ( !result.has_cell_size() || result.cell_width_px > MAX_GEOMETRY_VALUE
+       || result.cell_height_px > MAX_GEOMETRY_VALUE ) {
+    result.cell_width_px = result.width_px / result.columns;
+    result.cell_height_px = result.height_px / result.rows;
+  }
+
+  return result;
+}
+
 /* Simple spinloop */
 static void spin( void )
 {
@@ -898,6 +920,7 @@ static void serve( int host_fd,
   sel.add_signal( SIGUSR1 );
 
   uint64_t last_remote_num = network.get_remote_state_num();
+  Terminal::ClientGeometry client_geometry;
 
 #ifdef HAVE_UTEMPTER
   bool connected_utmp = false;
@@ -997,6 +1020,10 @@ static void serve( int host_fd,
           us.apply_string( network.get_remote_diff() );
           /* apply userstream to terminal */
           for ( size_t i = 0; i < us.size(); i++ ) {
+            if ( us.is_client_geometry_event( i ) ) {
+              client_geometry = sanitize_client_geometry( us.get_client_geometry_event( i ) );
+              continue;
+            }
             if ( us.is_stream_event( i ) ) {
               forwarder.handle_remote_event( us.get_stream_event( i ) );
               continue;
@@ -1029,6 +1056,14 @@ static void serve( int host_fd,
               }
               window_size.ws_col = res.width;
               window_size.ws_row = res.height;
+              if ( client_geometry.columns == res.width && client_geometry.rows == res.height ) {
+                window_size.ws_xpixel = client_geometry.width_px;
+                window_size.ws_ypixel = client_geometry.height_px;
+              } else {
+                window_size.ws_xpixel = 0;
+                window_size.ws_ypixel = 0;
+                client_geometry = Terminal::ClientGeometry();
+              }
               if ( ioctl( host_fd, TIOCSWINSZ, &window_size ) < 0 ) {
                 perror( "ioctl TIOCSWINSZ" );
                 network.start_shutdown();
@@ -1124,7 +1159,7 @@ static void serve( int host_fd,
         if ( bytes_read <= 0 ) {
           network.start_shutdown();
         } else {
-          terminal_to_host += terminal.act( std::string( buf, bytes_read ) );
+          terminal_to_host += terminal.act( std::string( buf, bytes_read ), &client_geometry );
 
           /* update client with new state of terminal */
           network.get_current_state().replace_terminal_state( terminal );

@@ -67,6 +67,18 @@
 
 #include "src/network/networktransport-impl.h"
 
+static Terminal::ClientGeometry client_geometry_from_winsize( const struct winsize& window_size )
+{
+  const uint32_t columns = window_size.ws_col;
+  const uint32_t rows = window_size.ws_row;
+  const uint32_t width_px = window_size.ws_xpixel;
+  const uint32_t height_px = window_size.ws_ypixel;
+  const uint32_t cell_width_px = columns != 0 ? width_px / columns : 0;
+  const uint32_t cell_height_px = rows != 0 ? height_px / rows : 0;
+
+  return Terminal::ClientGeometry( columns, rows, width_px, height_px, cell_width_px, cell_height_px );
+}
+
 void STMClient::resume( void )
 {
   /* Restore termios state */
@@ -271,8 +283,11 @@ void STMClient::main_init( void )
   }
   network->set_send_delay( 1 ); /* minimal delay on outgoing keystrokes */
 
-  /* tell server the size of the terminal */
+  /* Tell the server about this attachment before releasing the remote PTY.
+     Pixel geometry is an ephemeral control event, not terminal state. */
+  network->get_current_state().push_back( client_geometry_from_winsize( window_size ) );
   network->get_current_state().push_back( Parser::Resize( window_size.ws_col, window_size.ws_row ) );
+  network->request_immediate_send();
 
   /* be noisy as necessary */
   network->set_verbose( verbose );
@@ -488,11 +503,15 @@ bool STMClient::process_resize( void )
     return false;
   }
 
-  /* tell remote emulator */
+  /* Tell the server about presentation geometry before the logical resize so
+     it can update the PTY atomically before delivering SIGWINCH. */
+  Terminal::ClientGeometry geometry = client_geometry_from_winsize( window_size );
   Parser::Resize res( window_size.ws_col, window_size.ws_row );
 
   if ( !network->shutdown_in_progress() ) {
+    network->get_current_state().push_back( geometry );
     network->get_current_state().push_back( res );
+    network->request_immediate_send();
   }
 
   /* note remote emulator will probably reply with its own Resize to adjust our state */

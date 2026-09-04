@@ -46,8 +46,9 @@ using namespace Parser;
 using namespace Terminal;
 using namespace HostBuffers;
 
-string Complete::act( const string& str )
+string Complete::act( const string& str, const ClientGeometry* client_geometry )
 {
+  terminal.set_client_geometry( client_geometry );
   for ( unsigned int i = 0; i < str.size(); i++ ) {
     /* parse octet into up to three actions */
     parser.input( str[i], actions );
@@ -60,7 +61,9 @@ string Complete::act( const string& str )
     actions.clear();
   }
 
-  return terminal.read_octets_to_host();
+  string reply = terminal.read_octets_to_host();
+  terminal.set_client_geometry( NULL );
+  return reply;
 }
 
 string Complete::act( const Action& act )

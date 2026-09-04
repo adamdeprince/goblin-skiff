@@ -141,6 +141,7 @@ public:
   }
 
   void set_send_delay( int new_delay ) { sender.set_send_delay( new_delay ); }
+  void request_immediate_send( void ) { sender.request_immediate_send(); }
 
   uint64_t get_sent_state_acked_timestamp( void ) const { return sender.get_sent_state_acked_timestamp(); }
   uint64_t get_last_roundtrip_success( void ) const { return connection.get_last_roundtrip_success(); }

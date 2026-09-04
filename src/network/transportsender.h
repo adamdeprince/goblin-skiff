@@ -108,6 +108,7 @@ private:
   const std::string make_chaff( void );
 
   uint64_t mindelay_clock; /* time of first pending change to current state */
+  bool immediate_send_requested;
 
   bool peer_zstd_supported;
   std::string peer_zstd_dictionary_id;
@@ -175,6 +176,7 @@ public:
   bool shutdown_ack_timed_out( void ) const;
 
   void set_send_delay( int new_delay ) { SEND_MINDELAY = new_delay; }
+  void request_immediate_send( void ) { immediate_send_requested = true; }
 
   unsigned int send_interval( void ) const;
 

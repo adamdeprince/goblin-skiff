@@ -39,8 +39,8 @@ displaytests = \
 	unicode-later-combining.test \
 	window-resize.test
 
-check_PROGRAMS = ocb-aes encrypt-decrypt base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics
-TESTS = ocb-aes encrypt-decrypt base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics local.test $(displaytests)
+check_PROGRAMS = ocb-aes encrypt-decrypt base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry
+TESTS = ocb-aes encrypt-decrypt base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry local.test $(displaytests)
 XFAIL_TESTS = \
 	e2e-failure.test \
 	emulation-attributes-256color8.test
@@ -104,6 +104,10 @@ osc52_parse_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.
 kitty_graphics_SOURCES = kitty-graphics.cc
 kitty_graphics_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS)
 kitty_graphics_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS)
+
+terminal_geometry_SOURCES = terminal-geometry.cc
+terminal_geometry_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS)
+terminal_geometry_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS)
 
 clean-local: clean-local-check
 .PHONY: clean-local-check

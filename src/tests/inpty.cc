@@ -67,6 +67,8 @@ int main( int argc, char* argv[] )
   memset( &winsize, 0, sizeof( winsize ) );
   winsize.ws_col = 80;
   winsize.ws_row = 24;
+  winsize.ws_xpixel = 800;
+  winsize.ws_ypixel = 480;
 
   int saved_stderr = dup( STDERR_FILENO );
   if ( saved_stderr < 0 ) {

@@ -490,6 +490,40 @@ static void CSI_DSR( Framebuffer* fb, Dispatcher* dispatch )
 
 static Function func_CSI_DSR( CSI, "n", CSI_DSR );
 
+/* xterm window-size reports. Pixel geometry belongs to the attached client,
+   so it is supplied transiently by the frontend and never enters the
+   framebuffer state. */
+static void CSI_XTWINOPS( Framebuffer* fb, Dispatcher* dispatch )
+{
+  if ( dispatch->param_count() != 1 ) {
+    return;
+  }
+  const int param = dispatch->getparam( 0, 0 );
+  char reply[64];
+
+  if ( param == 18 ) { /* text area in characters */
+    snprintf( reply, sizeof( reply ), "\033[8;%d;%dt", fb->ds.get_height(), fb->ds.get_width() );
+    dispatch->terminal_to_host.append( reply );
+    return;
+  }
+
+  const ClientGeometry* geometry = dispatch->get_client_geometry();
+  if ( geometry == NULL || geometry->columns != static_cast<uint32_t>( fb->ds.get_width() )
+       || geometry->rows != static_cast<uint32_t>( fb->ds.get_height() ) ) {
+    return;
+  }
+
+  if ( param == 14 && geometry->has_pixel_size() ) { /* text area in pixels */
+    snprintf( reply, sizeof( reply ), "\033[4;%u;%ut", geometry->height_px, geometry->width_px );
+    dispatch->terminal_to_host.append( reply );
+  } else if ( param == 16 && geometry->has_cell_size() ) { /* character cell in pixels */
+    snprintf( reply, sizeof( reply ), "\033[6;%u;%ut", geometry->cell_height_px, geometry->cell_width_px );
+    dispatch->terminal_to_host.append( reply );
+  }
+}
+
+static Function func_CSI_XTWINOPS( CSI, "t", CSI_XTWINOPS, false );
+
 /* insert line */
 static void CSI_IL( Framebuffer* fb, Dispatcher* dispatch )
 {

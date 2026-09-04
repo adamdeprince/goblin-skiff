@@ -24,9 +24,19 @@ message ResizeMessage {
   optional int32 height = 6;
 }
 
+message ClientGeometryMessage {
+  optional uint32 columns = 1;
+  optional uint32 rows = 2;
+  optional uint32 width_px = 3;
+  optional uint32 height_px = 4;
+  optional uint32 cell_width_px = 5;
+  optional uint32 cell_height_px = 6;
+}
+
 extend Instruction {
   optional Keystroke keystroke = 2;
   optional ResizeMessage resize = 3;
   optional StreamBuffers.StreamEvent stream = 9;
   optional ClipboardBuffers.ClipboardEvent clipboard = 10;
+  optional ClientGeometryMessage client_geometry = 11;
 }

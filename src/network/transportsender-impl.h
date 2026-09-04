@@ -57,7 +57,8 @@ TransportSender<MyState>::TransportSender( Connection* s_connection,
     next_ack_time( s_compact_keepalive ? uint64_t( -1 ) : timestamp() ), next_send_time( timestamp() ),
     compact_keepalive( s_compact_keepalive ), verbose( 0 ), shutdown_in_progress( false ), shutdown_tries( 0 ),
     shutdown_start( -1 ), ack_num( 0 ), pending_data_ack( false ), SEND_MINDELAY( 8 ), last_heard( 0 ), prng(),
-    mindelay_clock( -1 ), peer_zstd_supported( false ), peer_zstd_dictionary_id()
+    mindelay_clock( -1 ), immediate_send_requested( false ), peer_zstd_supported( false ),
+    peer_zstd_dictionary_id()
 {}
 
 /* Try to send roughly two frames per RTT, bounded by limits on frame rate */
@@ -105,6 +106,11 @@ void TransportSender<MyState>::calculate_timers( void )
     next_send_time = sent_states.back().timestamp + connection->timeout() + ACK_DELAY;
   } else {
     next_send_time = uint64_t( -1 );
+  }
+
+  /* Attachment control metadata must not wait for the frame-pacing timer. */
+  if ( immediate_send_requested && !( current_state == sent_states.back().state ) ) {
+    next_send_time = now;
   }
 
   /* speed up shutdown sequence */
@@ -180,6 +186,7 @@ void TransportSender<MyState>::tick( void )
   }
 
   if ( diff.empty() ) {
+    immediate_send_requested = false;
     if ( ( now >= next_ack_time ) ) {
       send_empty_ack();
       mindelay_clock = uint64_t( -1 );
@@ -191,6 +198,7 @@ void TransportSender<MyState>::tick( void )
   } else if ( ( now >= next_send_time ) || ( now >= next_ack_time ) ) {
     /* Send diffs or ack */
     send_to_receiver( diff );
+    immediate_send_requested = false;
     mindelay_clock = uint64_t( -1 );
   }
 }

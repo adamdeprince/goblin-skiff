@@ -46,7 +46,7 @@ using namespace Terminal;
 Dispatcher::Dispatcher()
   : params(), parsed_params(), parsed( false ), dispatch_chars(), OSC_string(), OSC_overflow( false ),
     clipboard_events(), APC_string(), APC_overflow( false ), kitty_uploading( false ), kitty_partial(),
-    kitty_payload(), terminal_to_host()
+    kitty_payload(), client_geometry( NULL ), terminal_to_host()
 {}
 
 void Dispatcher::newparamchar( const Parser::Param* act )

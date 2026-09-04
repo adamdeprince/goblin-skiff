@@ -71,7 +71,7 @@ public:
       stream_events(), clipboard_events()
   {}
 
-  std::string act( const std::string& str );
+  std::string act( const std::string& str, const ClientGeometry* client_geometry = NULL );
   std::string act( const Parser::Action& act );
   void push_back( const Network::StreamEvent& event ) { stream_events.push_back( event ); }
   void push_back( const ClipboardEvent& event ) { clipboard_events.push_back( event ); }

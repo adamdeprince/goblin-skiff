@@ -112,6 +112,16 @@ std::string UserStream::diff_from( const UserStream& existing ) const
         Terminal::clipboard_event_to_proto( new_inst->MutableExtension( ClientBuffers::clipboard ),
                                             my_it->clipboard );
       } break;
+      case UserClientGeometryEventType: {
+        Instruction* new_inst = output.add_instruction();
+        ClientGeometryMessage* geometry = new_inst->MutableExtension( client_geometry );
+        geometry->set_columns( my_it->client_geometry.columns );
+        geometry->set_rows( my_it->client_geometry.rows );
+        geometry->set_width_px( my_it->client_geometry.width_px );
+        geometry->set_height_px( my_it->client_geometry.height_px );
+        geometry->set_cell_width_px( my_it->client_geometry.cell_width_px );
+        geometry->set_cell_height_px( my_it->client_geometry.cell_height_px );
+      } break;
       default:
         assert( !"unexpected event type" );
         break;
@@ -143,6 +153,14 @@ void UserStream::apply_string( const std::string& diff )
     } else if ( input.instruction( i ).HasExtension( ClientBuffers::clipboard ) ) {
       actions.push_back( UserEvent(
         Terminal::clipboard_event_from_proto( input.instruction( i ).GetExtension( ClientBuffers::clipboard ) ) ) );
+    } else if ( input.instruction( i ).HasExtension( client_geometry ) ) {
+      const ClientGeometryMessage& geometry = input.instruction( i ).GetExtension( client_geometry );
+      actions.push_back( UserEvent( Terminal::ClientGeometry( geometry.columns(),
+                                                              geometry.rows(),
+                                                              geometry.width_px(),
+                                                              geometry.height_px(),
+                                                              geometry.cell_width_px(),
+                                                              geometry.cell_height_px() ) ) );
     }
   }
 }
@@ -155,7 +173,8 @@ const Parser::Action& UserStream::get_action( unsigned int i ) const
     case ResizeType:
       return actions[i].resize;
     case UserStreamEventType:
-    case UserClipboardEventType: {
+    case UserClipboardEventType:
+    case UserClientGeometryEventType: {
       static const Parser::Ignore nothing = Parser::Ignore();
       return nothing;
     }
