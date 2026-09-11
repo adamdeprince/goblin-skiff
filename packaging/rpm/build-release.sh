@@ -13,7 +13,7 @@ goblin_save_logs() {
         -exec cp '{}' /out/unit-tests.log \;
 }
 trap goblin_save_logs EXIT
-cp /tmp/goblin-snapshot.tar.gz /build/rpmbuild/SOURCES/goblin-mosh-1.4.0-goblin20260911.1.tar.gz
+cp /tmp/goblin-snapshot.tar.gz /build/rpmbuild/SOURCES/goblin-mosh-1.4.0-goblin20260911.2.tar.gz
 cp /tmp/goblin-mosh.spec /build/rpmbuild/SPECS/goblin-mosh.spec
 rpmbuild -ba --noclean --define '_topdir /build/rpmbuild' --define '_smp_mflags -j12' \
     /build/rpmbuild/SPECS/goblin-mosh.spec

@@ -1,8 +1,8 @@
 class GoblinMosh < Formula
   desc "Mobile shell and file transfers optimized for low-bandwidth links"
   homepage "https://mosh.goblinreactor.com/"
-  url "https://brew.goblinreactor.com/sources/goblin-mosh-1.4.0-goblin20260911.1.tar.gz"
-  version "1.4.0-goblin20260911.1"
+  url "https://brew.goblinreactor.com/sources/goblin-mosh-1.4.0-goblin20260911.2.tar.gz"
+  version "1.4.0-goblin20260911.2"
   sha256 "@SOURCE_SHA256@"
   license all_of: ["GPL-3.0-or-later", "ISC"]
 

@@ -1,4 +1,4 @@
-goblin-mosh (1.4.0+goblin20260911.1) stable; urgency=medium
+goblin-mosh (1.4.0+goblin20260911.2) stable; urgency=medium
 
   * Forward session UDP traffic through authenticated jump relays, including
     SSH ProxyJump configuration and chains of up to four Goblin Mosh servers.

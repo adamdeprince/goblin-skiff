@@ -2,11 +2,11 @@
 
 Name:           goblin-mosh
 Version:        1.4.0
-Release:        20260911.1%{?dist}
+Release:        20260911.2%{?dist}
 Summary:        Mobile shell optimized for low-bandwidth links
 License:        GPL-3.0-or-later AND ISC
 URL:            https://mosh.goblinreactor.com/
-Source0:        goblin-mosh-1.4.0-goblin20260911.1.tar.gz
+Source0:        goblin-mosh-1.4.0-goblin20260911.2.tar.gz
 
 # Preserve the source-file OpenSSL linking exceptions and all upstream notices.
 BuildRequires:  gcc-c++, make, autoconf, automake, pkgconf-pkg-config
@@ -66,7 +66,7 @@ install -m 0644 README.md GOBLIN_DOWNLOAD_PROTOCOL.md SIXEL_STATE.md AUDIO.md UD
 %{_docdir}/%{name}/
 
 %changelog
-* Fri Sep 11 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260911.1
+* Fri Sep 11 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260911.2
 - Carry session UDP traffic through authenticated, independently keyed jump relays.
 - Test installed four-hop transfers and keep prebuilt binaries RaptorQ-free.
 

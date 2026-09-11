@@ -36,6 +36,7 @@
 #include <cassert>
 #include <cerrno>
 #include <cstring>
+#include <stdexcept>
 
 #include <sys/socket.h>
 #include <sys/types.h>
