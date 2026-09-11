@@ -56,7 +56,8 @@ TransportSender<MyState>::TransportSender( Connection* s_connection,
     assumed_receiver_state( sent_states.begin() ), fragmenter(),
     next_ack_time( s_compact_keepalive ? uint64_t( -1 ) : timestamp() ), next_send_time( timestamp() ),
     compact_keepalive( s_compact_keepalive ), verbose( 0 ), shutdown_in_progress( false ), shutdown_tries( 0 ),
-    shutdown_start( -1 ), ack_num( 0 ), pending_data_ack( false ), SEND_MINDELAY( 8 ), last_heard( 0 ), prng(),
+    shutdown_start( -1 ), ack_num( 0 ), pending_data_ack( false ), SEND_MINDELAY( 8 ), last_heard( 0 ),
+    prng( s_connection->get_crypto_mode() ),
     mindelay_clock( -1 ), immediate_send_requested( false ), peer_zstd_supported( false ),
     peer_zstd_dictionary_id()
 {}
@@ -123,6 +124,7 @@ void TransportSender<MyState>::calculate_timers( void )
 template<class MyState>
 int TransportSender<MyState>::wait_time( void )
 {
+  if ( !pending_fragments.empty() ) { return connection->pacing_wait_time( true ); }
   calculate_timers();
 
   uint64_t next_wakeup = next_ack_time;
@@ -142,9 +144,9 @@ int TransportSender<MyState>::wait_time( void )
 
   if ( next_wakeup > now ) {
     const uint64_t wait = next_wakeup - now;
-    return wait > INT_MAX ? INT_MAX : static_cast<int>( wait );
+    return std::max( connection->pacing_wait_time( true ), wait > INT_MAX ? INT_MAX : static_cast<int>( wait ) );
   } else {
-    return 0;
+    return connection->pacing_wait_time( true );
   }
 }
 
@@ -152,6 +154,8 @@ int TransportSender<MyState>::wait_time( void )
 template<class MyState>
 void TransportSender<MyState>::tick( void )
 {
+  if ( !pending_fragments.empty() ) { flush_fragments(); return; }
+  if ( connection->pacing_wait_time( true ) ) { return; }
   calculate_timers(); /* updates assumed receiver state and rationalizes */
 
   if ( !connection->get_has_remote_addr() ) {
@@ -346,13 +350,12 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
   }
 
   std::vector<Fragment> fragments = fragmenter.make_fragments( inst,
-                                                               connection->get_MTU() - Network::Connection::ADDED_BYTES
-                                                                 - Crypto::Session::ADDED_BYTES,
+                                                               connection->get_MTU() - connection->packet_overhead(),
                                                                advertise_zstd && peer_zstd_supported,
                                                                allow_zstd_dictionary,
                                                                local_dictionary_id );
   for ( std::vector<Fragment>::iterator i = fragments.begin(); i != fragments.end(); i++ ) {
-    connection->send( i->tostring() );
+    pending_fragments.push_back( *i );
 
     if ( verbose ) {
       fprintf(
@@ -373,6 +376,20 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
   }
 
   pending_data_ack = false;
+  flush_fragments();
+}
+
+template<class MyState>
+void TransportSender<MyState>::flush_fragments()
+{
+  if ( !connection->get_has_remote_addr() ) { return; }
+  while ( !pending_fragments.empty() && !connection->pacing_wait_time( true ) ) {
+    connection->send( pending_fragments.front().tostring() );
+    pending_fragments.pop_front();
+    // Retransmission time starts at actual transmission, not queueing. Only
+    // one serialized state is retained while the newest screen coalesces.
+    sent_states.back().timestamp = timestamp();
+  }
 }
 
 template<class MyState>

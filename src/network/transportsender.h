@@ -82,6 +82,8 @@ private:
 
   /* for fragment creation */
   Fragmenter fragmenter;
+  std::deque<Fragment> pending_fragments {};
+  void flush_fragments();
 
   /* timing state */
   uint64_t next_ack_time;
@@ -167,11 +169,11 @@ public:
 
   bool get_shutdown_in_progress( void ) const { return shutdown_in_progress; }
   bool get_shutdown_acknowledged( void ) const { return sent_states.front().num == uint64_t( -1 ); }
-  bool get_counterparty_shutdown_acknowledged( void ) const { return fragmenter.last_ack_sent() == uint64_t( -1 ); }
+  bool get_counterparty_shutdown_acknowledged( void ) const { return pending_fragments.empty() && fragmenter.last_ack_sent() == uint64_t( -1 ); }
   uint64_t get_sent_state_acked_timestamp( void ) const { return sent_states.front().timestamp; }
   uint64_t get_sent_state_acked( void ) const { return sent_states.front().num; }
   uint64_t get_sent_state_last( void ) const { return sent_states.back().num; }
-  bool has_unsent_data( void ) const { return !( current_state == sent_states.back().state ); }
+  bool has_unsent_data( void ) const { return !pending_fragments.empty() || !( current_state == sent_states.back().state ); }
 
   bool shutdown_ack_timed_out( void ) const;
 

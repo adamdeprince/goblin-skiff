@@ -54,13 +54,19 @@ void Parser::Parser::input( wchar_t ch, Actions& ret )
   Transition tx = state->input( ch );
 
   if ( tx.next_state != NULL ) {
-    append_or_delete( state->exit(), ret );
+    ActionPointer leaving = state->exit();
+    leaving->ch = ch;
+    leaving->char_present = true;
+    append_or_delete( leaving, ret );
   }
 
   append_or_delete( tx.action, ret );
 
   if ( tx.next_state != NULL ) {
-    append_or_delete( tx.next_state->enter(), ret );
+    ActionPointer entering = tx.next_state->enter();
+    entering->ch = ch;
+    entering->char_present = true;
+    append_or_delete( entering, ret );
     state = tx.next_state;
   }
 }

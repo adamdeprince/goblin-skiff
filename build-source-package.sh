@@ -1,3 +1,4 @@
 #!/bin/sh
 
-gbp buildpackage --git-upstream-branch=master --git-upstream-tree=branch -S
+set -eu
+exec dpkg-buildpackage -us -uc -S "$@"

@@ -75,23 +75,31 @@ public:
              RemoteState& initial_remote,
              const char* desired_ip,
              const char* desired_port,
-             bool compact_keepalive = false );
+             bool compact_keepalive = false,
+             Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB );
   Transport( MyState& initial_state,
              RemoteState& initial_remote,
              const char* key_str,
              const char* ip,
              const char* port,
-             bool compact_keepalive = false );
+             bool compact_keepalive = false,
+             Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB );
 
   /* Send data or an ack if necessary. */
   void tick( void )
   {
-    sender.tick();
     connection.tick();
+    sender.tick();
   }
 
   /* Returns the number of ms to wait until next possible event. */
-  int wait_time( void ) { return std::min( sender.wait_time(), connection.keepalive_wait_time() ); }
+  int wait_time( void ) {
+    return std::min( std::min( sender.wait_time(), connection.keepalive_wait_time() ),
+                     std::max( connection.feedback_wait_time(), connection.pacing_wait_time( true ) ) );
+  }
+  void enable_link_budget( bool enabled ) { connection.enable_link_budget( enabled ); }
+  const LinkBudget& link_budget() const { return connection.link_budget(); }
+  int bulk_wait_time() { return connection.pacing_wait_time(); }
   bool has_unsent_data( void ) const { return sender.has_unsent_data(); }
   size_t max_datagram_payload( void ) const;
 

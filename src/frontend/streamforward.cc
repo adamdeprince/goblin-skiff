@@ -11,6 +11,7 @@
 #include "streamforward.h"
 
 #include "src/include/config.h"
+#include "src/crypto/prng.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -125,9 +126,20 @@ static std::string display_host( const std::string& display )
   return display.substr( 0, colon );
 }
 
-static bool fill_random( std::string& out, size_t size )
+static bool fill_random( std::string& out, size_t size, Crypto::Mode mode )
 {
   out.assign( size, '\0' );
+  if ( size == 0 ) {
+    return true;
+  }
+  if ( mode == Crypto::Mode::FipsAES128GCM ) {
+    try {
+      PRNG( mode ).fill( &out[0], size );
+      return true;
+    } catch ( const Crypto::CryptoException& ) {
+      return false;
+    }
+  }
 #if defined( HAVE_GETRANDOM ) && defined( HAVE_SYS_RANDOM_H )
   size_t offset = 0;
   while ( offset < size ) {
@@ -245,9 +257,12 @@ static bool write_xauthority_cookie( const std::string& path, uint32_t display_n
 
 StreamForwarder::StreamForwarder( Side s_side,
                                   unsigned int s_stream_delay_ms,
-                                  unsigned int s_stream_rate_bytes_per_second )
-  : side( s_side ), next_stream_id( s_side == ClientSide ? 1 : 2 ), stream_delay_ms( s_stream_delay_ms ),
+                                  unsigned int s_stream_rate_bytes_per_second,
+                                  Crypto::Mode s_crypto_mode )
+  : side( s_side ), crypto_mode( s_crypto_mode ), next_stream_id( s_side == ClientSide ? 1 : 2 ),
+    stream_delay_ms( s_stream_delay_ms ),
     stream_rate_bytes_per_second( s_stream_rate_bytes_per_second ? s_stream_rate_bytes_per_second : 2048 ),
+    automatic_rate( s_stream_rate_bytes_per_second == 0 ),
     stream_tokens(), last_token_update( Network::timestamp() ), agent_requested( false ), x11_requested( false ),
     agent_path(), agent_dir(), local_agent_path(), local_x11_display(), local_x11_auth_data(), x11_auth_data(),
     x11_auth_path(), x11_display_string(), requested_listeners(), listeners(), streams(), fd_to_stream(),
@@ -282,6 +297,13 @@ StreamForwarder::~StreamForwarder()
   }
   if ( !x11_auth_path.empty() ) {
     unlink( x11_auth_path.c_str() );
+  }
+}
+
+void StreamForwarder::adapt_link_budget( double bytes_per_second )
+{
+  if ( automatic_rate ) {
+    stream_rate_bytes_per_second = bytes_per_second > 0 ? std::max( 64U, unsigned( bytes_per_second * .9 ) ) : 2048;
   }
 }
 
@@ -509,7 +531,7 @@ bool StreamForwarder::open_agent_listener( Listener& listener, std::string& erro
 
 bool StreamForwarder::open_x11_listener( Listener& listener, std::string& error )
 {
-  if ( !fill_random( x11_auth_data, 16 ) ) {
+  if ( !fill_random( x11_auth_data, 16, crypto_mode ) ) {
     error = "could not generate X11 forwarding cookie";
     return false;
   }

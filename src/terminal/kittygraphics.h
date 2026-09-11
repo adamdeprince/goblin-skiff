@@ -22,7 +22,14 @@ class Framebuffer;
 
 static const size_t KITTY_MAX_APC_CHARS = 8192;
 static const size_t KITTY_CHUNK_B64 = 4096;
-static const size_t KITTY_IMAGE_QUOTA = 32 * 1024 * 1024;
+// WebP's dimension ceiling is 16383. Keep a separate decoded-pixel limit and
+// an aggregate storage budget; a retina-sized canvas can exceed 32 MiB RGBA.
+static const uint32_t GRAPHICS_MAX_DIMENSION = 16383;
+static const size_t GRAPHICS_MAX_PIXELS = 32 * 1024 * 1024;
+static const size_t KITTY_IMAGE_QUOTA = 256 * 1024 * 1024;
+// Retained encoded images must fit a recovery snapshot even at the 500-byte
+// fallback MTU (15-bit fragment count). This is separate from decoded pixels.
+static const size_t KITTY_ENCODED_QUOTA = 12 * 1024 * 1024;
 static const uint32_t KITTY_FORMAT_RGB = 24;
 static const uint32_t KITTY_FORMAT_RGBA = 32;
 static const uint32_t KITTY_FORMAT_PNG = 100;
@@ -79,6 +86,10 @@ struct KittyCommand
   KittyCommand();
 };
 
+// The stored payload is WebP in either case. Origin is needed because a
+// sixel image must prefer native sixel output, even on dual-capable clients.
+enum class ImageOrigin { Kitty, Sixel };
+
 struct KittyImage
 {
   uint32_t id;
@@ -86,6 +97,7 @@ struct KittyImage
   uint32_t format;
   uint32_t width;
   uint32_t height;
+  ImageOrigin origin;
   std::shared_ptr<std::string> data;
   uint64_t serial;
 
@@ -134,7 +146,8 @@ bool kitty_normalize_webp( uint32_t format,
                            std::string& error );
 bool kitty_webp_dimensions( const std::string& webp, uint32_t& width, uint32_t& height );
 bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& width, uint32_t& height );
-void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current );
+void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current,
+                         bool convert_sixel = false );
 
 }
 

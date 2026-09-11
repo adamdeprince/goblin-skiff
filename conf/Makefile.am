@@ -3,9 +3,9 @@ dist_completions_DATA =
 nobase_dist_sysconf_DATA =
 
 if INSTALL_UFW
-  nobase_dist_sysconf_DATA += ufw/applications.d/adam-mosh
+  nobase_dist_sysconf_DATA += ufw/applications.d/goblin-mosh
 endif
 
 if INSTALL_COMPLETION
-  dist_completions_DATA += bash-completion/completions/adam-mosh
+  dist_completions_DATA += bash-completion/completions/goblin-mosh
 endif

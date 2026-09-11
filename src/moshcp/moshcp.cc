@@ -169,7 +169,7 @@ uint64_t now_ms( void )
 void progress( const Options& options, const std::string& message )
 {
   if ( !options.quiet ) {
-    std::cerr << "adam-moshcp: " << message << "\n";
+    std::cerr << "goblin-moshcp: " << message << "\n";
   }
 }
 
@@ -179,8 +179,8 @@ void progress( const Options& options, const std::string& message )
             << "  " << argv0 << " send [options] SOURCE...\n"
             << "  " << argv0 << " receive [options] [DEST|DESTDIR]\n"
             << "\nOptions:\n"
-            << "  --socket=PATH          adam-moshcp control socket (default: ADAM_MOSHCP_SOCK or adam-moshcp.latest)\n"
-            << "  --fec=reed-solomon|raptorq\n"
+            << "  --socket=PATH          goblin-moshcp control socket (default: GOBLIN_MOSHCP_SOCK or goblin-moshcp.latest)\n"
+            << "  --fec=reed-solomon|raptorq  RaptorQ requires a custom build\n"
             << "  --redundancy=PERCENT   initial repair symbols to send (default: 20)\n"
             << "  --rate=BYTES           bulk send rate, 0 for unlimited (default: 2048)\n"
             << "  --block-size=BYTES     FEC block size (default: 32768)\n"
@@ -374,7 +374,7 @@ std::string base_name( std::string path )
     }
   }
   if ( name.empty() || name == "." || name == ".." ) {
-    return "adam-moshcp.out";
+    return "goblin-moshcp.out";
   }
   return name;
 }
@@ -538,7 +538,7 @@ std::string clean_relative_path( std::string path )
     cleaned += parts[i];
   }
   if ( cleaned.empty() ) {
-    return "adam-moshcp.out";
+    return "goblin-moshcp.out";
   }
   return cleaned;
 }
@@ -892,7 +892,7 @@ TransferPayload prepare_transfer_payload( const Options& options,
 
   (void)total_file_bytes;
   transfer.payload = encode_archive( entries );
-  transfer.filename = destination_name.empty() ? "adam-moshcp-archive" : base_name( destination_name );
+  transfer.filename = destination_name.empty() ? "goblin-moshcp-archive" : base_name( destination_name );
   transfer.uncompressed_size = transfer.payload.size();
   transfer.mode = 0755;
   transfer.mtime = static_cast<int64_t>( std::time( NULL ) );
@@ -1161,7 +1161,7 @@ void write_output_bytes( const std::string& output_path,
                          bool preserve_permissions,
                          uint64_t transfer_id )
 {
-  const std::string tmp_path = output_path + ".adam-moshcp.tmp." + transfer_id_hex( transfer_id );
+  const std::string tmp_path = output_path + ".goblin-moshcp.tmp." + transfer_id_hex( transfer_id );
   ensure_parent_directories( tmp_path );
 
   const mode_t write_mode = preserve_permissions ? static_cast<mode_t>( mode & 0777 ) : 0666;
@@ -1535,7 +1535,7 @@ int run_send( const Options& options, int argc, char* argv[] )
         MoshCP::Finish finish;
         if ( MoshCP::decode_finish( datagram.payload, finish ) ) {
           if ( !finish.success && !finish.message.empty() ) {
-            std::cerr << "adam-moshcp: " << finish.message << "\n";
+            std::cerr << "goblin-moshcp: " << finish.message << "\n";
           } else if ( !finish.message.empty() ) {
             progress( options, finish.message );
           }
@@ -1570,7 +1570,7 @@ int complete_receive( Network::Bulk::ControlClient& client,
     return EXIT_SUCCESS;
   } catch ( const std::exception& e ) {
     send_finish( client, transfer_id, false, e.what() );
-    std::cerr << "adam-moshcp: " << e.what() << "\n";
+    std::cerr << "goblin-moshcp: " << e.what() << "\n";
     return EXIT_FAILURE;
   }
 }
@@ -1597,7 +1597,7 @@ int run_receive( const Options& options, int argc, char* argv[] )
       if ( datagram.type == PacketType::Finish ) {
         MoshCP::Finish finish;
         if ( MoshCP::decode_finish( datagram.payload, finish ) && !finish.success ) {
-          std::cerr << "adam-moshcp: sender failed: " << finish.message << "\n";
+          std::cerr << "goblin-moshcp: sender failed: " << finish.message << "\n";
           transfers.erase( datagram.transfer_id );
           if ( !options.multi_receive ) {
             return EXIT_FAILURE;
@@ -1635,7 +1635,7 @@ int run_receive( const Options& options, int argc, char* argv[] )
               send_finish( client, datagram.transfer_id, false, e.what() );
               transfers.erase( datagram.transfer_id );
               if ( !options.multi_receive ) {
-                std::cerr << "adam-moshcp: " << e.what() << "\n";
+                std::cerr << "goblin-moshcp: " << e.what() << "\n";
                 return EXIT_FAILURE;
               }
               continue;
@@ -1703,7 +1703,7 @@ int main( int argc, char* argv[] )
 
     usage( argv[0] );
   } catch ( const std::exception& e ) {
-    std::cerr << "adam-moshcp: " << e.what() << "\n";
+    std::cerr << "goblin-moshcp: " << e.what() << "\n";
     return EXIT_FAILURE;
   }
 }

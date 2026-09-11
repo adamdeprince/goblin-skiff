@@ -17,4 +17,6 @@ libmoshcrypto_a_SOURCES = \
 	byteorder.h \
 	crypto.cc \
 	crypto.h \
+	fips_crypto.cc \
+	fips_crypto.h \
 	prng.h

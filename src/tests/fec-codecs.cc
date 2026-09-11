@@ -75,10 +75,20 @@ void test_codec_roundtrip( FEC::CodecKind kind )
 int main( void )
 {
   try {
+    require( FEC::BlockMetadata().codec == FEC::CodecKind::ReedSolomon, "default codec must be Reed-Solomon" );
+    require( FEC::codec_available( FEC::CodecKind::ReedSolomon ), "built-in Reed-Solomon must be available" );
     test_codec_roundtrip( FEC::CodecKind::ReedSolomon );
 
     if ( FEC::codec_available( FEC::CodecKind::RaptorQ ) ) {
       test_codec_roundtrip( FEC::CodecKind::RaptorQ );
+    } else {
+      bool rejected = false;
+      try {
+        FEC::make_codec( FEC::CodecKind::RaptorQ );
+      } catch ( const std::runtime_error& ) {
+        rejected = true;
+      }
+      require( rejected, "disabled RaptorQ must reject encoder/decoder creation" );
     }
   } catch ( const std::exception& e ) {
     std::cerr << e.what() << "\n";

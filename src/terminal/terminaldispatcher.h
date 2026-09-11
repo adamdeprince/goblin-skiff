@@ -40,6 +40,7 @@
 #include "src/terminal/kittygraphics.h"
 #include "src/terminal/osc52.h"
 #include "src/terminal/terminalgeometry.h"
+#include "src/terminal/sixel.h"
 
 namespace Parser {
 class Action;
@@ -111,11 +112,37 @@ private:
   KittyCommand kitty_partial;
   std::string kitty_payload;
   const ClientGeometry* client_geometry;
+  std::string DCS_string {};
+  bool DCS_active = false, DCS_escape = false, DCS_just_escaped = false;
+  Sixel::Palette sixel_palette {};
 
   void parse_params( void );
   void finish_kitty_upload( Framebuffer* fb );
+  void finish_sixel( Framebuffer* fb );
 
 public:
+  bool sixel_enabled = false;
+  bool mime_clipboard_enabled = false;
+  std::vector<std::string> mime_clipboard_events {};
+  std::vector<std::string> download_events {};
+  std::string pending_download {};
+  void finish_download( bool complete )
+  {
+    if ( complete && !pending_download.empty() && download_events.size() < 512 ) { download_events.push_back( pending_download ); }
+    pending_download.clear();
+  }
+  bool text_sizing_enabled = true; // state decoder always understands OSC 66
+  bool keyboard_enabled = false;
+  bool keyboard_alt = false;
+  std::vector<unsigned> keyboard_stack[2] {};
+  void keyboard_mode( Framebuffer* fb, char operation );
+  void keyboard_screen( Framebuffer* fb, bool alternate );
+  bool sixel_display_mode = false, sixel_private_palette = true, sixel_cursor_right = false;
+  void DCS_start( wchar_t final );
+  void DCS_put( wchar_t ch );
+  void DCS_end( wchar_t ch, Framebuffer* fb );
+  void DCS_escape_end( wchar_t ch, Framebuffer* fb );
+  void reset_sixel();
   static const int PARAM_MAX = 65535;
   /* prevent evil escape sequences from causing long loops */
 

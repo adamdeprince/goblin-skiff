@@ -62,19 +62,28 @@ private:
   uint64_t echo_ack;
   std::deque<Network::StreamEvent> stream_events;
   std::deque<ClipboardEvent> clipboard_events;
+  std::string tmux_output;
 
   static const int ECHO_TIMEOUT = 50; /* for late ack */
 
 public:
+  void set_sixel_enabled( bool enabled ) { terminal.set_sixel_enabled( enabled ); }
+  void set_text_sizing_enabled( bool enabled ) { terminal.set_text_sizing_enabled( enabled ); }
+  void set_keyboard_enabled( bool enabled ) { terminal.set_keyboard_enabled( enabled ); }
+  void set_mime_clipboard_enabled( bool enabled ) { terminal.set_mime_clipboard_enabled( enabled ); }
+  std::vector<std::string> take_parser_mime_clipboard_events() { return terminal.take_mime_clipboard_events(); }
+  std::vector<std::string> take_parser_download_events() { return terminal.take_download_events(); }
   Complete( size_t width, size_t height )
     : parser(), terminal( width, height ), display( false ), actions(), input_history(), echo_ack( 0 ),
-      stream_events(), clipboard_events()
+      stream_events(), clipboard_events(), tmux_output()
   {}
 
   std::string act( const std::string& str, const ClientGeometry* client_geometry = NULL );
   std::string act( const Parser::Action& act );
   void push_back( const Network::StreamEvent& event ) { stream_events.push_back( event ); }
   void push_back( const ClipboardEvent& event ) { clipboard_events.push_back( event ); }
+  void append_tmux_output( const std::string& bytes ) { tmux_output += bytes; }
+  const std::string& get_tmux_output() const { return tmux_output; }
 
   const Framebuffer& get_fb( void ) const { return terminal.get_fb(); }
   std::vector<ClipboardEvent> take_parser_clipboard_events( void ) { return terminal.take_clipboard_events(); }

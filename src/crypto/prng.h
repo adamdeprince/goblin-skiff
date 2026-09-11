@@ -66,6 +66,7 @@ using namespace Crypto;
 class PRNG
 {
 private:
+  Crypto::Mode mode;
 #ifdef HAVE_URANDOM
   std::ifstream randfile;
 #endif
@@ -75,15 +76,27 @@ private:
   PRNG& operator=( const PRNG& );
 
 public:
-  PRNG()
+  explicit PRNG( Crypto::Mode s_mode = Crypto::Mode::LegacyOCB )
+    : mode( s_mode )
 #ifdef HAVE_URANDOM
-    : randfile( rdev, std::ifstream::in | std::ifstream::binary )
+      , randfile()
 #endif
-  {}
+  {
+#ifdef HAVE_URANDOM
+    if ( mode == Crypto::Mode::LegacyOCB ) {
+      randfile.open( rdev, std::ifstream::in | std::ifstream::binary );
+    }
+#endif
+  }
 
   void fill( void* dest, size_t size )
   {
     if ( 0 == size ) {
+      return;
+    }
+
+    if ( mode == Crypto::Mode::FipsAES128GCM ) {
+      Crypto::fill_fips_random( dest, size );
       return;
     }
 

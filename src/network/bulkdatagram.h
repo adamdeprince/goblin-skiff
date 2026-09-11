@@ -31,7 +31,13 @@ enum class PacketType : uint8_t
   Manifest = 1,
   Symbol = 2,
   Ack = 3,
-  Finish = 4
+  Finish = 4,
+  ClipboardSymbol = 5,
+  ClipboardAck = 6,
+  DownloadSymbol = 7,
+  DownloadAck = 8,
+  FileSymbol = 9,
+  FileAck = 10
 };
 
 struct Datagram

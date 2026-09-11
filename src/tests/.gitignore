@@ -2,6 +2,7 @@
 /base64_vector.cc
 /ocb-aes
 /encrypt-decrypt
+/fips-crypto
 /nonce-incr
 /inpty
 /is-utf8-locale
@@ -16,4 +17,14 @@
 /osc52-parse
 /state-samples
 /terminal-geometry
+/terminal-display
+/tmux-control
 /transport-compression
+/control-panel
+/file-transfer
+/link-budget
+/mascot
+/sixel-state
+/terminal-extensions
+/download
+/download-forward

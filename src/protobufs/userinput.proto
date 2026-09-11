@@ -33,10 +33,23 @@ message ClientGeometryMessage {
   optional uint32 cell_height_px = 6;
 }
 
+message ClientGraphicsMessage {
+  optional bool kitty = 1;
+  optional bool sixel = 2;
+  optional bool keyboard = 3;
+  optional uint32 text_sizing = 4;
+  optional bool clipboard = 5;
+  optional uint32 clipboard_fast_threshold = 6 [default = 65536];
+  optional bool downloads = 7;
+}
+
 extend Instruction {
   optional Keystroke keystroke = 2;
   optional ResizeMessage resize = 3;
   optional StreamBuffers.StreamEvent stream = 9;
   optional ClipboardBuffers.ClipboardEvent clipboard = 10;
   optional ClientGeometryMessage client_geometry = 11;
+  // Control commands bypass terminal keystroke interpretation.
+  optional bytes tmux_input = 12;
+  optional ClientGraphicsMessage client_graphics = 13;
 }

@@ -17,10 +17,13 @@
 */
 
 #include "src/network/bulkdatagram.h"
+#include "src/network/bulkcontrol.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace {
 void require( bool condition, const char* message )
@@ -29,11 +32,51 @@ void require( bool condition, const char* message )
     throw std::runtime_error( message );
   }
 }
+
+void backpressure_test()
+{
+  struct Runtime {
+    char path[40] = "/tmp/goblin-bulk-queue.XXXXXX";
+    bool existed = getenv( "XDG_RUNTIME_DIR" );
+    std::string previous = existed ? getenv( "XDG_RUNTIME_DIR" ) : "";
+    Runtime() { require( mkdtemp( path ), "queue-test runtime directory" ); setenv( "XDG_RUNTIME_DIR", path, 1 ); }
+    ~Runtime() { if ( existed ) { setenv( "XDG_RUNTIME_DIR", previous.c_str(), 1 ); } else { unsetenv( "XDG_RUNTIME_DIR" ); } rmdir( path ); }
+  } runtime;
+  Network::Bulk::ControlServer server( "test" );
+  Network::Bulk::ControlClient client( server.socket_path() );
+  require( fcntl( client.fd(), F_SETFL, O_NONBLOCK ) == 0, "nonblocking test producer" );
+  const int listener = server.fds()[0];
+  server.process_readable_fd( listener );
+  std::string stream;
+  for ( unsigned i = 0; i < 200; ++i ) {
+    Network::Bulk::Datagram packet; packet.symbol_id = i; packet.payload.assign( 64, 'x' );
+    auto wire = Network::Bulk::encode_datagram( packet );
+    for ( int shift = 24; shift >= 0; shift -= 8 ) { stream += char( wire.size() >> shift ); }
+    stream += wire;
+  }
+  size_t written = 0;
+  unsigned received = 0;
+  bool blocked = false;
+  for ( unsigned turn = 0; turn < 1000 && received < 200; ++turn ) {
+    if ( written < stream.size() ) {
+      const auto count = write( client.fd(), stream.data() + written, stream.size() - written );
+      if ( count > 0 ) { written += count; }
+    }
+    for ( int fd : server.fds() ) { if ( fd != listener ) { server.process_readable_fd( fd ); } }
+    blocked = blocked || server.fds().size() == 1;
+    Network::Bulk::Datagram packet;
+    if ( server.pop_outgoing( packet ) ) {
+      require( packet.symbol_id == received++, "backpressure preserves datagram order" );
+    }
+  }
+  require( blocked && received == 200 && written == stream.size(), "bounded queue backpressures and resumes an unlimited producer" );
+}
 }
 
 int main( void )
 {
   try {
+    backpressure_test();
     Network::Bulk::Datagram original;
     original.type = Network::Bulk::PacketType::Symbol;
     original.transfer_id = 0x0102030405060708ULL;

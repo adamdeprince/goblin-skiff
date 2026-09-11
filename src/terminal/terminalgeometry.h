@@ -15,6 +15,22 @@
 
 namespace Terminal {
 
+/* Local presentation capabilities, sent once per attachment, never replicated
+   as terminal state. A sixel source can use Kitty as a client-side fallback. */
+struct ClientGraphics
+{
+  bool kitty, sixel, keyboard;
+  unsigned text_sizing;
+  bool clipboard;
+  uint32_t clipboard_fast_threshold;
+  bool downloads = false;
+  ClientGraphics( bool k = false, bool s = false, bool kb = false, unsigned ts = 0, bool cb = false, uint32_t ct = 65536 )
+    : kitty( k ), sixel( s ), keyboard( kb ), text_sizing( ts ), clipboard( cb ), clipboard_fast_threshold( ct ) {}
+  bool operator==( const ClientGraphics& other ) const
+  { return kitty == other.kitty && sixel == other.sixel && keyboard == other.keyboard && text_sizing == other.text_sizing
+           && clipboard == other.clipboard && clipboard_fast_threshold == other.clipboard_fast_threshold && downloads == other.downloads; }
+};
+
 /* Presentation geometry for the currently attached client. This is control
    metadata, not part of the replicated terminal or framebuffer state. */
 struct ClientGeometry

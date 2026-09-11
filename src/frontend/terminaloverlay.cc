@@ -190,6 +190,8 @@ void NotificationEngine::apply( Framebuffer& fb ) const
   }
 
   /* draw bar across top of screen */
+  fb.erase_sixel_cells( 0, 0, 1, fb.ds.get_width() );
+  fb.erase_sized_text( 0, 0, 1, fb.ds.get_width() );
   Cell notification_bar( 0 );
   notification_bar.get_renditions().set_foreground_color( 7 );
   notification_bar.get_renditions().set_background_color( 4 );

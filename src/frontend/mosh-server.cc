@@ -41,6 +41,7 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <getopt.h>
 #include <sstream>
 #include <typeinfo>
 #include <vector>
@@ -100,6 +101,10 @@
 #include "src/network/bulkcontrol.h"
 #include "src/network/compressor.h"
 #include "streamforward.h"
+#include "directory.h"
+#include "mimeclipboard.h"
+#include "download.h"
+#include "filetransfer.h"
 
 using ServerConnection = Network::Transport<Terminal::Complete, Network::UserStream>;
 
@@ -110,7 +115,8 @@ static void serve( int host_fd,
                    StreamForwarder& forwarder,
                    Network::Bulk::ControlServer& bulk_control,
                    long network_timeout,
-                   long network_signaled_timeout );
+                   long network_signaled_timeout,
+                   bool tmux_control, Crypto::Mode crypto_mode );
 
 static int run_server( const char* desired_ip,
                        const char* desired_port,
@@ -127,11 +133,13 @@ static int run_server( const char* desired_ip,
                        unsigned int stream_rate_bytes_per_second,
                        const std::string& state_zstd_dictionary,
                        bool unlink_state_zstd_dictionary,
-                       bool compact_keepalive );
+                       bool compact_keepalive,
+                       Crypto::Mode crypto_mode,
+                       bool tmux_control );
 
 static void print_version( FILE* file )
 {
-  fputs( "adam-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "goblin-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -142,7 +150,7 @@ static void print_version( FILE* file )
 static void print_usage( FILE* stream, const char* argv0 )
 {
   fprintf( stream,
-           "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [-- COMMAND...]\n",
+           "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [--fips-crypto] [-- COMMAND...]\n",
            argv0 );
 }
 
@@ -295,12 +303,16 @@ int main( int argc, char* argv[] )
   bool agent_forwarding = false;
   bool x11_forwarding = false;
   unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
-  unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 2048 );
+  unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 0 );
   const char* state_zstd_dictionary_env = getenv( "MOSH_STATE_ZSTD_DICT" );
   std::string state_zstd_dictionary = state_zstd_dictionary_env ? state_zstd_dictionary_env : "";
   bool unlink_state_zstd_dictionary = bool_from_env( "MOSH_STATE_ZSTD_DICT_UNLINK", false );
-  bool compact_keepalive = has_capability( getenv( "MOSH_CLIENT_CAPS" ), "keepalive-v1" );
-  /* Will cause adam-mosh-server not to correctly detach on old versions of sshd. */
+  const char* client_capabilities = getenv( "MOSH_CLIENT_CAPS" );
+  bool compact_keepalive = has_capability( client_capabilities, "keepalive-v1" );
+  bool tmux_control = has_capability( client_capabilities, "tmux-control-v1" );
+  bool client_supports_fips_crypto = has_capability( client_capabilities, "fips-aes128-gcm-v1" );
+  Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB;
+  /* Will cause goblin-mosh-server not to correctly detach on old versions of sshd. */
   std::list<std::string> locale_vars;
 
   /* strip off command */
@@ -326,14 +338,18 @@ int main( int argc, char* argv[] )
   if ( ( argc >= 2 ) && ( strcmp( argv[1], "new" ) == 0 ) ) {
     /* new option syntax */
     int opt;
-    while ( ( opt = getopt( argc - 1, argv + 1, "@:i:p:c:svl:R:AXt:b:" ) ) != -1 ) {
+    static const struct option long_options[] = {
+      { "fips-crypto", no_argument, NULL, 256 },
+      { 0, 0, 0, 0 },
+    };
+    while ( ( opt = getopt_long( argc - 1, argv + 1, "@:i:p:c:svl:R:AXt:b:", long_options, NULL ) ) != -1 ) {
       switch ( opt ) {
           /*
            * This undocumented option does nothing but eat its argument.
            * Useful in scripting where you prepend something to a
-           * adam-mosh-server argv, and might end up with something like
-           * "adam-mosh-server new -v new -c 256", now you can say
-           * "adam-mosh-server new -v -@ new -c 256" to discard the second
+           * goblin-mosh-server argv, and might end up with something like
+           * "goblin-mosh-server new -v new -c 256", now you can say
+           * "goblin-mosh-server new -v -@ new -c 256" to discard the second
            * "new".
            */
         case '@':
@@ -386,6 +402,9 @@ int main( int argc, char* argv[] )
             exit( 1 );
           }
           break;
+        case 256:
+          crypto_mode = Crypto::Mode::FipsAES128GCM;
+          break;
         default:
           /* don't die on unknown options */
           print_usage( stderr, argv[0] );
@@ -410,6 +429,11 @@ int main( int argc, char* argv[] )
   if ( desired_port && !Connection::parse_portrange( desired_port, dpl, dph ) ) {
     fprintf( stderr, "%s: Bad UDP port range (%s)\n", argv[0], desired_port );
     print_usage( stderr, argv[0] );
+    exit( 1 );
+  }
+
+  if ( crypto_mode == Crypto::Mode::FipsAES128GCM && client_capabilities && !client_supports_fips_crypto ) {
+    fputs( "--fips-crypto requested without a matching client capability advertisement\n", stderr );
     exit( 1 );
   }
 
@@ -486,7 +510,7 @@ int main( int argc, char* argv[] )
       std::string client_charset( locale_charset() );
 
       fprintf( stderr,
-               "adam-mosh-server needs a UTF-8 native locale to run.\n\n"
+               "goblin-mosh-server needs a UTF-8 native locale to run.\n\n"
                "Unfortunately, the local environment (%s) specifies\n"
                "the character set \"%s\",\n\n"
                "The client-supplied environment (%s) specifies\n"
@@ -516,7 +540,9 @@ int main( int argc, char* argv[] )
                        stream_rate_bytes_per_second,
                        state_zstd_dictionary,
                        unlink_state_zstd_dictionary,
-                       compact_keepalive );
+                       compact_keepalive,
+                       crypto_mode,
+                       tmux_control );
   } catch ( const Network::NetworkException& e ) {
     fprintf( stderr, "Network exception: %s\n", e.what() );
     return 1;
@@ -544,8 +570,12 @@ static int run_server( const char* desired_ip,
                        unsigned int stream_rate_bytes_per_second,
                        const std::string& state_zstd_dictionary,
                        bool unlink_state_zstd_dictionary,
-                       bool compact_keepalive )
+                       bool compact_keepalive,
+                       Crypto::Mode crypto_mode,
+                       bool tmux_control )
 {
+  Crypto::ensure_mode_available( crypto_mode );
+
   if ( !state_zstd_dictionary.empty() ) {
     Network::get_compressor().set_zstd_dictionary_from_file( state_zstd_dictionary );
     if ( unlink_state_zstd_dictionary && unlink( state_zstd_dictionary.c_str() ) < 0 ) {
@@ -599,9 +629,13 @@ static int run_server( const char* desired_ip,
   /* open network */
   Network::UserStream blank;
   using NetworkPointer = std::shared_ptr<ServerConnection>;
-  NetworkPointer network( new ServerConnection( terminal, blank, desired_ip, desired_port, compact_keepalive ) );
+  NetworkPointer network(
+    new ServerConnection( terminal, blank, desired_ip, desired_port, compact_keepalive, crypto_mode ) );
+  const bool link_budget = compact_keepalive && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "link-budget-v1" );
+  network->enable_link_budget( link_budget );
 
-  StreamForwarder forwarder( StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second );
+  StreamForwarder forwarder(
+    StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second, crypto_mode );
   std::string forward_error;
   for ( std::vector<std::string>::const_iterator it = remote_forwards.begin(); it != remote_forwards.end(); it++ ) {
     if ( !forwarder.add_tcp_forward( *it, forward_error ) ) {
@@ -626,7 +660,7 @@ static int run_server( const char* desired_ip,
   Select::set_verbose( verbose );
 
   /*
-   * If adam-mosh-server is run on a pty, then typeahead may echo and break adam-mosh's
+   * If goblin-mosh-server is run on a pty, then typeahead may echo and break goblin-mosh's
    * detection of the MOSH CONNECT message.  Print it on a new line to bodge
    * around that.
    */
@@ -635,6 +669,26 @@ static int run_server( const char* desired_ip,
   }
   if ( compact_keepalive ) {
     puts( "MOSH CAPS keepalive-v1" );
+  }
+  if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "sixel-state-v1" ) ) {
+    puts( "MOSH GRAPHICS sixel-state-v1" );
+  }
+  if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "osc5522-v1" ) ) { puts( "MOSH CLIPBOARD osc5522-v1" ); }
+  if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "goblin-download-v2" ) ) { puts( "MOSH DOWNLOADS goblin-download-v2" ); }
+  if ( tmux_control ) {
+    puts( "MOSH TMUX control-v1" );
+  }
+  if ( link_budget ) { puts( "MOSH LINK budget-v1" ); }
+  if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "directory-v2" ) ) {
+    puts( "MOSH DIRECTORY directory-v2" );
+  } else if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "directory-v1" ) ) {
+    puts( "MOSH DIRECTORY directory-v1" );
+  }
+  if ( !tmux_control && Files::available() && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "file-sync-v1" ) ) {
+    puts( "MOSH FILES file-sync-v1" );
+  }
+  if ( crypto_mode == Crypto::Mode::FipsAES128GCM ) {
+    printf( "MOSH CRYPTO %s\n", Crypto::mode_name( crypto_mode ) );
   }
   printf( "MOSH CONNECT %s %s\n", network->port().c_str(), network->get_key().c_str() );
 
@@ -652,14 +706,14 @@ static int run_server( const char* desired_ip,
   if ( the_pid < 0 ) {
     perror( "fork" );
   } else if ( the_pid > 0 ) {
-    fputs( "\nadam-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+    fputs( "\ngoblin-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
            "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
            "This is free software: you are free to change and redistribute it.\n"
            "There is NO WARRANTY, to the extent permitted by law.\n\n",
            stderr );
 
-    fprintf( stderr, "[adam-mosh-server detached, pid = %d]\n", static_cast<int>( the_pid ) );
+    fprintf( stderr, "[goblin-mosh-server detached, pid = %d]\n", static_cast<int>( the_pid ) );
 #ifndef HAVE_IUTF8
     fputs( "\nWarning: termios IUTF8 flag not defined.\n"
            "Character-erase of multibyte character sequence\n"
@@ -705,7 +759,7 @@ static int run_server( const char* desired_ip,
   Network::Bulk::ControlServer bulk_control( "server" );
 
   char utmp_entry[64] = { 0 };
-  snprintf( utmp_entry, 64, "adam-mosh [%ld]", static_cast<long int>( getpid() ) );
+  snprintf( utmp_entry, 64, "goblin-mosh [%ld]", static_cast<long int>( getpid() ) );
 
   /* Fork child process */
   int pipes[2];
@@ -804,7 +858,7 @@ static int run_server( const char* desired_ip,
       }
     }
 
-    if ( setenv( "ADAM_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true ) < 0 ) {
+    if ( setenv( "GOBLIN_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true ) < 0 ) {
       perror( "setenv" );
       exit( 1 );
     }
@@ -822,7 +876,7 @@ static int run_server( const char* desired_ip,
 #ifndef __sun
       // For Ubuntu, try and print one of {,/var}/run/motd.dynamic.
       // This file is only updated when pam_motd is run, but when
-      // adam-mosh-server is run in the usual way with ssh via the script,
+      // goblin-mosh-server is run in the usual way with ssh via the script,
       // this always happens.
       // XXX Hackish knowledge of Ubuntu PAM configuration.
       // But this seems less awful than build-time detection with autoconf.
@@ -867,7 +921,7 @@ static int run_server( const char* desired_ip,
     /* Drop unnecessary privileges */
 #ifdef HAVE_PLEDGE
     /* OpenBSD pledge() syscall */
-    if ( pledge( "stdio inet unix tty", NULL ) ) {
+    if ( pledge( "stdio inet unix tty rpath proc", NULL ) ) {
       perror( "pledge() failed" );
       exit( 1 );
     }
@@ -879,7 +933,8 @@ static int run_server( const char* desired_ip,
 #endif
 
     try {
-      serve( master, pipes[1], terminal, *network, forwarder, bulk_control, network_timeout, network_signaled_timeout );
+      serve( master, pipes[1], terminal, *network, forwarder, bulk_control, network_timeout, network_signaled_timeout,
+             tmux_control, crypto_mode );
     } catch ( const Network::NetworkException& e ) {
       fprintf( stderr, "Network exception: %s\n", e.what() );
     } catch ( const Crypto::CryptoException& e ) {
@@ -896,7 +951,7 @@ static int run_server( const char* desired_ip,
     }
   }
 
-  fputs( "\n[adam-mosh-server is exiting.]\n", stdout );
+  fputs( "\n[goblin-mosh-server is exiting.]\n", stdout );
 
   return 0;
 }
@@ -908,7 +963,8 @@ static void serve( int host_fd,
                    StreamForwarder& forwarder,
                    Network::Bulk::ControlServer& bulk_control,
                    long network_timeout,
-                   long network_signaled_timeout )
+                   long network_signaled_timeout,
+                   bool tmux_control, Crypto::Mode crypto_mode )
 {
   /* scale timeouts */
   const uint64_t network_timeout_ms = static_cast<uint64_t>( network_timeout ) * 1000;
@@ -921,6 +977,24 @@ static void serve( int host_fd,
 
   uint64_t last_remote_num = network.get_remote_state_num();
   Terminal::ClientGeometry client_geometry;
+  Clipboard::Endpoint mime_clipboard( true );
+  Download::Sender downloads;
+  bool downloads_enabled = false;
+  unsigned bulk_turn = 0;
+  bool mime_enabled = false;
+  const bool mime_negotiated = has_capability( getenv( "MOSH_CLIENT_CAPS" ), "osc5522-v1" );
+  const bool sixel_state = has_capability( getenv( "MOSH_CLIENT_CAPS" ), "sixel-state-v1" );
+  bool graphics_ready = !sixel_state;
+  uint64_t graphics_deadline = 0;
+  terminal.set_text_sizing_enabled( sixel_state );
+  Terminal::TmuxControlParser tmux_parser;
+  const bool directory_live = has_capability( getenv( "MOSH_CLIENT_CAPS" ), "directory-v2" );
+  const bool directory_enabled = directory_live || has_capability( getenv( "MOSH_CLIENT_CAPS" ), "directory-v1" );
+  Control::DirectoryWorker directory;
+  Control::Channel control_channel;
+  Files::Endpoint files( true, !tmux_control && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "file-sync-v1" ), crypto_mode );
+  Control::Message directory_reply;
+  bool directory_reply_pending = false;
 
 #ifdef HAVE_UTEMPTER
   bool connected_utmp = false;
@@ -940,16 +1014,48 @@ static void serve( int host_fd,
 #endif
 
   bool child_released = false;
+  uint64_t idle_cleanup_deadline = 0;
 
   while ( true ) {
     try {
       static const uint64_t timeout_if_no_client = 60000;
       int timeout = INT_MAX;
       uint64_t now = Network::timestamp();
+      if ( idle_cleanup_deadline ) {
+        if ( now >= idle_cleanup_deadline ) { break; }
+        timeout = std::min( timeout, int( idle_cleanup_deadline - now ) );
+      }
+      forwarder.adapt_link_budget( network.link_budget().active() ? network.link_budget().budget() : 0 );
+      files.channel.set_external_pacing( network.link_budget().active() );
+      mime_clipboard.expire( now );
+      downloads.tick( now );
+      files.tick( now ); files.flush_controls( control_channel );
+      if ( !child_released && network.get_remote_state_num() && !graphics_ready ) {
+        // A new wrapper can be used with --client pointing at an older
+        // binary. Do not strand login if that binary lacks attachment caps.
+        if ( !graphics_deadline ) { graphics_deadline = now + 5000; }
+        if ( now >= graphics_deadline ) {
+          terminal.set_text_sizing_enabled( false );
+          if ( close( pipe_fd ) < 0 ) { err( 1, "child release" ); }
+          child_released = true;
+        } else { timeout = std::min( timeout, int( graphics_deadline - now ) ); }
+      }
+      if ( !directory_reply_pending && !control_channel.queued_bytes() ) {
+        directory.tick( now );
+        if ( directory.pop( directory_reply ) ) { directory_reply_pending = true; }
+      }
+      if ( directory_reply_pending && control_channel.queue( directory_reply ) ) { directory_reply_pending = false; }
       const bool reliable_data_pending = network.has_unsent_data();
 
       timeout = std::min( timeout, network.wait_time() );
+      timeout = std::min( timeout, std::max( network.bulk_wait_time(), files.wait_time( now, !forwarder.has_pending_network_data() ) ) );
+      timeout = std::min( timeout, std::max( network.bulk_wait_time(), downloads.wait_time( now, !network.has_unsent_data() && !forwarder.has_pending_network_data() ) ) );
+      if ( mime_enabled ) { timeout = std::min( timeout, std::max( network.bulk_wait_time(), mime_clipboard.channel.wait_time( now, !network.has_unsent_data() && !forwarder.has_pending_network_data() ) ) ); }
       timeout = std::min( timeout, terminal.wait_time( now ) );
+      timeout = std::min( timeout, directory.wait_time() );
+      if ( !network.shutdown_in_progress() ) {
+        timeout = std::min( timeout, control_channel.wait_time( now, network.get_sent_state_acked() ) );
+      }
       if ( !reliable_data_pending ) {
         timeout = std::min( timeout, forwarder.wait_time( now ) );
       }
@@ -972,7 +1078,7 @@ static void serve( int host_fd,
       }
       if ( bulk_control.has_outgoing() && !reliable_data_pending && !forwarder.has_pending_network_data()
            && timeout > 20 ) {
-        timeout = 20;
+        timeout = std::min( timeout, std::max( 20, network.bulk_wait_time() ) );
       }
 
       /* poll for events */
@@ -989,9 +1095,13 @@ static void serve( int host_fd,
       for ( std::vector<int>::const_iterator it = bulk_fds.begin(); it != bulk_fds.end(); it++ ) {
         sel.add_fd( *it );
       }
-      if ( !network.shutdown_in_progress() ) {
+      const bool monitor_host = !network.shutdown_in_progress()
+                                && network.get_current_state().get_tmux_output().size() < Terminal::TMUX_QUEUE_LIMIT;
+      if ( monitor_host ) {
         sel.add_fd( host_fd );
       }
+      if ( directory.fd() >= 0 && !directory_reply_pending && !control_channel.queued_bytes() ) { sel.add_fd( directory.fd() ); }
+      if ( files.fd() >= 0 ) { sel.add_fd( files.fd() ); }
 
       int active_fds = sel.select( timeout );
       if ( active_fds < 0 ) {
@@ -1009,7 +1119,15 @@ static void serve( int host_fd,
 
         Network::Bulk::Datagram bulk;
         while ( network.pop_bulk( bulk ) ) {
-          bulk_control.broadcast( bulk );
+          if ( bulk.type == Network::Bulk::PacketType::FileSymbol || bulk.type == Network::Bulk::PacketType::FileAck ) {
+            if ( files.supported() ) { files.channel.receive( bulk ); }
+            continue;
+          }
+          if ( bulk.type == Network::Bulk::PacketType::DownloadSymbol || bulk.type == Network::Bulk::PacketType::DownloadAck ) {
+            if ( downloads_enabled ) { downloads.channel.receive( bulk ); }
+            continue;
+          }
+          if ( !mime_clipboard.channel.receive( bulk ) ) { bulk_control.broadcast( bulk ); }
         }
 
         /* is new user input available for the terminal? */
@@ -1020,12 +1138,48 @@ static void serve( int host_fd,
           us.apply_string( network.get_remote_diff() );
           /* apply userstream to terminal */
           for ( size_t i = 0; i < us.size(); i++ ) {
+            if ( us.is_graphics_event( i ) ) {
+              const auto& caps = us.get_graphics_event( i );
+              downloads_enabled = caps.downloads && !tmux_control && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "goblin-download-v2" );
+              downloads.set_enabled( downloads_enabled );
+              mime_enabled = mime_negotiated && caps.clipboard && !tmux_control;
+              terminal.set_mime_clipboard_enabled( mime_enabled );
+              mime_clipboard.set_threshold( caps.clipboard_fast_threshold );
+              terminal.set_sixel_enabled( sixel_state && ( caps.sixel || caps.kitty ) );
+              terminal.set_keyboard_enabled( sixel_state && caps.keyboard );
+              terminal.set_text_sizing_enabled( sixel_state );
+              graphics_ready = true;
+              continue;
+            }
+            if ( us.is_tmux_event( i ) ) {
+              if ( tmux_control ) {
+                terminal_to_host += us.get_tmux_input( i );
+              }
+              continue;
+            }
             if ( us.is_client_geometry_event( i ) ) {
               client_geometry = sanitize_client_geometry( us.get_client_geometry_event( i ) );
               continue;
             }
             if ( us.is_stream_event( i ) ) {
-              forwarder.handle_remote_event( us.get_stream_event( i ) );
+              const auto& event = us.get_stream_event( i );
+              if ( event.stream_id == Control::STREAM_ID ) {
+                if ( directory_enabled && event.type == Network::StreamDataType ) {
+                  control_channel.receive( event.data );
+                  Control::Message request;
+                  while ( control_channel.pop( request ) ) {
+                    if ( request.kind() == Control::Message::FILE_CONTROL && request.has_file() ) {
+                      files.receive_control( request.file(), now ); continue;
+                    }
+                    if ( request.kind() == Control::Message::OPEN || request.kind() == Control::Message::PAGE
+                         || ( directory_live && request.kind() == Control::Message::WATCH ) ) {
+                      if ( request.kind() != Control::Message::WATCH ) { directory_reply_pending = false; }
+                      if ( !directory_live ) { request.set_live( false ); }
+                      directory.request( request, now );
+                    }
+                  }
+                }
+              } else { forwarder.handle_remote_event( event ); }
               continue;
             }
             if ( us.is_clipboard_event( i ) ) {
@@ -1112,7 +1266,7 @@ static void serve( int host_fd,
 #ifdef HAVE_UTEMPTER
             utempter_remove_record( host_fd );
             char tmp[64 + NI_MAXHOST];
-            snprintf( tmp, 64 + NI_MAXHOST, "%s via adam-mosh [%ld]", host, static_cast<long int>( getpid() ) );
+            snprintf( tmp, 64 + NI_MAXHOST, "%s via goblin-mosh [%ld]", host, static_cast<long int>( getpid() ) );
             utempter_add_record( host_fd, tmp );
 
             connected_utmp = true;
@@ -1125,7 +1279,7 @@ static void serve( int host_fd,
 #endif
 
           /* Tell child to start login session. */
-          if ( !child_released ) {
+          if ( !child_released && graphics_ready ) {
             if ( close( pipe_fd ) < 0 ) {
               err( 1, "child release" );
             }
@@ -1146,7 +1300,7 @@ static void serve( int host_fd,
         }
       }
 
-      if ( ( !network.shutdown_in_progress() ) && sel.read( host_fd ) ) {
+      if ( monitor_host && !network.shutdown_in_progress() && sel.read( host_fd ) ) {
         /* input from the host needs to be fed to the terminal */
         const int buf_size = 16384;
         char buf[buf_size];
@@ -1159,9 +1313,20 @@ static void serve( int host_fd,
         if ( bytes_read <= 0 ) {
           network.start_shutdown();
         } else {
-          terminal_to_host += terminal.act( std::string( buf, bytes_read ), &client_geometry );
+          if ( tmux_control ) {
+            const Terminal::TmuxControlParser::Output output = tmux_parser.consume( std::string( buf, bytes_read ) );
+            terminal_to_host += terminal.act( output.terminal, &client_geometry );
+            network.get_current_state().append_tmux_output( output.control );
+            if ( !output.control.empty() ) {
+              network.request_immediate_send();
+            }
+          } else {
+            terminal_to_host += terminal.act( std::string( buf, bytes_read ), &client_geometry );
+          }
 
           /* update client with new state of terminal */
+          for ( const auto& body : terminal.take_parser_mime_clipboard_events() ) { mime_clipboard.submit( body, now ); }
+          for ( const auto& body : terminal.take_parser_download_events() ) { downloads.submit( body, now ); }
           network.get_current_state().replace_terminal_state( terminal );
         }
       }
@@ -1178,6 +1343,9 @@ static void serve( int host_fd,
       }
 
       /* write user input and terminal writeback to the host */
+      std::string mime_body;
+      terminal_to_host += downloads.take_replies();
+      if ( mime_enabled && mime_clipboard.take_output( mime_body ) ) { terminal_to_host += "\033]" + mime_body + "\033\\"; }
       if ( swrite( host_fd, terminal_to_host.c_str(), terminal_to_host.length() ) < 0 ) {
         network.start_shutdown();
       }
@@ -1192,6 +1360,10 @@ static void serve( int host_fd,
       if ( sel.signal( SIGUSR1 )
            && ( !network_signaled_timeout_ms || network_signaled_timeout_ms <= time_since_remote_state ) ) {
         idle_shutdown = true;
+        // An administrator explicitly reaping a disconnected session must
+        // not wait for 16 retries at a shrinking link budget. Allow a short
+        // paced goodbye, then reap it. Ordinary logout retains its full grace.
+        idle_cleanup_deadline = now + 2000;
         fprintf( stderr,
                  "Network idle for %llu seconds when SIGUSR1 received\n",
                  static_cast<unsigned long long>( time_since_remote_state / 1000 ) );
@@ -1227,7 +1399,7 @@ static void serve( int host_fd,
         utempter_remove_record( host_fd );
 
         char tmp[64];
-        snprintf( tmp, 64, "adam-mosh [%ld]", static_cast<long int>( getpid() ) );
+        snprintf( tmp, 64, "goblin-mosh [%ld]", static_cast<long int>( getpid() ) );
         utempter_add_record( host_fd, tmp );
 
         connected_utmp = false;
@@ -1246,17 +1418,50 @@ static void serve( int host_fd,
         break;
       }
 
-      if ( !network.shutdown_in_progress() && !network.has_unsent_data() ) {
+      if ( !network.shutdown_in_progress() ) {
+        Network::StreamEvent event;
+        if ( control_channel.take( now, network.get_sent_state_last(), network.get_sent_state_acked(), event ) ) {
+          network.get_current_state().push_back( event );
+          network.request_immediate_send();
+        }
+      }
+      if ( !network.shutdown_in_progress() && !network.has_unsent_data() && !mime_clipboard.channel.has_interactive() ) {
         forwarder.flush( network.get_current_state(), now, network.send_interval(), network.max_datagram_payload() );
       }
-      const bool reliable_data_queued = network.has_unsent_data();
       const int interactive_wait_before_tick = network.wait_time();
       network.tick();
 
       Network::Bulk::Datagram bulk;
-      if ( !reliable_data_queued && interactive_wait_before_tick > 0 && network.wait_time() > 0
-           && !forwarder.has_pending_network_data() && bulk_control.pop_outgoing( bulk ) ) {
-        network.send_bulk( bulk );
+      const bool sent_clipboard = mime_enabled && !network.shutdown_in_progress() && !network.bulk_wait_time()
+        && mime_clipboard.channel.take_packet( Clipboard::Priority::Interactive, now, network.get_SRTT(), bulk );
+      if ( sent_clipboard ) { network.send_bulk( bulk ); }
+      const bool sent_download = !sent_clipboard && downloads_enabled && !network.shutdown_in_progress() && !network.bulk_wait_time()
+        && downloads.channel.take_packet( Clipboard::Priority::Interactive, now, network.get_SRTT(), bulk );
+      if ( sent_download ) { network.send_bulk( bulk ); }
+      const bool sent_files = !sent_clipboard && !sent_download && !network.shutdown_in_progress() && !network.bulk_wait_time()
+        && files.take_packet( Clipboard::Priority::Interactive, now, network.get_SRTT(), bulk );
+      if ( sent_files ) { network.send_bulk( bulk ); }
+      // Pending screen changes are not necessarily due yet. Let paced bulk
+      // use the interval before the next frame instead of starving while
+      // an application keeps its screen dirty. Due foreground work ran first.
+      if ( interactive_wait_before_tick > 0 && network.wait_time() > 0
+           && !sent_clipboard && !sent_download && !sent_files && !network.shutdown_in_progress()
+           && !forwarder.has_pending_network_data() && !network.bulk_wait_time() ) {
+        if ( mime_enabled && mime_clipboard.channel.take_packet( Clipboard::Priority::Background, now, network.get_SRTT(), bulk ) ) { network.send_bulk( bulk ); }
+        else {
+          // Share idle bulk opportunities with goblin-moshcp. Neither class
+          // can consume an opportunity reserved for terminal/socket traffic.
+          bool sent = false;
+          const unsigned first = bulk_turn++ % 3;
+          for ( unsigned i = 0; i < 3 && !sent; ++i ) {
+            switch ( ( first + i ) % 3 ) {
+              case 0: sent = bulk_control.pop_outgoing( bulk ); break;
+              case 1: sent = downloads_enabled && downloads.channel.take_packet( Clipboard::Priority::Background, now, network.get_SRTT(), bulk ); break;
+              case 2: sent = files.take_packet( Clipboard::Priority::Background, now, network.get_SRTT(), bulk ); break;
+            }
+          }
+          if ( sent ) { network.send_bulk( bulk ); }
+        }
       }
     } catch ( const Network::NetworkException& e ) {
       fprintf( stderr, "%s\n", e.what() );
@@ -1355,9 +1560,9 @@ static void warn_unattached( const std::string& ignore_entry )
 
   while ( struct utmpx* entry = getutxent() ) {
     if ( ( entry->ut_type == USER_PROCESS ) && ( username == std::string( entry->ut_user ) ) ) {
-      /* does line show unattached adam-mosh session */
+      /* does line show unattached goblin-mosh session */
       std::string text( entry->ut_host );
-      if ( ( text.size() >= 10 ) && ( text.substr( 0, 10 ) == "adam-mosh " ) && ( text[text.size() - 1] == ']' )
+      if ( ( text.size() >= 10 ) && ( text.substr( 0, 10 ) == "goblin-mosh " ) && ( text[text.size() - 1] == ']' )
            && ( text != ignore_entry ) && device_exists( entry->ut_line ) ) {
         unattached_mosh_servers.push_back( text );
       }

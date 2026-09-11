@@ -46,6 +46,24 @@ long int myatoi( const char* str );
 class PRNG;
 
 namespace Crypto {
+class FipsAes128Gcm;
+
+enum class Mode
+{
+  LegacyOCB,
+  FipsAES128GCM
+};
+
+enum class Endpoint
+{
+  Client,
+  Server
+};
+
+const char* mode_name( Mode mode );
+void ensure_mode_available( Mode mode );
+void fill_fips_random( void* destination, size_t size );
+
 class CryptoException : public std::exception
 {
 public:
@@ -92,6 +110,7 @@ private:
 
 public:
   Base64Key(); /* random key */
+  explicit Base64Key( Mode mode );
   Base64Key( PRNG& prng );
   Base64Key( std::string printable_key );
   std::string printable_key( void ) const;
@@ -132,9 +151,13 @@ class Session
 {
 private:
   Base64Key key;
+  Mode mode;
   AlignedBuffer ctx_buf;
   ae_ctx* ctx;
+  bool ocb_initialized;
+  FipsAes128Gcm* fips_context;
   uint64_t blocks_encrypted;
+  uint64_t messages_encrypted;
 
   AlignedBuffer plaintext_buffer;
   AlignedBuffer ciphertext_buffer;
@@ -143,14 +166,15 @@ private:
 public:
   static const int RECEIVE_MTU = 2048;
   /* Overhead (not counting the nonce, which is handled by network transport) */
-  static const int ADDED_BYTES = 16 /* final OCB block */;
+  static const int ADDED_BYTES = 16 /* AEAD authentication tag */;
 
-  Session( Base64Key s_key );
+  Session( Base64Key s_key, Mode s_mode = Mode::LegacyOCB, Endpoint endpoint = Endpoint::Client );
   ~Session();
 
   const std::string encrypt( const Message& plaintext );
   const Message decrypt( const char* str, size_t len );
   const Message decrypt( const std::string& ciphertext ) { return decrypt( ciphertext.data(), ciphertext.size() ); }
+  int added_bytes( void ) const;
 
   Session( const Session& );
   Session& operator=( const Session& );

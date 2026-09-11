@@ -42,10 +42,29 @@
 #include "src/crypto/base64.h"
 #include "src/crypto/byteorder.h"
 #include "src/crypto/crypto.h"
+#include "src/crypto/fips_crypto.h"
 #include "src/crypto/prng.h"
 #include "src/util/fatal_assert.h"
 
 using namespace Crypto;
+
+const char* Crypto::mode_name( Mode mode )
+{
+  switch ( mode ) {
+    case Mode::LegacyOCB:
+      return "ocb-aes128";
+    case Mode::FipsAES128GCM:
+      return "aes128-gcm-v1";
+  }
+  throw CryptoException( "Unknown cryptographic mode." );
+}
+
+void Crypto::ensure_mode_available( Mode mode )
+{
+  if ( mode == Mode::FipsAES128GCM ) {
+    ensure_fips_crypto_available();
+  }
+}
 
 long int myatoi( const char* str )
 {
@@ -128,9 +147,12 @@ Base64Key::Base64Key( std::string printable_key )
   }
 }
 
-Base64Key::Base64Key()
+Base64Key::Base64Key() : Base64Key( Mode::LegacyOCB )
+{}
+
+Base64Key::Base64Key( Mode mode )
 {
-  PRNG().fill( key, sizeof( key ) );
+  PRNG( mode ).fill( key, sizeof( key ) );
 }
 
 Base64Key::Base64Key( PRNG& prng )
@@ -152,18 +174,27 @@ std::string Base64Key::printable_key( void ) const
   return std::string( base64 );
 }
 
-Session::Session( Base64Key s_key )
-  : key( s_key ), ctx_buf( ae_ctx_sizeof() ), ctx( (ae_ctx*)ctx_buf.data() ), blocks_encrypted( 0 ),
+Session::Session( Base64Key s_key, Mode s_mode, Endpoint endpoint )
+  : key( s_key ), mode( s_mode ), ctx_buf( ae_ctx_sizeof() ), ctx( (ae_ctx*)ctx_buf.data() ),
+    ocb_initialized( false ), fips_context( NULL ), blocks_encrypted( 0 ), messages_encrypted( 0 ),
     plaintext_buffer( RECEIVE_MTU ), ciphertext_buffer( RECEIVE_MTU ), nonce_buffer( Nonce::NONCE_LEN )
 {
-  if ( AE_SUCCESS != ae_init( ctx, key.data(), 16, 12, 16 ) ) {
-    throw CryptoException( "Could not initialize AES-OCB context." );
+  if ( mode == Mode::FipsAES128GCM ) {
+    fips_context = new FipsAes128Gcm( key.data(), endpoint == Endpoint::Server );
+  } else {
+    if ( AE_SUCCESS != ae_init( ctx, key.data(), 16, 12, 16 ) ) {
+      throw CryptoException( "Could not initialize AES-OCB context." );
+    }
+    ocb_initialized = true;
   }
 }
 
 Session::~Session()
 {
-  fatal_assert( ae_clear( ctx ) == AE_SUCCESS );
+  delete fips_context;
+  if ( ocb_initialized ) {
+    fatal_assert( ae_clear( ctx ) == AE_SUCCESS );
+  }
 }
 
 Nonce::Nonce( uint64_t val )
@@ -200,26 +231,42 @@ const std::string Session::encrypt( const Message& plaintext )
   assert( pt_len <= plaintext_buffer.len() );
 
   memcpy( plaintext_buffer.data(), plaintext.text.data(), pt_len );
-  memcpy( nonce_buffer.data(), plaintext.nonce.data(), Nonce::NONCE_LEN );
-
-  if ( ciphertext_len
-       != ae_encrypt( ctx,                      /* ctx */
-                      nonce_buffer.data(),      /* nonce */
-                      plaintext_buffer.data(),  /* pt */
-                      pt_len,                   /* pt_len */
-                      NULL,                     /* ad */
-                      0,                        /* ad_len */
-                      ciphertext_buffer.data(), /* ct */
-                      NULL,                     /* tag */
-                      AE_FINALIZE ) ) {         /* final */
-    throw CryptoException( "ae_encrypt() returned error." );
+  int encrypted_len;
+  if ( mode == Mode::FipsAES128GCM ) {
+    if ( messages_encrypted >= ( uint64_t( 1 ) << 31 ) ) {
+      throw CryptoException( "AES-128-GCM invocation limit reached.", true );
+    }
+    encrypted_len = fips_context->encrypt( plaintext.nonce.data() + 4,
+                                           8,
+                                           plaintext_buffer.data(),
+                                           pt_len,
+                                           nonce_buffer.data(),
+                                           nonce_buffer.len(),
+                                           ciphertext_buffer.data(),
+                                           ciphertext_buffer.len() );
+    messages_encrypted++;
+  } else {
+    memcpy( nonce_buffer.data(), plaintext.nonce.data(), Nonce::NONCE_LEN );
+    encrypted_len = ae_encrypt( ctx,                      /* ctx */
+                                nonce_buffer.data(),      /* nonce */
+                                plaintext_buffer.data(),  /* pt */
+                                pt_len,                   /* pt_len */
+                                NULL,                     /* ad */
+                                0,                        /* ad_len */
+                                ciphertext_buffer.data(), /* ct */
+                                NULL,                     /* tag */
+                                AE_FINALIZE );            /* final */
+  }
+  if ( ciphertext_len != encrypted_len ) {
+    throw CryptoException( "Authenticated encryption returned an unexpected length." );
   }
 
-  blocks_encrypted += pt_len >> 4;
-  if ( pt_len & 0xF ) {
-    /* partial block */
-    blocks_encrypted++;
-  }
+  if ( mode == Mode::LegacyOCB ) {
+    blocks_encrypted += pt_len >> 4;
+    if ( pt_len & 0xF ) {
+      /* partial block */
+      blocks_encrypted++;
+    }
 
   /* "Both the privacy and the authenticity properties of OCB degrade as
       per s^2 / 2^128, where s is the total number of blocks that the
@@ -233,22 +280,28 @@ const std::string Session::encrypt( const Message& plaintext )
      session.  If it happens, we simply kill the session.  The server and
      client use the same key, so we actually need to die after 2^47 blocks.
   */
-  if ( blocks_encrypted >> 47 ) {
-    throw CryptoException( "Encrypted 2^47 blocks.", true );
+    if ( blocks_encrypted >> 47 ) {
+      throw CryptoException( "Encrypted 2^47 blocks.", true );
+    }
   }
 
   std::string text( ciphertext_buffer.data(), ciphertext_len );
 
+  if ( mode == Mode::FipsAES128GCM ) {
+    return std::string( nonce_buffer.data(), FipsAes128Gcm::IV_LEN ) + plaintext.nonce.cc_str() + text;
+  }
   return plaintext.nonce.cc_str() + text;
 }
 
 const Message Session::decrypt( const char* str, size_t len )
 {
-  if ( len < 24 ) {
-    throw CryptoException( "Ciphertext must contain nonce and tag." );
+  const size_t iv_len = mode == Mode::FipsAES128GCM ? FipsAes128Gcm::IV_LEN : 0;
+  const size_t prefix_len = iv_len + 8;
+  if ( len < prefix_len + 16 ) {
+    throw CryptoException( "Ciphertext must contain IV, nonce, and tag." );
   }
 
-  int body_len = len - 8;
+  int body_len = len - prefix_len;
   int pt_len = body_len - 16;
 
   if ( pt_len < 0 ) { /* super-assertion that pt_len does not equal AE_INVALID */
@@ -259,26 +312,43 @@ const Message Session::decrypt( const char* str, size_t len )
   assert( (size_t)body_len <= ciphertext_buffer.len() );
   assert( (size_t)pt_len <= plaintext_buffer.len() );
 
-  Nonce nonce( str, 8 );
-  memcpy( ciphertext_buffer.data(), str + 8, body_len );
-  memcpy( nonce_buffer.data(), nonce.data(), Nonce::NONCE_LEN );
+  Nonce nonce( str + iv_len, 8 );
+  memcpy( ciphertext_buffer.data(), str + prefix_len, body_len );
 
-  if ( pt_len
-       != ae_decrypt( ctx,                      /* ctx */
-                      nonce_buffer.data(),      /* nonce */
-                      ciphertext_buffer.data(), /* ct */
-                      body_len,                 /* ct_len */
-                      NULL,                     /* ad */
-                      0,                        /* ad_len */
-                      plaintext_buffer.data(),  /* pt */
-                      NULL,                     /* tag */
-                      AE_FINALIZE ) ) {         /* final */
+  int decrypted_len;
+  if ( mode == Mode::FipsAES128GCM ) {
+    decrypted_len = fips_context->decrypt( str,
+                                           iv_len,
+                                           nonce.data() + 4,
+                                           8,
+                                           ciphertext_buffer.data(),
+                                           body_len,
+                                           plaintext_buffer.data(),
+                                           plaintext_buffer.len() );
+  } else {
+    memcpy( nonce_buffer.data(), nonce.data(), Nonce::NONCE_LEN );
+    decrypted_len = ae_decrypt( ctx,                      /* ctx */
+                                nonce_buffer.data(),      /* nonce */
+                                ciphertext_buffer.data(), /* ct */
+                                body_len,                 /* ct_len */
+                                NULL,                     /* ad */
+                                0,                        /* ad_len */
+                                plaintext_buffer.data(),  /* pt */
+                                NULL,                     /* tag */
+                                AE_FINALIZE );            /* final */
+  }
+  if ( pt_len != decrypted_len ) {
     throw CryptoException( "Packet failed integrity check." );
   }
 
   const Message ret( nonce, std::string( plaintext_buffer.data(), pt_len ) );
 
   return ret;
+}
+
+int Session::added_bytes( void ) const
+{
+  return ADDED_BYTES + ( mode == Mode::FipsAES128GCM ? FipsAes128Gcm::IV_LEN : 0 );
 }
 
 static rlim_t saved_core_rlimit;

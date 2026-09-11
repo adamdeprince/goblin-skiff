@@ -3,4 +3,4 @@ AM_CXXFLAGS = $(WARNING_CXXFLAGS) $(PICKY_CXXFLAGS) $(HARDEN_CFLAGS) $(MISC_CXXF
 
 noinst_LIBRARIES = libmoshstatesync.a
 
-libmoshstatesync_a_SOURCES = clipboard.cc clipboard.h completeterminal.cc completeterminal.h kitty.cc kitty.h stream.cc stream.h user.cc user.h
+libmoshstatesync_a_SOURCES = clipboard.cc clipboard.h completeterminal.cc completeterminal.h kitty.cc kitty.h stream.cc stream.h tmux.cc tmux.h user.cc user.h

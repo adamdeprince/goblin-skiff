@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+. "$(dirname "$0")/e2e-test-subrs"
+set_locale || exit 77
+command -v python3 >/dev/null 2>&1 || exit 77
+exec python3 "${srcdir:-.}/control-panel-integration.py" --files

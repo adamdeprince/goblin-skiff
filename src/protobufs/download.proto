@@ -1,0 +1,17 @@
+syntax = "proto2";
+option optimize_for = LITE_RUNTIME;
+package DownloadBuffers;
+
+// A one-shot file transfer, never a screen-state extension. Binary records
+// are zstd-22 compressed and FEC protected on the authenticated bulk channel.
+message Record {
+  enum Kind { BEGIN = 1; DATA = 2; END = 3; CANCEL = 4; STATUS = 5; }
+  optional Kind kind = 1;
+  optional uint64 token = 2;
+  optional bytes name = 3;
+  optional uint64 size = 4;
+  optional bytes data = 5;
+  optional uint32 checksum = 6;
+  optional string status = 7;
+  optional string error = 8;
+}

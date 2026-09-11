@@ -10,6 +10,8 @@ message Image {
   required uint32 width = 3;
   required uint32 height = 4;
   required bytes webp = 5;
+  enum Origin { KITTY = 0; SIXEL = 1; }
+  optional Origin origin = 6 [default = KITTY];
 }
 
 message Placement {

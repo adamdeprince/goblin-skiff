@@ -150,6 +150,12 @@ string Complete::diff_from( const Complete& existing ) const
     clip_it++;
   }
 
+  assert( tmux_output.compare( 0, existing.tmux_output.size(), existing.tmux_output ) == 0 );
+  if ( tmux_output.size() > existing.tmux_output.size() ) {
+    output.add_instruction()->SetExtension( HostBuffers::tmux_output,
+                                            tmux_output.substr( existing.tmux_output.size() ) );
+  }
+
   return output.SerializeAsString();
 }
 
@@ -160,6 +166,7 @@ string Complete::init_diff( void ) const
 
 void Complete::apply_string( const string& diff )
 {
+  terminal.get_fb().sixel_mutations = false;
   HostBuffers::HostMessage input;
   fatal_assert( input.ParseFromString( diff ) );
 
@@ -182,15 +189,18 @@ void Complete::apply_string( const string& diff )
         clipboard_event_from_proto( input.instruction( i ).GetExtension( HostBuffers::clipboard ) ) );
     } else if ( input.instruction( i ).HasExtension( HostBuffers::kitty ) ) {
       apply_kitty_state_delta( input.instruction( i ).GetExtension( HostBuffers::kitty ), terminal.get_fb() );
+    } else if ( input.instruction( i ).HasExtension( HostBuffers::tmux_output ) ) {
+      tmux_output += input.instruction( i ).GetExtension( HostBuffers::tmux_output );
     }
   }
+  terminal.get_fb().sixel_mutations = true;
 }
 
 bool Complete::operator==( Complete const& x ) const
 {
   //  assert( parser == x.parser ); /* parser state is irrelevant for us */
   return ( terminal == x.terminal ) && ( echo_ack == x.echo_ack ) && ( stream_events == x.stream_events )
-         && ( clipboard_events == x.clipboard_events );
+         && ( clipboard_events == x.clipboard_events ) && ( tmux_output == x.tmux_output );
 }
 
 void Complete::subtract( const Complete* prefix )
@@ -198,8 +208,12 @@ void Complete::subtract( const Complete* prefix )
   if ( this == prefix ) {
     stream_events.clear();
     clipboard_events.clear();
+    tmux_output.clear();
     return;
   }
+
+  assert( tmux_output.compare( 0, prefix->tmux_output.size(), prefix->tmux_output ) == 0 );
+  tmux_output.erase( 0, prefix->tmux_output.size() );
 
   for ( std::deque<Network::StreamEvent>::const_iterator i = prefix->stream_events.begin();
         i != prefix->stream_events.end();
@@ -222,9 +236,11 @@ void Complete::replace_terminal_state( const Complete& x )
 {
   std::deque<Network::StreamEvent> saved_stream_events( stream_events );
   std::deque<ClipboardEvent> saved_clipboard_events( clipboard_events );
+  std::string saved_tmux_output( tmux_output );
   *this = x;
   stream_events = saved_stream_events;
   clipboard_events = saved_clipboard_events;
+  tmux_output.swap( saved_tmux_output );
   reset_input();
 }
 

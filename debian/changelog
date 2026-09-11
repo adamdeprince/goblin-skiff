@@ -1,3 +1,15 @@
+goblin-mosh (1.4.0+goblin20260909.1) stable; urgency=medium
+
+  * Publish the low-bandwidth Goblin Mosh development snapshot as a separate
+    package, with zstd-22, adaptive pacing, and direct file-menu transfers.
+  * Enable librsync, WebP graphics, and OpenSSL 3 FIPS-provider mode support.
+    A configured validated provider is still required for FIPS-mode sessions.
+  * Include client/server tools, manuals, completion, and matching source.
+  * Prevent file replies from starving behind pending screen-refresh timers.
+  * Use a bounded response wait in the asynchronous download-consent test.
+
+ -- Adam DePrince <adam.deprince@gmail.com>  Wed, 09 Sep 2026 18:52:13 +0000
+
 mosh (1.4.0-2) UNRELEASED; urgency=medium
 
   * Remove Benjamin Barenblat from Uploaders.

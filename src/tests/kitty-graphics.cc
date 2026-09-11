@@ -10,8 +10,13 @@
 
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <png.h>
 #include <zlib.h>
@@ -52,20 +57,25 @@ std::string transmit_held_rgb( uint32_t id, unsigned char r, unsigned char g, un
   return std::string( "\033_Ga=T,C=1,f=24,s=1,v=1,i=" ) + std::to_string( id ) + ";" + b64 + "\033\\";
 }
 
-std::string one_pixel_png( unsigned char r, unsigned char g, unsigned char b, unsigned char a )
+std::string rgba_png( unsigned char r, unsigned char g, unsigned char b, unsigned char a,
+                      unsigned width = 1, unsigned height = 1 )
 {
   png_image image;
   memset( &image, 0, sizeof( image ) );
   image.version = PNG_IMAGE_VERSION;
-  image.width = 1;
-  image.height = 1;
+  image.width = width;
+  image.height = height;
   image.format = PNG_FORMAT_RGBA;
-  const unsigned char pixel[] = { r, g, b, a };
+  std::string pixels;
+  for ( size_t i = 0; i < static_cast<size_t>( width ) * height; i++ ) {
+    pixels += rgb_cell( r, g, b );
+    pixels.push_back( static_cast<char>( a ) );
+  }
 
   png_alloc_size_t size = 0;
-  require( png_image_write_to_memory( &image, NULL, &size, 0, pixel, 0, NULL ) != 0, "measure PNG output" );
+  require( png_image_write_to_memory( &image, NULL, &size, 0, pixels.data(), 0, NULL ) != 0, "measure PNG output" );
   std::string png( size, '\0' );
-  require( png_image_write_to_memory( &image, &png[0], &size, 0, pixel, 0, NULL ) != 0, "write PNG output" );
+  require( png_image_write_to_memory( &image, &png[0], &size, 0, pixels.data(), 0, NULL ) != 0, "write PNG output" );
   png.resize( size );
   return png;
 }
@@ -152,7 +162,7 @@ void test_transmit_and_place( void )
 void test_png_transmit( void )
 {
   Terminal::Complete term( 80, 24 );
-  const std::string png = one_pixel_png( 7, 19, 233, 101 );
+  const std::string png = rgba_png( 7, 19, 233, 101 );
   const std::string command
     = std::string( "\033_Ga=t,f=100,s=99,v=77,i=12;" ) + Terminal::base64_encode_osc52( png ) + "\033\\";
   const std::string reply = term.act( command );
@@ -265,7 +275,8 @@ void test_webp_quota_counts_decoded_pixels( void )
            "normalize quota test image" );
 
   Terminal::Framebuffer framebuffer( 80, 24 );
-  for ( uint32_t id = 1; id <= 9; id++ ) {
+  const uint32_t capacity = Terminal::KITTY_IMAGE_QUOTA / ( width * height * 4 );
+  for ( uint32_t id = 1; id <= capacity + 1; id++ ) {
     Terminal::KittyImage image;
     image.id = id;
     image.width = width;
@@ -278,8 +289,8 @@ void test_webp_quota_counts_decoded_pixels( void )
     framebuffer.put_kitty_placement( placement );
   }
   require( framebuffer.find_kitty_image( 1 ) == NULL, "decoded-state quota evicts the oldest image" );
-  require( framebuffer.find_kitty_image( 9 ) != NULL, "decoded-state quota preserves the new upload" );
-  require( framebuffer.get_kitty_images().size() == 8, "decoded-state quota caps aggregate pixels" );
+  require( framebuffer.find_kitty_image( capacity + 1 ) != NULL, "decoded-state quota preserves the new upload" );
+  require( framebuffer.get_kitty_images().size() == capacity, "decoded-state quota caps aggregate pixels" );
 }
 
 void test_invalid_dimensions( void )
@@ -325,6 +336,8 @@ void test_terminal_output_converts_webp_to_kitty( void )
   Terminal::append_kitty_frame( repaint, false, with_image.get_fb(), with_image.get_fb() );
   require( repaint.find( "a=d,d=I,i=5" ) != std::string::npos,
            "full repaint clears known virtual placements by image id" );
+  require( repaint.find( "a=d,d=A" ) == std::string::npos,
+           "full repaint never globally deletes unrelated local graphics" );
   require( repaint.find( "a=t" ) != std::string::npos && repaint.find( "a=p" ) != std::string::npos,
            "full repaint restores image data and placement" );
 
@@ -457,12 +470,133 @@ void test_anonymous_placement_deletion_resets_image_placements( void )
            "anonymous placement deletion clears the image's terminal placements" );
   require( output.find( "a=t" ) == std::string::npos, "placement deletion does not resend WebP pixels" );
 }
+
+void check_kittycairo_output( const std::string& input )
+{
+  Terminal::Complete source( 80, 40 ), blank( 80, 40 ), received( 80, 40 );
+  const Terminal::ClientGeometry geometry( 80, 40, 1600, 1600, 20, 40 );
+  /* gnuplot sends chunked PNG with a=T, no s/v or c/r, then ED0 and LF.
+     Its 640x480 pixel plot occupies 32 columns and 12 rows in this terminal. */
+  for ( size_t pos = 0; pos < input.size(); pos += 997 ) {
+    source.act( input.substr( pos, 997 ), &geometry );
+  }
+  require( source.get_fb().get_kitty_images().size() == 1, "kittycairo produces one stored image" );
+  const auto& image = source.get_fb().get_kitty_images().begin()->second;
+  require( image.width == 640 && image.height == 480, "kittycairo PNG dimensions survive WebP storage" );
+  require( source.get_fb().ds.get_cursor_row() == 13 && source.get_fb().ds.get_cursor_col() == 32,
+           "kittycairo cursor follows the full image rectangle and trailing LF, not a single cell" );
+  const auto& placement = source.get_fb().get_kitty_placements().at( 0 );
+  require( placement.columns == 0 && placement.rows == 0,
+           "native pixel dimensions must not be replaced with a rounded cell rectangle" );
+  received.apply_string( source.diff_from( blank ) );
+  require( !source.compare( received ) && received.get_fb().ds == source.get_fb().ds
+             && received.get_fb().get_kitty_images() == source.get_fb().get_kitty_images()
+             && received.get_fb().get_kitty_placements() == source.get_fb().get_kitty_placements(),
+           "kittycairo layout survives state synchronization" );
+  std::string output;
+  Terminal::append_kitty_frame( output, false, blank.get_fb(), received.get_fb() );
+  const auto command = first_kitty_command( output );
+  require( command.width == 640 && command.height == 480, "client renders original kittycairo pixel dimensions" );
+  require( output.find( "a=p,C=1,q=2,i=" ) != std::string::npos,
+           "client placement leaves synchronized cursor restoration to the display renderer" );
+  Terminal::Display display( false );
+  Terminal::Complete rendered( 80, 40 );
+  rendered.act( display.new_frame( false, blank.get_fb(), received.get_fb() ) );
+  require( rendered.get_fb().ds.get_cursor_row() == 13 && rendered.get_fb().ds.get_cursor_col() == 32,
+           "display restores text cursor below the plot" );
 }
 
-int main( void )
+void test_pixel_placement_cursor( void )
+{
+  const std::string png = rgba_png( 70, 100, 200, 255, 640, 480 );
+  check_kittycairo_output( "\033[0J\033[H" + Terminal::encode_kitty_chunks( "a=T,f=100", png ) + "\033[0J\n" );
+
+  Terminal::Complete stored( 80, 80 );
+  stored.act( Terminal::encode_kitty_chunks( "a=t,f=100,i=61", png ) );
+  const Terminal::ClientGeometry geometry( 80, 80, 1600, 3200, 20, 40 );
+  struct Case { const char* keys; int col, row; };
+  const Case cases[] = { { "", 32, 12 }, { ",c=16", 16, 6 }, { ",r=6", 16, 6 },
+                         { ",c=20,r=3", 20, 3 }, { ",X=10,Y=10", 33, 13 },
+                         { ",x=20,y=40,w=320,h=120", 16, 3 }, { ",C=1", 0, 0 },
+                         { ",U=1,c=16,r=6", 0, 0 }, { ",P=62", 0, 0 },
+                         { ",c=4294967295,r=4294967295", 79, 79 } };
+  for ( const auto& test : cases ) {
+    Terminal::Complete term( stored );
+    term.act( std::string( "\033_Ga=p,i=61" ) + test.keys + "\033\\", &geometry );
+    require( term.get_fb().ds.get_cursor_col() == test.col && term.get_fb().ds.get_cursor_row() == test.row,
+             "pixel/cell placement, cropping, offsets, cursor-hold and bounded movement" );
+  }
+  const Terminal::ClientGeometry changed( 80, 80, 800, 1600, 10, 20 );
+  stored.act( "\033_Ga=p,i=61\033\\", &changed );
+  require( stored.get_fb().ds.get_cursor_col() == 64 && stored.get_fb().ds.get_cursor_row() == 24,
+           "placement uses current attachment geometry rather than dimensions stored with the image" );
+}
+}
+
+static void test_file_media()
+{
+  char directory[] = "/tmp/goblin-kitty-media.XXXXXX";
+  require( mkdtemp( directory ) != NULL, "create test directory" );
+  const std::string regular = std::string( directory ) + "/image", temp = std::string( directory ) + "/tty-graphics-protocol-image";
+  const std::string bytes = "prefix" + rgb_cell( 255, 0, 0 ) + "suffix";
+  const std::string memory = "/goblin-kitty-" + std::to_string( getpid() );
+  for ( char medium : { 'd', 'f', 't', 's' } ) {
+    std::string payload = rgb_cell( 255, 0, 0 );
+    if ( medium == 'f' || medium == 't' ) {
+      payload = medium == 'f' ? regular : temp;
+      const int fd = open( payload.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600 );
+      require( fd >= 0, "create Kitty file" );
+      require( write( fd, bytes.data(), bytes.size() ) == ssize_t( bytes.size() ), "write Kitty file" ); close( fd );
+    } else if ( medium == 's' ) {
+      payload = memory;
+      const int fd = shm_open( memory.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600 );
+      require( fd >= 0 && ftruncate( fd, bytes.size() ) == 0, "create shared memory" );
+      void* mapping = mmap( NULL, bytes.size(), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0 );
+      require( mapping != MAP_FAILED, "map shared memory" );
+      memcpy( mapping, bytes.data(), bytes.size() ); munmap( mapping, bytes.size() ); close( fd );
+    }
+    Terminal::Complete source( 80, 24 ), received( 80, 24 ), blank( 80, 24 );
+    const auto reply = source.act( "\033_Ga=T,t=" + std::string( 1, medium ) + ",i=90,f=24,s=1,v=1"
+                                  + ( medium == 'd' ? "" : ",O=6,S=3" ) + ";" + Terminal::base64_encode_osc52( payload ) + "\033\\" );
+    require( reply.find( ";OK" ) != std::string::npos, "incoming Kitty medium accepted" );
+    const auto* img = source.get_fb().find_kitty_image( 90 );
+    require( img && img->width == 1 && img->height == 1, "image stored for all four media" );
+    received.apply_string( source.diff_from( blank ) );
+    require( received.get_fb().find_kitty_image( 90 ) != NULL, "all four media survive state sync" );
+    Terminal::Display display( false );
+    display.set_graphics( Terminal::ClientGraphics( true ), true );
+    const auto output = display.new_frame( true, blank.get_fb(), received.get_fb() );
+    require( output.find( "t=f" ) == std::string::npos && output.find( "t=t" ) == std::string::npos
+               && output.find( "t=s" ) == std::string::npos && output.find( "\033_G" ) != std::string::npos,
+             "client output uses inline pixels, never server references" );
+    if ( medium == 'f' ) { require( access( regular.c_str(), F_OK ) == 0, "regular file preserved" ); }
+    if ( medium == 't' ) { require( access( temp.c_str(), F_OK ) < 0, "protocol temporary file removed" ); }
+    if ( medium == 's' ) { const int fd = shm_open( memory.c_str(), O_RDONLY, 0 ); require( fd < 0, "shared memory unlinked" ); }
+  }
+  Terminal::KittyCommand command;
+  command.medium = 't'; command.payload = regular; command.data_offset = 6; command.data_size = 3;
+  std::string data, error;
+  require( Terminal::kitty_read_medium( command, data, error ) && access( regular.c_str(), F_OK ) == 0,
+           "temporary medium never deletes an ordinary filename" );
+  command.payload = regular + std::string( 1, '\0' ) + "ignored";
+  require( !Terminal::kitty_read_medium( command, data, error ), "reject NUL path" );
+  const std::string fifo = std::string( directory ) + "/fifo";
+  require( mkfifo( fifo.c_str(), 0600 ) == 0, "create FIFO" );
+  command.payload = fifo;
+  require( !Terminal::kitty_read_medium( command, data, error ), "reject special file without blocking" );
+  unlink( fifo.c_str() ); unlink( regular.c_str() ); rmdir( directory );
+}
+
+int main( int argc, char* argv[] )
 {
   try {
+    if ( argc == 2 && std::string( argv[1] ) == "--kittycairo" ) {
+      const std::string input( ( std::istreambuf_iterator<char>( std::cin ) ), std::istreambuf_iterator<char>() );
+      check_kittycairo_output( input );
+      return 0;
+    }
     test_parse_command();
+    test_file_media();
     test_query_reply();
     test_transmit_and_place();
     test_png_transmit();
@@ -480,6 +614,7 @@ int main( void )
     test_text_diff_checkpoints_placements();
     test_image_replacement_restores_placement();
     test_anonymous_placement_deletion_resets_image_placements();
+    test_pixel_placement_cursor();
   } catch ( const std::exception& e ) {
     std::cerr << "kitty-graphics: " << e.what() << std::endl;
     return 1;

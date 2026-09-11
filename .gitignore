@@ -38,5 +38,12 @@ src/include/stamp-h1
 /VERSION
 /VERSION.stamp
 /scripts/mosh
-/scripts/adam-mosh
+/scripts/goblin-mosh
 src/include/version.h
+
+# Product-site files are maintained separately and must not be committed.
+/html/
+
+# Local configure probes and Python test caches.
+/conf*.file
+__pycache__/

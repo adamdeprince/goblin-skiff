@@ -31,6 +31,7 @@
 */
 
 #include <cassert>
+#include <stdexcept>
 
 #include "compressor.h"
 #include "src/network/statesamples.h"
@@ -164,6 +165,7 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
                                                   bool allow_zstd_dictionary,
                                                   const std::string& zstd_dictionary_id )
 {
+  if ( MTU <= Fragment::frag_header_len ) { throw std::invalid_argument( "MTU is too small for a state fragment" ); }
   MTU -= Fragment::frag_header_len;
   if ( ( inst.old_num() != last_instruction.old_num() ) || ( inst.new_num() != last_instruction.new_num() )
        || ( inst.ack_num() != last_instruction.ack_num() )
@@ -188,23 +190,14 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
   last_zstd_dictionary_id = zstd_dictionary_id;
 
   std::string payload = get_compressor().compress_str( inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary );
-  uint16_t fragment_num = 0;
+  const size_t count = ( payload.size() + MTU - 1 ) / MTU;
+  if ( count > 32768 ) { throw std::length_error( "compressed screen state exceeds the fragment limit" ); }
   std::vector<Fragment> ret;
-
-  while ( !payload.empty() ) {
-    std::string this_fragment;
-    bool final = false;
-
-    if ( payload.size() > MTU ) {
-      this_fragment = std::string( payload.begin(), payload.begin() + MTU );
-      payload = std::string( payload.begin() + MTU, payload.end() );
-    } else {
-      this_fragment = payload;
-      payload.clear();
-      final = true;
-    }
-
-    ret.push_back( Fragment( next_instruction_id, fragment_num++, final, this_fragment ) );
+  ret.reserve( count );
+  // Offset slicing is linear. Repeatedly copying the remaining payload was
+  // quadratic in image size and could stall a wide-screen redraw for seconds.
+  for ( size_t i = 0; i < count; i++ ) {
+    ret.emplace_back( next_instruction_id, uint16_t( i ), i + 1 == count, payload.substr( i * MTU, MTU ) );
   }
 
   return ret;

@@ -30,8 +30,12 @@ public:
     ServerSide
   };
 
-  StreamForwarder( Side side, unsigned int stream_delay_ms, unsigned int stream_rate_bytes_per_second );
+  StreamForwarder( Side side,
+                   unsigned int stream_delay_ms,
+                   unsigned int stream_rate_bytes_per_second,
+                   Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB );
   ~StreamForwarder();
+  void adapt_link_budget( double bytes_per_second );
 
   bool add_tcp_forward( const std::string& spec, std::string& error );
   bool add_dynamic_forward( const std::string& spec, std::string& error );
@@ -205,9 +209,11 @@ private:
   static const size_t STREAM_DATAGRAM_OVERHEAD_ALLOWANCE = 192;
 
   Side side;
+  Crypto::Mode crypto_mode;
   uint64_t next_stream_id;
   unsigned int stream_delay_ms;
   unsigned int stream_rate_bytes_per_second;
+  bool automatic_rate;
   double stream_tokens[2];
   uint64_t last_token_update;
   bool agent_requested;

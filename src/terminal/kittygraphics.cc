@@ -44,14 +44,14 @@ KittyCommand::KittyCommand()
 {}
 
 KittyImage::KittyImage()
-  : id( 0 ), number( 0 ), format( KITTY_FORMAT_WEBP ), width( 0 ), height( 0 ),
+  : id( 0 ), number( 0 ), format( KITTY_FORMAT_WEBP ), width( 0 ), height( 0 ), origin( ImageOrigin::Kitty ),
     data( std::make_shared<std::string>() ), serial( 0 )
 {}
 
 bool KittyImage::operator==( const KittyImage& other ) const
 {
   return ( id == other.id ) && ( number == other.number ) && ( format == other.format ) && ( width == other.width )
-         && ( height == other.height ) && ( serial == other.serial )
+         && ( height == other.height ) && ( origin == other.origin ) && ( serial == other.serial )
          && ( ( data == other.data ) || ( data && other.data && *data == *other.data ) );
 }
 
@@ -242,40 +242,60 @@ std::string kitty_response( uint32_t image_id, uint32_t placement_id, const std:
 static bool path_is_sensitive( const std::string& path )
 {
   return path.compare( 0, 6, "/proc/" ) == 0 || path == "/proc" || path.compare( 0, 5, "/sys/" ) == 0
-         || path == "/sys" || path.compare( 0, 5, "/dev/" ) == 0 || path == "/dev";
+         || path == "/sys" || ( path.compare( 0, 5, "/dev/" ) == 0 && path.compare( 0, 9, "/dev/shm/" ) ) || path == "/dev";
 }
 
-static bool read_regular_file( const std::string& path, uint32_t offset, uint32_t size, std::string& data )
+static std::string canonical_path( const std::string& path )
 {
+  if ( path.empty() || path.find( '\0' ) != std::string::npos ) { return {}; }
+  char* resolved = realpath( path.c_str(), NULL );
+  if ( !resolved ) { return {}; }
+  const std::string result( resolved ); free( resolved ); return result;
+}
+
+static bool graphics_temporary_path( const std::string& path )
+{
+  if ( path.find( "tty-graphics-protocol" ) == std::string::npos ) { return false; }
+  const char* roots[] = { "/tmp", "/var/tmp", "/dev/shm", getenv( "TMPDIR" ) };
+  for ( const char* root : roots ) {
+    if ( !root ) { continue; }
+    const auto resolved = canonical_path( root );
+    if ( !resolved.empty() && resolved != "/" && path.compare( 0, resolved.size() + 1, resolved + "/" ) == 0 ) { return true; }
+  }
+  return false;
+}
+
+static bool read_regular_file( const std::string& path, uint32_t offset, uint32_t size, std::string& data, bool temporary )
+{
+  // Check the opened descriptor, not a stat-then-reopen race. O_NONBLOCK
+  // prevents a swapped FIFO/device from blocking the terminal connection.
+  const int fd = open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+  if ( fd < 0 ) { return false; }
   struct stat st;
-  if ( stat( path.c_str(), &st ) < 0 || !S_ISREG( st.st_mode ) || st.st_size < 0 ) {
-    return false;
+  if ( fstat( fd, &st ) < 0 || !S_ISREG( st.st_mode ) || st.st_size < 0 ) {
+    close( fd ); return false;
   }
   const uint64_t total = static_cast<uint64_t>( st.st_size );
   const uint64_t off = offset;
   if ( off > total ) {
-    return false;
+    close( fd ); return false;
   }
   const uint64_t available = total - off;
-  const uint64_t wanted = size == 0 || size > available ? available : size;
-  if ( wanted > KITTY_IMAGE_QUOTA ) {
-    return false;
-  }
-  std::ifstream in( path.c_str(), std::ios::in | std::ios::binary );
-  if ( !in ) {
-    return false;
-  }
-  if ( offset > 0 ) {
-    in.seekg( offset, std::ios::beg );
-  }
+  const uint64_t wanted = size == 0 ? available : size;
+  if ( wanted > available || wanted > KITTY_IMAGE_QUOTA ) { close( fd ); return false; }
   data.assign( static_cast<size_t>( wanted ), '\0' );
-  if ( wanted > 0 ) {
-    in.read( &data[0], static_cast<std::streamsize>( wanted ) );
-    if ( static_cast<uint64_t>( in.gcount() ) != wanted ) {
-      data.clear();
-      return false;
-    }
+  size_t at = 0;
+  while ( at < wanted ) {
+    const ssize_t n = pread( fd, &data[at], wanted - at, off + at );
+    if ( n < 0 && errno == EINTR ) { continue; }
+    if ( n <= 0 ) { data.clear(); close( fd ); return false; }
+    at += n;
   }
+  if ( temporary && graphics_temporary_path( path ) ) {
+    struct stat current;
+    if ( lstat( path.c_str(), &current ) == 0 && current.st_dev == st.st_dev && current.st_ino == st.st_ino ) { unlink( path.c_str() ); }
+  }
+  close( fd );
   return true;
 }
 
@@ -288,19 +308,14 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
   }
 
   if ( cmd.medium == 'f' || cmd.medium == 't' ) {
-    const std::string path = cmd.payload;
+    const std::string path = canonical_path( cmd.payload );
     if ( path.empty() || path_is_sensitive( path ) ) {
       error = "EINVAL: refused to read path";
       return false;
     }
-    if ( !read_regular_file( path, cmd.data_offset, cmd.data_size, data ) ) {
+    if ( !read_regular_file( path, cmd.data_offset, cmd.data_size, data, cmd.medium == 't' ) ) {
       error = "ENOENT: could not read file";
       return false;
-    }
-    if ( cmd.medium == 't' ) {
-      if ( path.find( "tty-graphics-protocol" ) != std::string::npos ) {
-        unlink( path.c_str() );
-      }
     }
     return true;
   }
@@ -308,7 +323,7 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
   if ( cmd.medium == 's' ) {
 #if defined( __unix__ ) || defined( __APPLE__ )
     const std::string name = cmd.payload;
-    if ( name.empty() ) {
+    if ( name.empty() || name.find( '\0' ) != std::string::npos ) {
       error = "EINVAL: empty shm name";
       return false;
     }
@@ -335,27 +350,30 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     const size_t total = static_cast<size_t>( total64 );
     const size_t off = static_cast<size_t>( off64 );
     const size_t available = total - off;
-    const size_t want = cmd.data_size == 0 || cmd.data_size > available ? available : cmd.data_size;
-    if ( want > KITTY_IMAGE_QUOTA ) {
+    const size_t want = cmd.data_size == 0 ? available : cmd.data_size;
+    if ( want > KITTY_IMAGE_QUOTA || want > available ) {
       close( fd );
       shm_unlink( name.c_str() );
       error = "ENOSPC: shared memory image exceeds storage quota";
       return false;
     }
-    if ( total == 0 ) {
+    if ( want == 0 ) {
       close( fd );
       shm_unlink( name.c_str() );
       return true;
     }
-    void* map = mmap( NULL, total, PROT_READ, MAP_SHARED, fd, 0 );
+    const size_t page = static_cast<size_t>( getpagesize() );
+    const size_t base = off - off % page, skip = off - base;
+    const size_t mapped = skip + want;
+    void* map = mmap( NULL, mapped, PROT_READ, MAP_SHARED, fd, base );
     close( fd );
     if ( map == MAP_FAILED ) {
       shm_unlink( name.c_str() );
       error = "EINVAL: mmap failed";
       return false;
     }
-    data.assign( static_cast<char*>( map ) + off, want );
-    munmap( map, total );
+    data.assign( static_cast<char*>( map ) + skip, want );
+    munmap( map, mapped );
     shm_unlink( name.c_str() );
     return true;
 #else
@@ -370,8 +388,8 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
 
 static bool checked_pixel_size( uint32_t width, uint32_t height, size_t bytes_per_pixel, size_t& size )
 {
-  if ( width == 0 || height == 0 || width > static_cast<uint32_t>( INT_MAX )
-       || height > static_cast<uint32_t>( INT_MAX ) || bytes_per_pixel == 0 ) {
+  if ( width == 0 || height == 0 || width > GRAPHICS_MAX_DIMENSION || height > GRAPHICS_MAX_DIMENSION
+       || uint64_t( width ) * height > GRAPHICS_MAX_PIXELS || bytes_per_pixel == 0 ) {
     return false;
   }
   if ( width > KITTY_IMAGE_QUOTA / bytes_per_pixel
@@ -540,8 +558,29 @@ static bool anonymous_placement_removed( const std::vector<KittyPlacement>& old_
   return false;
 }
 
-void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current )
+void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current,
+                         bool convert_sixel )
 {
+  // Sixel-origin images must not be implicitly converted by the existing
+  // Kitty renderer. Their client compositor will choose native sixel first.
+  bool contains_sixel = false;
+  for ( const auto& image : last.get_kitty_images() ) {
+    contains_sixel = contains_sixel || image.second.origin == ImageOrigin::Sixel;
+  }
+  for ( const auto& image : current.get_kitty_images() ) {
+    contains_sixel = contains_sixel || image.second.origin == ImageOrigin::Sixel;
+  }
+  if ( contains_sixel && !convert_sixel ) {
+    Framebuffer old_kitty( last ), new_kitty( current );
+    for ( const auto& image : last.get_kitty_images() ) {
+      if ( image.second.origin == ImageOrigin::Sixel ) { old_kitty.erase_kitty_image( image.first ); }
+    }
+    for ( const auto& image : current.get_kitty_images() ) {
+      if ( image.second.origin == ImageOrigin::Sixel ) { new_kitty.erase_kitty_image( image.first ); }
+    }
+    append_kitty_frame( out, initialized, old_kitty, new_kitty );
+    return;
+  }
   const std::map<uint32_t, KittyImage>& now_images = current.get_kitty_images();
   const std::map<uint32_t, KittyImage>& old_images = last.get_kitty_images();
   const std::vector<KittyPlacement>& now_places = current.get_kitty_placements();
@@ -553,7 +592,8 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
   }
 
   if ( !initialized ) {
-    out.append( "\033_Ga=d,d=A,q=2\033\\" );
+    // Only delete images owned by this synchronized state. A global delete
+    // also removes unrelated local images still visible on the screen.
     for ( std::map<uint32_t, KittyImage>::const_iterator it = old_images.begin(); it != old_images.end(); ++it ) {
       char buf[64];
       snprintf( buf, sizeof( buf ), "\033_Ga=d,d=I,i=%u,q=2\033\\", it->first );

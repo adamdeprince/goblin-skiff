@@ -30,6 +30,7 @@
     also delete it here.
 */
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <cstdio>
@@ -62,6 +63,7 @@ void Dispatcher::newparamchar( const Parser::Param* act )
 
 void Dispatcher::collect( const Parser::Collect* act )
 {
+  DCS_escape_end( 0, NULL );
   assert( act->char_present );
   if ( ( dispatch_chars.length() < 8 ) /* never should need more than 2 */
        && ( act->ch <= 255 ) ) {       /* ignore non-8-bit */
@@ -69,8 +71,10 @@ void Dispatcher::collect( const Parser::Collect* act )
   }
 }
 
-void Dispatcher::clear( const Parser::Clear* act __attribute( ( unused ) ) )
+void Dispatcher::clear( const Parser::Clear* act )
 {
+  if ( DCS_escape && !( act->ch == 0x1b && DCS_just_escaped ) ) { DCS_escape_end( 0, NULL ); }
+  DCS_just_escaped = false;
   params.clear();
   dispatch_chars.clear();
   parsed = false;
@@ -250,6 +254,8 @@ void Dispatcher::OSC_put( const Parser::OSC_Put* act )
 
 void Dispatcher::OSC_start( const Parser::OSC_Start* act __attribute( ( unused ) ) )
 {
+  finish_download( false );
+  DCS_escape_end( 0, NULL );
   OSC_string.clear();
   OSC_overflow = false;
 }
@@ -273,6 +279,8 @@ void Dispatcher::APC_put( const Parser::APC_Put* act )
 
 void Dispatcher::APC_start( const Parser::APC_Start* act __attribute( ( unused ) ) )
 {
+  finish_download( false );
+  DCS_escape_end( 0, NULL );
   APC_string.clear();
   APC_overflow = false;
 }
@@ -284,7 +292,66 @@ bool Dispatcher::operator==( const Dispatcher& x ) const
          && ( OSC_overflow == x.OSC_overflow ) && ( clipboard_events == x.clipboard_events )
          && ( APC_string == x.APC_string ) && ( APC_overflow == x.APC_overflow )
          && ( kitty_uploading == x.kitty_uploading ) && ( kitty_payload == x.kitty_payload )
+         && ( DCS_string == x.DCS_string ) && ( DCS_active == x.DCS_active ) && ( DCS_escape == x.DCS_escape )
          && ( terminal_to_host == x.terminal_to_host );
+}
+
+void Dispatcher::DCS_start( wchar_t final )
+{
+  finish_download( false );
+  DCS_string.clear();
+  DCS_escape = DCS_just_escaped = false;
+  DCS_active = sixel_enabled && final == 'q' && dispatch_chars.empty();
+  if ( DCS_active ) { DCS_string = "\033P" + params + "q"; }
+}
+
+void Dispatcher::DCS_put( wchar_t ch )
+{
+  if ( !DCS_active ) { return; }
+  if ( ch < 0 || ch > 127 || DCS_string.size() >= Sixel::MAX_ENCODED_BYTES - 2 ) {
+    DCS_active = false;
+    DCS_string.clear();
+    return;
+  }
+  DCS_string.push_back( char( ch ) );
+}
+
+void Dispatcher::DCS_end( wchar_t ch, Framebuffer* fb )
+{
+  if ( !DCS_active ) { return; }
+  DCS_active = false;
+  if ( ch == 0x9c ) { finish_sixel( fb ); }
+  else if ( ch == 0x1b ) { DCS_escape = DCS_just_escaped = true; }
+  else { DCS_string.clear(); }
+}
+
+void Dispatcher::DCS_escape_end( wchar_t ch, Framebuffer* fb )
+{
+  if ( !DCS_escape ) { return; }
+  DCS_escape = DCS_just_escaped = false;
+  if ( ch == '\\' && fb ) { finish_sixel( fb ); }
+  else { DCS_string.clear(); }
+}
+
+void Dispatcher::finish_sixel( Framebuffer* fb )
+{
+  DCS_string += "\033\\";
+  Sixel::Bitmap bitmap;
+  std::string error;
+  if ( sixel_enabled && Sixel::decode( DCS_string, bitmap, error, 0,
+                                      sixel_private_palette ? nullptr : &sixel_palette ) ) {
+    Sixel::place( *fb, bitmap, client_geometry, sixel_display_mode, sixel_cursor_right );
+  }
+  DCS_string.clear();
+}
+
+void Dispatcher::reset_sixel()
+{
+  DCS_string.clear();
+  DCS_active = DCS_escape = DCS_just_escaped = false;
+  sixel_display_mode = sixel_cursor_right = false;
+  sixel_private_palette = true;
+  sixel_palette = Sixel::Palette();
 }
 
 static void kitty_reply( Dispatcher* dispatch, const KittyCommand& cmd, uint32_t image_id, const std::string& msg )
@@ -309,6 +376,63 @@ static uint32_t resolve_kitty_id( Framebuffer* fb, const KittyCommand& cmd, bool
     return newest ? newest->id : 0;
   }
   return 0;
+}
+
+static uint64_t divide_round_up( uint64_t value, uint64_t divisor )
+{
+  return value / divisor + ( value % divisor != 0 );
+}
+
+static void advance_kitty_cursor( Framebuffer* fb, const KittyPlacement& place, const ClientGeometry* geometry )
+{
+  if ( place.cursor_hold || place.unicode_placeholder || place.parent_image != 0 ) {
+    return;
+  }
+  const KittyImage* image = fb->find_kitty_image( place.image_id );
+  assert( image != NULL );
+
+  /* Geometry is attachment metadata, not image/terminal state. If a terminal
+     exposes no pixel geometry, use a conventional 8x16 cell estimate rather
+     than treating an arbitrarily large image as a single character. */
+  uint64_t cw = 8, ch = 16;
+  if ( geometry && geometry->columns == static_cast<uint32_t>( fb->ds.get_width() )
+       && geometry->rows == static_cast<uint32_t>( fb->ds.get_height() ) ) {
+    if ( geometry->has_cell_size() ) {
+      cw = std::min( geometry->cell_width_px, 65535U );
+      ch = std::min( geometry->cell_height_px, 65535U );
+    } else if ( geometry->has_pixel_size() ) {
+      cw = std::max( 1U, std::min( geometry->width_px / geometry->columns, 65535U ) );
+      ch = std::max( 1U, std::min( geometry->height_px / geometry->rows, 65535U ) );
+    }
+  }
+
+  /* Cropping selects the source rectangle; c/r select its displayed size.
+     Preserve c/r as supplied for the client: rounding native pixels into an
+     explicit cell rectangle would stretch the plot and change its size. */
+  const uint64_t source_width = image->width - std::min( place.src_x, image->width );
+  const uint64_t source_height = image->height - std::min( place.src_y, image->height );
+  const uint64_t width = place.src_w ? std::min<uint64_t>( place.src_w, source_width ) : source_width;
+  const uint64_t height = place.src_h ? std::min<uint64_t>( place.src_h, source_height ) : source_height;
+  if ( !width || !height ) {
+    return;
+  }
+  const uint64_t x = std::min<uint64_t>( place.cell_x, cw - 1 );
+  const uint64_t y = std::min<uint64_t>( place.cell_y, ch - 1 );
+  uint64_t cols = place.columns, rows = place.rows;
+  if ( !cols && !rows ) {
+    cols = divide_round_up( width + x, cw );
+    rows = divide_round_up( height + y, ch );
+  } else if ( !rows ) {
+    rows = divide_round_up( divide_round_up( ( cols * cw - x ) * height, width ) + y, ch );
+  } else if ( !cols ) {
+    cols = divide_round_up( divide_round_up( ( rows * ch - y ) * width, height ) + x, cw );
+  }
+
+  /* Kitty leaves out-of-screen cursor positioning implementation-defined.
+     Keep our existing clamp-to-edge policy, bounding unsigned protocol values
+     before converting to int so large c/r cannot wrap or move backwards. */
+  fb->ds.move_col( static_cast<int>( std::min<uint64_t>( cols, fb->ds.get_width() ) ), true, false );
+  fb->ds.move_row( static_cast<int>( std::min<uint64_t>( rows, fb->ds.get_height() ) ), true );
 }
 
 void Dispatcher::finish_kitty_upload( Framebuffer* fb )
@@ -366,6 +490,10 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
     /* assign internally so the image can live in terminal state */
   }
   image.id = fb->put_kitty_image( image );
+  if ( !image.id ) {
+    kitty_reply( this, cmd, cmd.image_id, "ENOSPC: encoded image exceeds transport storage quota" );
+    return;
+  }
 
   std::string ok = "OK";
   if ( cmd.image_number != 0 ) {
@@ -395,12 +523,7 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
     place.H = cmd.H;
     place.V = cmd.V;
     fb->put_kitty_placement( place );
-    if ( !place.cursor_hold && !place.unicode_placeholder && place.parent_image == 0 ) {
-      const int cols = place.columns ? static_cast<int>( place.columns ) : 1;
-      const int rows = place.rows ? static_cast<int>( place.rows ) : 1;
-      fb->ds.move_col( cols, true, false );
-      fb->ds.move_row( rows, true );
-    }
+    advance_kitty_cursor( fb, place, client_geometry );
   }
 }
 
@@ -483,12 +606,7 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
     place.V = cmd.V;
     fb->put_kitty_placement( place );
     kitty_reply( this, cmd, id, "OK" );
-    if ( !place.cursor_hold && !place.unicode_placeholder && place.parent_image == 0 ) {
-      const int cols = place.columns ? static_cast<int>( place.columns ) : 1;
-      const int rows = place.rows ? static_cast<int>( place.rows ) : 1;
-      fb->ds.move_col( cols, true, false );
-      fb->ds.move_row( rows, true );
-    }
+    advance_kitty_cursor( fb, place, client_geometry );
     return;
   }
 

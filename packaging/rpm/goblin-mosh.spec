@@ -1,0 +1,71 @@
+%global debug_package %{nil}
+
+Name:           goblin-mosh
+Version:        1.4.0
+Release:        20260909.1%{?dist}
+Summary:        Mobile shell optimized for low-bandwidth links
+License:        GPL-3.0-or-later AND ISC
+URL:            https://mosh.goblinreactor.com/
+Source0:        goblin-mosh-1.4.0-goblin20260909.1.tar.gz
+
+# Preserve the source-file OpenSSL linking exceptions and all upstream notices.
+BuildRequires:  gcc-c++, make, autoconf, automake, pkgconf-pkg-config
+BuildRequires:  perl, protobuf-compiler, protobuf-devel
+BuildRequires:  libutempter-devel, zlib-devel, ncurses-devel
+BuildRequires:  openssl-devel >= 3.0
+BuildRequires:  librsync-devel >= 2.3
+BuildRequires:  libzstd-devel, libwebp-devel, libpng-devel
+BuildRequires:  bash-completion, python3, glibc-langpack-en
+Requires:       openssh-clients
+Requires:       perl(IO::Socket::IP)
+Conflicts:      adam-mosh
+Obsoletes:      adam-mosh < 1.4.0-20260909.1
+
+%description
+Goblin Mosh is a Mosh fork for low-bandwidth links. It combines zstd level 22
+compression, adaptive pacing, forward error correction and resumable file-menu
+transfers with librsync deltas. The goblin-prefixed commands coexist with the
+distribution's mosh package. OpenSSL 3 provider support is included, but this
+package does not supply a validated FIPS module or claim FIPS compliance.
+
+%prep
+%setup -q -n goblin-mosh
+
+%build
+autoreconf -fi
+%configure --disable-silent-rules --disable-completion --disable-ufw \
+    --docdir=%{_docdir}/%{name} --with-utempter --with-zstd \
+    --with-librsync --with-fips-crypto --without-libraptorq \
+    --enable-compile-warnings=yes
+%make_build
+sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-moshcp
+
+%check
+mkdir -m 700 package-test-runtime
+XDG_RUNTIME_DIR="$PWD/package-test-runtime" %make_build check \
+    TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward'
+
+%install
+%make_install
+# Fedora splits completion pkg-config metadata differently from Rocky. Use
+# the shared data directory explicitly instead of the legacy /etc fallback.
+install -D -m 0644 conf/bash-completion/completions/goblin-mosh \
+    %{buildroot}%{_datadir}/bash-completion/completions/goblin-mosh
+install -m 0644 README.md GOBLIN_DOWNLOAD_PROTOCOL.md SIXEL_STATE.md AUDIO.md \
+    debian/copyright %{buildroot}%{_docdir}/%{name}/
+
+%files
+%license COPYING debian/copyright
+%{_bindir}/goblin-mosh
+%{_bindir}/goblin-mosh-client
+%{_bindir}/goblin-mosh-server
+%{_bindir}/goblin-moshcp
+%{_bindir}/goblin-mosh-compile-dictionary
+%{_mandir}/man1/goblin-mosh*.1*
+%{_datadir}/bash-completion/completions/goblin-mosh
+%{_docdir}/%{name}/
+
+%changelog
+* Wed Sep 09 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260909.1
+- Package Goblin Mosh with matching source and native system dependencies.
+- Include the file-transfer scheduler and bounded download-consent test fixes.

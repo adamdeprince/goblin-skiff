@@ -121,7 +121,7 @@ bool Network::Bulk::decode_datagram( const std::string& packet, Datagram& datagr
     return false;
   }
   if ( !read_u8( packet, offset, type ) || type < static_cast<uint8_t>( PacketType::Manifest )
-       || type > static_cast<uint8_t>( PacketType::Finish ) ) {
+       || type > static_cast<uint8_t>( PacketType::FileAck ) ) {
     return false;
   }
   if ( !read_u64( packet, offset, datagram.transfer_id ) || !read_u32( packet, offset, datagram.block_id )
@@ -142,7 +142,7 @@ SecureDatagramChannel::SecureDatagramChannel( Connection& s_connection ) : conne
 void SecureDatagramChannel::send( const Datagram& datagram )
 {
   const std::string encoded = encode_datagram( datagram );
-  const int max_payload = connection.get_MTU() - Network::Connection::ADDED_BYTES - Crypto::Session::ADDED_BYTES;
+  const int max_payload = connection.get_MTU() - connection.packet_overhead();
   if ( max_payload <= 0 || encoded.size() > static_cast<size_t>( max_payload ) ) {
     throw NetworkException( "bulk datagram too large for path MTU", 0 );
   }

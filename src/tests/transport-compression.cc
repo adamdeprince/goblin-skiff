@@ -19,6 +19,7 @@
 #include "src/include/config.h"
 #include "src/network/network.h"
 #include "src/network/transportfragment.h"
+#include "src/network/compressor.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -100,6 +101,32 @@ void roundtrip( bool allow_zstd )
   require( decoded.chaff() == inst.chaff(), "chaff mismatch" );
   require( decoded.zstd_supported(), "zstd_supported mismatch" );
 }
+
+void large_roundtrip( bool zstd )
+{
+  TransportBuffers::Instruction inst;
+  inst.set_old_num( 1 ); inst.set_new_num( 2 );
+  // An incompressible >4 MiB state used to fail decompression (or spend
+  // quadratic time copying while fragmenting). Include loss and reordering.
+  std::string payload( 5 * 1024 * 1024, '\0' );
+  uint32_t random = 0x953badU;
+  for ( auto& c : payload ) { random ^= random << 13; random ^= random >> 17; random ^= random << 5; c = char( random ); }
+  inst.set_diff( payload );
+  Network::Fragmenter fragmenter;
+  auto fragments = fragmenter.make_fragments( inst, 440, zstd, false, "" );
+  require( fragments.size() > 10000, "wide-image fixture actually spans many packets" );
+  Network::FragmentAssembly assembly;
+  for ( size_t i = fragments.size(); i-- > 1; ) {
+    require( !assembly.add_fragment( fragments[i] ), "incomplete image not published before missing packet" );
+  }
+  require( !assembly.add_fragment( fragments.back() ), "duplicate packet does not complete missing image" );
+  require( assembly.add_fragment( fragments[0] ), "late packet completes reordered image" );
+  require( assembly.get_assembly().diff() == payload, "large state roundtrip" );
+  bool rejected = false;
+  try { fragmenter.make_fragments( inst, Network::Fragment::frag_header_len, zstd, false, "" ); }
+  catch ( const std::invalid_argument& ) { rejected = true; }
+  require( rejected, "invalid MTU rejected without underflow" );
+}
 }
 
 int main( void )
@@ -107,6 +134,8 @@ int main( void )
   try {
     roundtrip( false );
     roundtrip( true );
+    large_roundtrip( false );
+    large_roundtrip( true );
   } catch ( const std::exception& e ) {
     std::cerr << e.what() << "\n";
     return EXIT_FAILURE;

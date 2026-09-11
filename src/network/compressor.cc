@@ -48,23 +48,35 @@
 using namespace Network;
 
 namespace {
-const int COMPRESSOR_BUFFER_SIZE = 2048 * 2048;
 const int STATE_ZSTD_LEVEL = 22;
 
-std::string zlib_compress_str( unsigned char* buffer, const std::string& input )
+std::string zlib_compress_str( const std::string& input )
 {
-  long unsigned int len = COMPRESSOR_BUFFER_SIZE;
-  dos_assert( Z_OK
-              == compress( buffer, &len, reinterpret_cast<const unsigned char*>( input.data() ), input.size() ) );
-  return std::string( reinterpret_cast<char*>( buffer ), len );
+  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
+  uLongf len = compressBound( input.size() );
+  std::string output( len, '\0' );
+  dos_assert( Z_OK == compress( reinterpret_cast<Bytef*>( &output[0] ), &len,
+                                reinterpret_cast<const Bytef*>( input.data() ), input.size() ) );
+  output.resize( len );
+  return output;
 }
 
-std::string zlib_uncompress_str( unsigned char* buffer, const std::string& input )
+std::string zlib_uncompress_str( const std::string& input )
 {
-  long unsigned int len = COMPRESSOR_BUFFER_SIZE;
-  dos_assert( Z_OK
-              == uncompress( buffer, &len, reinterpret_cast<const unsigned char*>( input.data() ), input.size() ) );
-  return std::string( reinterpret_cast<char*>( buffer ), len );
+  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport frame exceeds size limit" ); }
+  // zlib frames do not advertise their decoded size. Grow a bounded output
+  // buffer; ordinary text screens still need only a few KiB.
+  size_t capacity = 4096;
+  for ( ;; ) {
+    std::string output( capacity, '\0' );
+    uLongf len = capacity;
+    const int status = uncompress( reinterpret_cast<Bytef*>( &output[0] ), &len,
+                                    reinterpret_cast<const Bytef*>( input.data() ), input.size() );
+    if ( status == Z_OK ) { output.resize( len ); return output; }
+    if ( status != Z_BUF_ERROR ) { throw std::runtime_error( "invalid zlib transport frame" ); }
+    if ( capacity == Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
+    capacity *= 2;
+  }
 }
 
 bool looks_like_zstd_frame( const std::string& input )
@@ -77,6 +89,7 @@ bool looks_like_zstd_frame( const std::string& input )
 #ifdef HAVE_ZSTD
 std::string zstd_compress_str( const std::string& input )
 {
+  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
   const size_t bound = ZSTD_compressBound( input.size() );
   std::string compressed( bound, '\0' );
   const size_t written
@@ -92,6 +105,7 @@ std::string zstd_compress_str( const std::string& input,
                                const std::string& dictionary,
                                void*& cached_cdict )
 {
+  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
   if ( dictionary.empty() ) {
     return zstd_compress_str( input );
   }
@@ -125,7 +139,7 @@ std::string zstd_uncompress_str( const std::string& input, void* zstd_ddict )
   if ( frame_size == ZSTD_CONTENTSIZE_ERROR || frame_size == ZSTD_CONTENTSIZE_UNKNOWN ) {
     throw std::runtime_error( "zstd transport frame has no usable content size" );
   }
-  if ( frame_size > static_cast<unsigned long long>( COMPRESSOR_BUFFER_SIZE ) ) {
+  if ( frame_size > Compressor::MAX_STATE_SIZE ) {
     throw std::runtime_error( "zstd transport frame exceeds decompression limit" );
   }
 
@@ -157,7 +171,7 @@ std::string zstd_uncompress_str( const std::string& input, void* zstd_ddict )
 }
 
 Compressor::Compressor()
-  : buffer(), zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdict( NULL ), zstd_ddict( NULL )
+  : zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdict( NULL ), zstd_ddict( NULL )
 {}
 
 Compressor::~Compressor()
@@ -174,7 +188,7 @@ Compressor::~Compressor()
 
 std::string Compressor::compress_str( const std::string& input )
 {
-  return zlib_compress_str( buffer, input );
+  return zlib_compress_str( input );
 }
 
 std::string Compressor::compress_str( const std::string& input, bool allow_zstd, bool allow_zstd_dictionary )
@@ -190,7 +204,7 @@ std::string Compressor::compress_str( const std::string& input, bool allow_zstd,
   (void)allow_zstd;
   (void)allow_zstd_dictionary;
 #endif
-  return zlib_compress_str( buffer, input );
+  return zlib_compress_str( input );
 }
 
 std::string Compressor::uncompress_str( const std::string& input )
@@ -200,7 +214,7 @@ std::string Compressor::uncompress_str( const std::string& input )
     return zstd_uncompress_str( input, zstd_ddict );
   }
 #endif
-  return zlib_uncompress_str( buffer, input );
+  return zlib_uncompress_str( input );
 }
 
 bool Compressor::zstd_available( void ) const

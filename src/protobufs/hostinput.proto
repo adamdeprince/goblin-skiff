@@ -36,4 +36,6 @@ extend Instruction {
   optional StreamBuffers.StreamEvent stream = 9;
   optional ClipboardBuffers.ClipboardEvent clipboard = 10;
   optional KittyBuffers.StateDelta kitty = 11;
+  // Ordered bytes from tmux -CC, including its DCS entry and exit markers.
+  optional bytes tmux_output = 12;
 }

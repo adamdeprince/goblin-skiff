@@ -113,16 +113,19 @@ class Hook : public Action
 {
 public:
   std::string name( void ) { return std::string( "Hook" ); }
+  void act_on_terminal( Terminal::Emulator* emu ) const;
 };
 class Put : public Action
 {
 public:
   std::string name( void ) { return std::string( "Put" ); }
+  void act_on_terminal( Terminal::Emulator* emu ) const;
 };
 class Unhook : public Action
 {
 public:
   std::string name( void ) { return std::string( "Unhook" ); }
+  void act_on_terminal( Terminal::Emulator* emu ) const;
 };
 class OSC_Start : public Action
 {

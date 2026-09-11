@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH ADAM-MOSH-CLIENT 1 "February 2012"
+.TH GOBLIN-MOSH-CLIENT 1 "February 2012"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,46 +16,47 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-adam-mosh-client \- client-side helper for mosh
+goblin-mosh-client \- client-side helper for mosh
 .SH SYNOPSIS
 MOSH_KEY=KEY
-.B adam-mosh-client
+.B goblin-mosh-client
 [\-v]
 [\-A]
 [\-X]
 [\-L \fISPEC\fP]
 [\-D \fISPEC\fP]
+[\-\-fips\-crypto]
 [\-\-stream-delay=\fIMS\fP]
 [\-\-stream-bandwidth=\fIBPS\fP]
 [\-\-state-zstd-dict=\fIFILE\fP]
 [\-\-state-sample-log=\fIFILE\fP]
 IP PORT
 .br
-.B adam-mosh-client
+.B goblin-mosh-client
 \-c
 .br
 .SH DESCRIPTION
-\fBadam-mosh-client\fP is a helper program for the
-.BR adam-mosh (1)
+\fBgoblin-mosh-client\fP is a helper program for the
+.BR goblin-mosh (1)
 remote terminal application.
 
 \fBmosh\fP itself is a setup script that establishes an SSH
-connection, runs the server-side helper \fBadam-mosh-server\fP,
+connection, runs the server-side helper \fBgoblin-mosh-server\fP,
 and collects the server's port number and session key.
 
-\fBadam-mosh\fP then executes \fBadam-mosh-client\fP with the server's IP
-address, port, and session key. \fBadam-mosh-client\fP runs for
+\fBgoblin-mosh\fP then executes \fBgoblin-mosh-client\fP with the server's IP
+address, port, and session key. \fBgoblin-mosh-client\fP runs for
 the lifetime of the connection.
 
-The 22-byte base64 session key given by \fBadam-mosh-server\fP is supplied
+The 22-byte base64 session key given by \fBgoblin-mosh-server\fP is supplied
 in the MOSH_KEY environment variable. This represents a 128-bit AES
 key that protects the integrity and confidentiality of the session.
 
 For constructing new setup wrappers for remote execution facilities
-other than SSH, it may be necessary to invoke \fBadam-mosh-client\fP
+other than SSH, it may be necessary to invoke \fBgoblin-mosh-client\fP
 directly.
 
-With the \-c option, \fBadam-mosh-client\fP instead prints the number of colors
+With the \-c option, \fBgoblin-mosh-client\fP instead prints the number of colors
 of the terminal given by the TERM environment variable.
 
 The \-v option will print some debugging information on standard
@@ -64,6 +65,24 @@ information.  If standard error is not redirected from the terminal,
 the display will be corrupted and quickly become unusable.
 
 .SH OPTIONS
+.TP
+.B \-\-no\-kitty, \-\-no\-sixel
+Disable the named local graphics protocol, including its startup mascot
+probes and output. Disabling Kitty also suppresses rendering of remote Kitty
+images locally. These options override forced mascot and preview formats;
+a disabled forced format falls back to ASCII.
+
+.TP
+.B \-\-mascot=\fIFORMAT\fP
+Select auto, kitty, sixel, ascii, or none for the inline startup mascot.
+The mascot remains in native scrollback when the first remote frame arrives;
+graphics retention depends on the local terminal.
+
+.TP
+.B \-\-show\-mascot=\fIFORMAT\fP
+Preview the mascot without connecting. Auto uses ASCII without terminal
+queries. The graphics-disable options take precedence.
+
 
 .TP
 .B \-c
@@ -74,15 +93,28 @@ Print the number of colors supported by the local terminal and exit.
 Print debugging information. More instances increase verbosity.
 
 .TP
+.B \-\-fips\-crypto
+Use the \fBaes128-gcm-v1\fP wire format and require cryptographic operations
+from a configured OpenSSL 3 FIPS provider. This must match the server mode.
+The option also works with \fB-c\fP so setup wrappers can verify local provider
+availability before starting a remote server.
+
+.TP
+.B \-\-tmux\-control
+Enable tmux -CC control-stream rendering and raw command input. The setup
+wrapper must first negotiate \fBtmux-control-v1\fP with the server. May also
+be used with \fB-c\fP to verify local support before remote setup.
+
+.TP
 .B \-L \fISPEC\fP
 Request a local TCP forward. See
-.BR adam-mosh (1)
+.BR goblin-mosh (1)
 for the format.
 
 .TP
 .B \-D \fISPEC\fP
 Request a local SOCKS5 dynamic forward. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B \-A
@@ -114,7 +146,7 @@ negotiated.
 .B \-\-state\-zstd\-dict=\fIFILE\fP
 Use \fIFILE\fP as the local zstd dictionary for state updates. Files
 produced by
-.BR adam-mosh-compile-dictionary (1)
+.BR goblin-mosh-compile-dictionary (1)
 are stored compressed with zstd level 22 and are decompressed before
 use. This only enables dictionary compression if the peer advertises
 the same dictionary id.
@@ -123,7 +155,7 @@ the same dictionary id.
 .B \-\-state\-sample\-log=\fIFILE\fP
 Write received, uncompressed state samples to \fIFILE\fP in the framed
 zstd-compressed format consumed by
-.BR adam-mosh-compile-dictionary (1).
+.BR goblin-mosh-compile-dictionary (1).
 The file can contain terminal contents and should be treated as
 sensitive.
 
@@ -136,27 +168,27 @@ Only log received state samples at least this large. The default is 0.
 .TP
 .B MOSH_KEY
 This variable must be set, and must contain a Base64-encoded cryptographic key from
-.BR adam-mosh-server (1).
+.BR goblin-mosh-server (1).
 
 .TP
 .B MOSH_ESCAPE_KEY
 See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_PREDICTION_DISPLAY
 Controls local echo as described in
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_PREDICTION_OVERWRITE
 Controls local echo insert/overwrite as described in
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_TITLE_NOPREFIX
 See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B DISPLAY
@@ -168,39 +200,39 @@ is enabled.
 .B XAUTHORITY
 Local X authority file used for MIT-MAGIC-COOKIE-1 rewriting when
 .B \-X
-is enabled. If unset, \fBadam-mosh-client\fP tries
+is enabled. If unset, \fBgoblin-mosh-client\fP tries
 .IR ~/.Xauthority .
 
 .TP
 .B MOSH_STREAM_DELAY
 Default forwarded-stream coalescing delay in milliseconds. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_STREAM_BANDWIDTH
 Default forwarded-stream payload-byte-per-second cap. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_STATE_ZSTD_DICT
 Default zstd state dictionary file. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_STATE_SAMPLE_LOG
 Default state sample log path. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_STATE_SAMPLE_MIN_SIZE
 Default minimum serialized state sample size to log. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .SH SEE ALSO
-.BR adam-mosh (1),
-.BR adam-mosh-server (1),
-.BR adam-moshcp (1),
-.BR adam-mosh-compile-dictionary (1).
+.BR goblin-mosh (1),
+.BR goblin-mosh-server (1),
+.BR goblin-moshcp (1),
+.BR goblin-mosh-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org

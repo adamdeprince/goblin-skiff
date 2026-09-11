@@ -1,0 +1,86 @@
+class GoblinMosh < Formula
+  desc "Mobile shell and file transfers optimized for low-bandwidth links"
+  homepage "https://mosh.goblinreactor.com/"
+  url "https://brew.goblinreactor.com/sources/goblin-mosh-1.4.0-goblin20260910.2.tar.gz"
+  version "1.4.0-goblin20260910.2"
+  sha256 "@SOURCE_SHA256@"
+  license all_of: ["GPL-3.0-or-later", "ISC"]
+
+  # The archive is a reviewed release snapshot, not the moving source branch.
+  livecheck do
+    skip "Release snapshots are published by the Goblin Reactor maintainer"
+  end
+
+  depends_on "autoconf" => :build
+  depends_on "automake" => :build
+  depends_on "pkgconf" => :build
+  depends_on "python@3.14" => :test
+  depends_on "abseil"
+  depends_on "libpng"
+  depends_on "librsync"
+  depends_on :macos
+  depends_on "ncurses"
+  depends_on "openssl@3"
+  depends_on "protobuf"
+  depends_on "webp"
+  depends_on "zstd"
+
+  # Core tests open Unix sockets; the installed test also uses loopback UDP.
+  # Homebrew counts both as network access. No test contacts an external host.
+  allow_network_access! [:build, :test]
+
+  def install
+    system "autoreconf", "-fi"
+    system "./configure", *std_configure_args,
+           "--docdir=#{doc}",
+           "--disable-completion", "--disable-ufw", "--without-utempter",
+           "--with-crypto-library=apple-common-crypto",
+           "--with-zstd", "--with-librsync", "--with-fips-crypto",
+           "--without-libraptorq", "--enable-compile-warnings=yes"
+    system "make"
+    system "sh", "packaging/check-prebuilt-fec.sh", "./src/moshcp/goblin-moshcp"
+    # Keep Unix socket paths short on macOS and never share a live session's
+    # runtime directory. Core tests use local Unix sockets only.
+    Dir.mktmpdir("goblin-check-", "/tmp") do |runtime|
+      ENV["XDG_RUNTIME_DIR"] = runtime
+      tests = %w[
+        ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs
+        bulk-datagram moshcp-protocol bulk-loss-sim transport-compression
+        state-samples osc52-parse kitty-graphics terminal-geometry
+        terminal-display tmux-control control-panel mascot file-transfer
+        link-budget sixel-state terminal-extensions download download-forward
+      ]
+      system "make", "check", "TESTS=#{tests.join(" ")}"
+    end
+    system "make", "install"
+    bash_completion.install "conf/bash-completion/completions/goblin-mosh"
+    doc.install "README.md", "GOBLIN_DOWNLOAD_PROTOCOL.md", "SIXEL_STATE.md",
+                "AUDIO.md", "debian/copyright"
+    (pkgshare/"tests").install "src/tests/control-panel-integration.py"
+    (pkgshare/"tests").install "packaging/check-prebuilt-fec.sh"
+    (pkgshare/"verification").install "src/tests/test-suite.log"
+  end
+
+  def caveats
+    <<~EOS
+      Install goblin-mosh on both endpoints, then run:
+        goblin-mosh user@server
+      Open the file/control menu with Ctrl-^ (usually Ctrl-Shift-6), then 0.
+      This package does not replace stock mosh or a manual /usr/local install.
+      Existing sessions keep running; open a new session after an upgrade.
+      --fips-crypto requires a configured FIPS provider; this is not a FIPS
+      certification. Source, licenses and setup: https://brew.goblinreactor.com/
+    EOS
+  end
+
+  test do
+    system "sh", pkgshare/"tests/check-prebuilt-fec.sh", bin/"goblin-moshcp"
+    assert_match "goblin-mosh-client", shell_output("#{bin}/goblin-mosh-client --version 2>&1")
+    assert_match "goblin-mosh-server", shell_output("#{bin}/goblin-mosh-server --version 2>&1")
+    assert_path_exists man1/"goblin-mosh.1"
+    ENV["GOBLIN_TEST_CLIENT"] = bin/"goblin-mosh-client"
+    ENV["GOBLIN_TEST_SERVER"] = bin/"goblin-mosh-server"
+    system formula_opt_bin("python@3.14")/"python3.14",
+           pkgshare/"tests/control-panel-integration.py", "--files"
+  end
+end

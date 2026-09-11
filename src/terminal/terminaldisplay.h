@@ -34,6 +34,7 @@
 #define TERMINALDISPLAY_HPP
 
 #include "src/terminal/terminalframebuffer.h"
+#include "src/terminal/terminalgeometry.h"
 
 namespace Terminal {
 /* variables used within a new_frame */
@@ -43,13 +44,14 @@ public:
   std::string str;
 
   int cursor_x, cursor_y;
+  const int row_offset;
   Renditions current_rendition;
   Hyperlink current_hyperlink;
   bool cursor_visible;
 
   const Framebuffer& last_frame;
 
-  FrameState( const Framebuffer& s_last );
+  FrameState( const Framebuffer& s_last, int s_row_offset = 0 );
 
   void append( char c ) { str.append( 1, c ); }
   void append( size_t s, char c ) { str.append( s, c ); }
@@ -64,6 +66,20 @@ public:
   void update_hyperlink( const Hyperlink& h, bool force = false );
 };
 
+/* Client-local startup layout. The wire framebuffer always keeps its real
+   dimensions; only the initial, unused rows of the physical screen are held
+   for the user's existing output. Once consumed, they are never reserved again. */
+class StartupScreen
+{
+  friend class Display;
+  int row_offset;
+  int cursor_row;
+
+public:
+  StartupScreen() : row_offset( -1 ), cursor_row( -1 ) {}
+  void set_cursor_row( int row ) { if ( row_offset < 0 ) { cursor_row = row; } }
+};
+
 class Display
 {
 private:
@@ -75,6 +91,12 @@ private:
   bool has_title; /* supports window title and icon name */
 
   bool render_kitty; /* true only for bytes sent to the user's terminal */
+  bool render_sixel = false;
+  bool convert_sixel = false;
+  bool render_keyboard = true; // state-delta encoder; local client sets from its probe
+  bool render_clipboard = true;
+  bool render_sized_text = true;
+  ClientGeometry graphics_geometry {};
 
   const char *smcup, *rmcup; /* enter and exit alternate screen mode */
 
@@ -91,9 +113,21 @@ public:
   std::string open() const;
   std::string close() const;
 
-  std::string new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f ) const;
+  std::string new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f,
+                         StartupScreen* startup = NULL ) const;
 
-  Display( bool use_environment );
+  bool uses_alternate_screen() const { return smcup != NULL; }
+  Display( bool use_environment, bool kitty_supported = true );
+  void set_graphics( const ClientGraphics& caps, bool sixel_state )
+  {
+    render_kitty = caps.kitty;
+    render_sixel = sixel_state && caps.sixel;
+    convert_sixel = sixel_state && !caps.sixel && caps.kitty;
+    render_keyboard = sixel_state && caps.keyboard;
+    render_sized_text = sixel_state && caps.text_sizing >= 2;
+    render_clipboard = caps.clipboard;
+  }
+  void set_graphics_geometry( const ClientGeometry& geometry ) { graphics_geometry = geometry; }
 };
 }
 

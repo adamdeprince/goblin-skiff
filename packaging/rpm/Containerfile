@@ -1,0 +1,17 @@
+ARG BASE_IMAGE=registry.fedoraproject.org/fedora:44
+FROM ${BASE_IMAGE}
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN if test -f /etc/rocky-release; then \
+        dnf -y install dnf-plugins-core epel-release && \
+        dnf config-manager --set-enabled crb; \
+    fi && \
+    dnf -y install gcc-c++ make autoconf automake rpm-build redhat-rpm-config \
+        pkgconf-pkg-config perl protobuf-compiler protobuf-devel \
+        libutempter-devel zlib-devel ncurses-devel openssl-devel librsync-devel \
+        libzstd-devel libwebp-devel libpng-devel bash-completion python3 \
+        glibc-langpack-en openssh-clients perl-IO-Socket-IP procps-ng \
+        ca-certificates /usr/bin/curl gnupg2 file
+COPY snapshot.tar.gz /tmp/goblin-snapshot.tar.gz
+COPY goblin-mosh.spec /tmp/goblin-mosh.spec
+COPY build-release.sh /usr/local/bin/goblin-package-build
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/goblin-package-build"]

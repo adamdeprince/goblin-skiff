@@ -80,10 +80,13 @@ static const char* ti_str( const char* capname )
   return val;
 }
 
-Display::Display( bool use_environment )
-  : has_ech( true ), has_bce( true ), has_title( true ), render_kitty( use_environment ), smcup( NULL ),
+Display::Display( bool use_environment, bool kitty_supported )
+  : has_ech( true ), has_bce( true ), has_title( true ), render_kitty( use_environment && kitty_supported ), smcup( NULL ),
     rmcup( NULL )
 {
+  render_keyboard = !use_environment;
+  render_clipboard = !use_environment;
+  render_sized_text = !use_environment;
   if ( use_environment ) {
     int errret = -2;
     int ret = setupterm( (char*)0, 1, &errret );

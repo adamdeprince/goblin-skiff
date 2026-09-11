@@ -65,8 +65,8 @@ my $have_ipv6 = eval {
 
 $|=1;
 
-my $client = 'adam-mosh-client';
-my $server = 'adam-mosh-server';
+my $client = 'goblin-mosh-client';
+my $server = 'goblin-mosh-server';
 
 my $predict = undef;
 
@@ -85,6 +85,7 @@ my @remote_forwards;
 my @dynamic_forwards;
 my $agent_forwarding = 0;
 my $x11_forwarding = 0;
+my $fips_crypto = 0;
 my $stream_delay = undef;
 my $stream_bandwidth = undef;
 my $state_zstd_dict = undef;
@@ -93,8 +94,20 @@ my $state_sample_min_size = undef;
 my $remote_state_zstd_dict = undef;
 my $uploaded_state_zstd_dict = 0;
 my $client_term = $ENV{ 'TERM' };
+my $tmux_control = 0;
+my $mascot = $ENV{ 'MOSH_MASCOT' } // 'auto';
+my $no_kitty = 0;
+my $no_sixel = 0;
+my $clipboard_fast_threshold = $ENV{ 'MOSH_CLIPBOARD_FAST_THRESHOLD' } // 65536;
+my $no_downloads = 0;
+my $download_directory = undef;
+my $server_directory = 0;
+my $server_files = 0;
+my $server_link_budget = 0;
 
-my $term_init = 1;
+# Keep the session on the primary screen by default so scroll operations
+# become part of the local terminal emulator's native scrollback.
+my $term_init = 0;
 
 my $localhost = undef;
 
@@ -107,10 +120,10 @@ my @cmdline = @ARGV;
 
 my $usage =
 qq{Usage: $0 [options] [--] [user@]host [command...]
-        --client=PATH        adam-mosh client on local machine
-                                (default: "adam-mosh-client")
-        --server=COMMAND     adam-mosh server on remote machine
-                                (default: "adam-mosh-server")
+        --client=PATH        goblin-mosh client on local machine
+                                (default: "goblin-mosh-client")
+        --server=COMMAND     goblin-mosh server on remote machine
+                                (default: "goblin-mosh-server")
 
         --predict=adaptive      local echo for slower links [default]
 -a      --predict=always        use local echo even on fast links
@@ -135,11 +148,24 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 -D [BIND:]PORT             open a local SOCKS5 dynamic forward
 -A                         forward the local SSH authentication agent
 -X                         forward X11 connections
+        --fips-crypto      require the OpenSSL FIPS provider and use AES-128-GCM
+                                for the UDP session
+        --tmux-control     pass tmux -CC through to the local terminal
+        --mascot=FORMAT    startup goblin: auto, kitty, sixel, ascii, none
+        --no-mascot        disable the local startup goblin
+        --no-kitty         disable local Kitty graphics and detection
+        --no-sixel         disable local sixel graphics and detection
+        --clipboard-fast-threshold=BYTES
+                            unsolicited remote blobs above this use bulk FEC
+                                (default: 65536; text and local uploads stay fast)
+        --no-downloads     disable Goblin inline file downloads
+        --download-directory=DIR
+                            local destination (default: ~/Downloads)
         --stream-delay=MS   coalesce forwarded stream bytes before sending
                                 (default: 75)
         --stream-bandwidth=BPS
                             cap forwarded stream payload bytes per second
-                                (default: 2048)
+                                (default: adaptive; 2048 with older peers)
         --state-zstd-dict=FILE
                             use a compiled dictionary for negotiated zstd-22 state updates;
                                 the wrapper uploads the compressed file to the server
@@ -158,9 +184,11 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 
         --no-ssh-pty         do not allocate a pseudo tty on ssh connection
 
-        --no-init            do not send terminal initialization string
+        --native-scroll      use the local terminal's native scrollback [default]
+        --alternate-screen   isolate the session in the alternate screen
+        --no-init            compatibility alias for --native-scroll
 
-        --local              run adam-mosh-server locally without using ssh
+        --local              run goblin-mosh-server locally without using ssh
 
         --experimental-remote-ip=(local|remote|proxy)  select the method for
                              discovering the remote IP address to use for mosh
@@ -206,6 +234,15 @@ GetOptions( 'client=s' => \$client,
 	    'D=s@' => \@dynamic_forwards,
 	    'A' => \$agent_forwarding,
 	    'X' => \$x11_forwarding,
+	    'fips-crypto' => \$fips_crypto,
+	    'tmux-control' => \$tmux_control,
+	    'mascot=s' => \$mascot,
+	    'no-mascot' => sub { $mascot = 'none'; },
+	    'no-kitty' => \$no_kitty,
+	    'no-sixel' => \$no_sixel,
+	    'clipboard-fast-threshold=s' => \$clipboard_fast_threshold,
+	    'no-downloads' => \$no_downloads,
+	    'download-directory=s' => \$download_directory,
 	    'stream-delay=i' => \$stream_delay,
 	    'stream-bandwidth=i' => \$stream_bandwidth,
 	    'state-zstd-dict=s' => \$state_zstd_dict,
@@ -213,6 +250,8 @@ GetOptions( 'client=s' => \$client,
 	    'state-sample-min-size=i' => \$state_sample_min_size,
 	    'ssh=s' => sub { @ssh = shellwords($_[1]); },
 	    'ssh-pty!' => \$ssh_pty,
+	    'native-scroll' => sub { $term_init = 0; },
+	    'alternate-screen' => sub { $term_init = 1; },
 	    'init!' => \$term_init,
 	    'local' => \$localhost,
 	    'help' => \$help,
@@ -240,6 +279,9 @@ if ( defined $predict ) {
   predict_check( $predict, 0 );
 }
 
+die "$0: --mascot must be auto, kitty, sixel, ascii, or none.\n"
+  unless $mascot =~ /\A(?:auto|kitty|sixel|ascii|none)\z/;
+
 if ( not grep { $_ eq $use_remote_ip } qw { local remote proxy } ) {
   die "Unknown parameter $use_remote_ip";
 }
@@ -265,6 +307,8 @@ if ( defined $stream_delay and $stream_delay < 0 ) {
 if ( defined $stream_bandwidth and $stream_bandwidth <= 0 ) {
   die "$0: --stream-bandwidth must be greater than zero.\n";
 }
+die "$0: --clipboard-fast-threshold must be an integer between 0 and 67108864.\n"
+  unless $clipboard_fast_threshold =~ /\A[0-9]+\z/ && $clipboard_fast_threshold <= 67108864;
 
 if ( defined $state_sample_min_size and $state_sample_min_size < 0 ) {
   die "$0: --state-sample-min-size must be non-negative.\n";
@@ -307,6 +351,8 @@ if ( defined $port_request ) {
 
 delete $ENV{ 'MOSH_PREDICTION_DISPLAY' };
 delete $ENV{ 'MOSH_COMPACT_KEEPALIVE' };
+delete $ENV{ 'MOSH_LINK_BUDGET' };
+delete $ENV{ 'MOSH_NO_TERM_INIT' };
 
 my $userhost;
 my @command;
@@ -383,8 +429,11 @@ if ( ! defined $fake_proxy ) {
   exit;
 }
 
-# Count colors
-open COLORCOUNT, '-|', $client, ('-c') or die "Can't count colors: $!\n";
+# Count colors and, in FIPS mode, fail before starting anything remotely if
+# the local client cannot initialize its configured provider.
+my @colorcount_args = $fips_crypto ? ( '--fips-crypto', '-c' ) : ( '-c' );
+unshift @colorcount_args, '--tmux-control' if $tmux_control;
+open COLORCOUNT, '-|', $client, @colorcount_args or die "Can't count colors: $!\n";
 my $colors = "";
 {
   local $/ = undef;
@@ -458,6 +507,8 @@ if ( $pid == 0 ) { # child
   }
   my @server = ( 'new' );
 
+  push @server, '--fips-crypto' if $fips_crypto;
+
   push @server, ( '-c', $colors );
 
   push @server, @bind_arguments;
@@ -512,8 +563,12 @@ if ( $pid == 0 ) { # child
   exec @exec_argv;
   die "Cannot exec ssh: $!\n";
 } else { # parent
-  my ( $sship, $port, $key );
+  my ( $sship, $port, $key, $server_crypto );
   my $compact_keepalive = 0;
+  my $server_tmux_control = 0;
+  my $server_sixel_state = 0;
+  my $server_clipboard = 0;
+  my $server_downloads = 0;
   my $bad_udp_port_warning = 0;
   LINE: while ( <$pipe> ) {
     chomp;
@@ -534,6 +589,32 @@ if ( $pid == 0 ) { # child
 	$compact_keepalive = 1;
       } else {
 	die "Bad MOSH CAPS string: $_\n";
+      }
+    } elsif ( m{^MOSH GRAPHICS } ) {
+      die "Bad MOSH GRAPHICS string: $_\n" unless m{^MOSH GRAPHICS sixel-state-v1\s*$};
+      $server_sixel_state = 1;
+    } elsif ( m{^MOSH CLIPBOARD } ) {
+      die "Bad MOSH CLIPBOARD string: $_\n" unless m{^MOSH CLIPBOARD osc5522-v1\s*$};
+      $server_clipboard = 1;
+    } elsif ( m{^MOSH DOWNLOADS } ) {
+      die "Bad MOSH DOWNLOADS string: $_\n" unless m{^MOSH DOWNLOADS goblin-download-v2\s*$};
+      $server_downloads = 1;
+    } elsif ( m{^MOSH LINK } ) {
+      die "Bad MOSH LINK string: $_\n" unless m{^MOSH LINK budget-v1\s*$};
+      $server_link_budget = 1;
+    } elsif ( m{^MOSH DIRECTORY } ) {
+      die "Bad MOSH DIRECTORY string: $_\n" unless m{^MOSH DIRECTORY directory-v([12])\s*$};
+      $server_directory = $1;
+    } elsif ( m{^MOSH FILES } ) {
+      die "Bad MOSH FILES string: $_\n" unless m{^MOSH FILES file-sync-v1\s*$};
+      $server_files = 1;
+    } elsif ( m{^MOSH TMUX } ) {
+      die "Bad MOSH TMUX string: $_\n" unless m{^MOSH TMUX control-v1\s*$};
+      $server_tmux_control = 1;
+    } elsif ( m{^MOSH CRYPTO } ) {
+      ( $server_crypto ) = m{^MOSH CRYPTO (\S+)\s*$} or die "Bad MOSH CRYPTO string: $_\n";
+      if ( $server_crypto ne 'aes128-gcm-v1' ) {
+	die "Unsupported MOSH CRYPTO suite: $server_crypto\n";
       }
     } elsif ( m{^MOSH CONNECT } ) {
       if ( ( $port, $key ) = m{^MOSH CONNECT (\d+?) ([A-Za-z0-9/+]{22})\s*$} ) {
@@ -564,11 +645,30 @@ if ( $pid == 0 ) { # child
     if ( $bad_udp_port_warning ) {
       die "$0: Server does not support UDP port range option.\n";
     }
-    die "$0: Did not find adam-mosh server startup message. (Have you installed adam-mosh on your server?)\n";
+    die "$0: Did not find goblin-mosh server startup message. (Have you installed goblin-mosh on your server?)\n";
   }
 
-  # Now start real adam-mosh client
+  if ( $fips_crypto and ( not defined $server_crypto or $server_crypto ne 'aes128-gcm-v1' ) ) {
+    die "$0: remote server did not confirm the requested FIPS crypto suite.\n";
+  }
+  if ( not $fips_crypto and defined $server_crypto ) {
+    die "$0: remote server selected a crypto suite that was not requested.\n";
+  }
+
+  # Now start real goblin-mosh client
+  if ( $tmux_control != $server_tmux_control ) {
+    die "$0: remote server did not negotiate the requested tmux control mode.\n";
+  }
   $ENV{ 'MOSH_KEY' } = $key;
+  $ENV{ 'MOSH_MASCOT' } = $mascot;
+  $ENV{ 'MOSH_DIRECTORY' } = $server_directory;
+  $ENV{ 'MOSH_FILES' } = $server_files;
+  $ENV{ 'MOSH_LINK_BUDGET' } = $server_link_budget;
+  $ENV{ 'MOSH_SIXEL_STATE' } = $server_sixel_state ? '1' : '0';
+  $ENV{ 'MOSH_CLIPBOARD' } = $server_clipboard ? '1' : '0';
+  $ENV{ 'MOSH_CLIPBOARD_FAST_THRESHOLD' } = $clipboard_fast_threshold;
+  $ENV{ 'MOSH_DOWNLOADS' } = $server_downloads && !$no_downloads ? '1' : '0';
+  $ENV{ 'MOSH_DOWNLOAD_DIR' } = $download_directory if defined $download_directory;
   $ENV{ 'MOSH_PREDICTION_DISPLAY' } = $predict;
   $ENV{ 'MOSH_NO_TERM_INIT' } = '1' if !$term_init;
   $ENV{ 'MOSH_STREAM_DELAY' } = $stream_delay if defined $stream_delay;
@@ -590,7 +690,11 @@ if ( $pid == 0 ) { # child
   if ( $x11_forwarding ) {
     push @client_forwarding, '-X';
   }
-  exec {$client} ("$client", "-# @cmdline |", @client_forwarding, $ip, $port);
+  my @client_crypto = $fips_crypto ? ( '--fips-crypto' ) : ();
+  push @client_crypto, '--tmux-control' if $tmux_control;
+  push @client_crypto, '--no-kitty' if $no_kitty;
+  push @client_crypto, '--no-sixel' if $no_sixel;
+  exec {$client} ("$client", "-# @cmdline |", @client_crypto, @client_forwarding, $ip, $port);
 }
 
 sub shell_quote { join ' ', map {(my $a = $_) =~ s/'/'\\''/g; "'$a'"} @_ }
@@ -620,7 +724,7 @@ sub upload_state_dictionary {
     push @upload_ssh, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
 
-  my $script = 'tmp=$(mktemp "${TMPDIR:-/tmp}/adam-mosh-zstd-dict.XXXXXX") || exit 1; '
+  my $script = 'tmp=$(mktemp "${TMPDIR:-/tmp}/goblin-mosh-zstd-dict.XXXXXX") || exit 1; '
     . 'chmod 600 "$tmp" || exit 1; '
     . 'cat > "$tmp" || exit 1; '
     . 'printf "MOSH DICT %s\n" "$tmp"';
@@ -664,7 +768,11 @@ sub server_command_string {
 
 sub server_environment_prefix {
   my @assignments;
-  push @assignments, shell_assign( "MOSH_CLIENT_CAPS", "keepalive-v1" );
+  my @client_capabilities = ( "keepalive-v1", "directory-v1", "directory-v2", "file-sync-v1", "link-budget-v1", "sixel-state-v1", "osc5522-v1" );
+  push @client_capabilities, "goblin-download-v2" unless $no_downloads;
+  push @client_capabilities, "fips-aes128-gcm-v1" if $fips_crypto;
+  push @client_capabilities, "tmux-control-v1" if $tmux_control;
+  push @assignments, shell_assign( "MOSH_CLIENT_CAPS", join( ',', @client_capabilities ) );
   push @assignments, shell_assign( "MOSH_CLIENT_TERM", $client_term ) if defined $client_term and length $client_term;
   push @assignments, shell_assign( "MOSH_STREAM_DELAY", $stream_delay ) if defined $stream_delay;
   push @assignments, shell_assign( "MOSH_STREAM_BANDWIDTH", $stream_bandwidth ) if defined $stream_bandwidth;

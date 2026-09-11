@@ -1,0 +1,7 @@
+#!/bin/sh
+# Optional real-producer regression; synthetic equivalent is in kitty-graphics.
+command -v gnuplot >/dev/null 2>&1 || exit 77
+# Some builds warn about an unknown terminal but still return success.
+# Check the actual compiled-in terminals before running this optional test.
+gnuplot -e 'set terminal' 2>&1 | grep -Eq '^[[:space:]]*kittycairo[[:space:]]' || exit 77
+gnuplot -e 'set terminal kittycairo size 640,480; plot sin(x)' | ./kitty-graphics --kittycairo

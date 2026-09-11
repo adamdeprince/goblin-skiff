@@ -29,6 +29,7 @@ void image_to_proto( const KittyImage& image, KittyBuffers::Image* output )
   output->set_width( image.width );
   output->set_height( image.height );
   output->set_webp( image.data ? *image.data : std::string() );
+  if ( image.origin == ImageOrigin::Sixel ) { output->set_origin( KittyBuffers::Image::SIXEL ); }
 }
 
 void placement_to_proto( const KittyPlacement& placement, KittyBuffers::Placement* output )
@@ -179,6 +180,7 @@ void apply_kitty_state_delta( const KittyBuffers::StateDelta& input, Framebuffer
     image.format = KITTY_FORMAT_WEBP;
     image.width = width;
     image.height = height;
+    image.origin = source.origin() == KittyBuffers::Image::SIXEL ? ImageOrigin::Sixel : ImageOrigin::Kitty;
     image.data = std::make_shared<std::string>( source.webp() );
     framebuffer.put_kitty_image( image );
   }

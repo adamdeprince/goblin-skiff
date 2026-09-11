@@ -41,11 +41,16 @@
 #include <termios.h>
 
 #include "src/frontend/streamforward.h"
+#include "src/frontend/mascot.h"
+#include "src/frontend/controlpanel.h"
+#include "src/frontend/mimeclipboard.h"
+#include "src/frontend/download.h"
 #include "src/frontend/terminaloverlay.h"
 #include "src/network/bulkcontrol.h"
 #include "src/network/networktransport.h"
 #include "src/statesync/completeterminal.h"
 #include "src/statesync/user.h"
+#include <set>
 
 class STMClient
 {
@@ -53,13 +58,32 @@ private:
   std::string ip;
   std::string port;
   std::string key;
+  Crypto::Mode crypto_mode;
   bool compact_keepalive;
+  bool tmux_control;
+  Terminal::TmuxControlParser tmux_parser;
+  Mascot::Splash mascot;
+  bool graphics_sent = false;
+  bool sixel_state = getenv( "MOSH_SIXEL_STATE" ) && !strcmp( getenv( "MOSH_SIXEL_STATE" ), "1" );
+  bool mime_negotiated = getenv( "MOSH_CLIPBOARD" ) && !strcmp( getenv( "MOSH_CLIPBOARD" ), "1" );
+  bool mime_enabled = false;
+  bool downloads_enabled = getenv( "MOSH_DOWNLOADS" ) && !strcmp( getenv( "MOSH_DOWNLOADS" ), "1" );
+  Download::Receiver downloads { Download::downloads_directory(), crypto_mode };
+  Clipboard::Endpoint mime_clipboard { false };
+  Terminal::Osc5522InputFilter mime_input {};
+  Control::Panel control_panel;
+  Files::Endpoint files;
+  unsigned file_bulk_turn = 0;
 
   int escape_key;
   int escape_pass_key;
   int escape_pass_key2;
   bool escape_requires_lf;
   std::wstring escape_key_help;
+  std::string keyboard_escape_packet {}, keyboard_escape_release {};
+  unsigned keyboard_escape_code = 0;
+  std::set<unsigned> keyboard_local_keys {};
+  bool input_bracketed_paste = false;
 
   struct termios saved_termios, raw_termios;
 
@@ -71,6 +95,7 @@ private:
   using NetworkPointer = std::shared_ptr<NetworkType>;
   NetworkPointer network;
   Terminal::Display display;
+  Terminal::StartupScreen startup_screen;
   Terminal::Osc52InputFilter osc52_input;
   bool expecting_osc52_reply;
   StreamForwarder forwarder;
@@ -79,13 +104,19 @@ private:
   unsigned int state_sample_min_size;
 
   std::wstring connecting_notification;
-  bool repaint_requested, lf_entered, quit_sequence_started;
+  bool screen_initialized, repaint_requested, lf_entered, quit_sequence_started;
   bool clean_shutdown;
   unsigned int verbose;
 
   void main_init( void );
   void process_network_input( void );
   bool process_user_input( int fd );
+  bool process_terminal_bytes( const std::string& bytes );
+  bool process_download_filtered_bytes( const std::string& bytes );
+  bool process_user_bytes( const std::string& bytes, bool panel_filtered = false );
+  bool process_user_keys( const std::string& bytes, bool paste );
+  bool is_command_key( const std::string& key );
+  void dismiss_mascot();
   bool process_resize( void );
 
   void output_new_frame( void );
@@ -113,19 +144,29 @@ public:
              unsigned int stream_rate_bytes_per_second,
              const std::string& s_state_sample_log,
              unsigned int s_state_sample_min_size,
-             bool s_compact_keepalive )
+             bool s_compact_keepalive,
+             Crypto::Mode s_crypto_mode,
+             bool s_tmux_control,
+             Mascot::Format mascot_format,
+             bool allow_kitty,
+             bool allow_sixel )
     : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ), key( s_key ? s_key : "" ),
-      compact_keepalive( s_compact_keepalive ), escape_key( 0x1E ),
+      crypto_mode( s_crypto_mode ), compact_keepalive( s_compact_keepalive ),
+      tmux_control( s_tmux_control ), tmux_parser(), mascot( mascot_format, allow_kitty, allow_sixel ),
+      control_panel( getenv( "MOSH_DIRECTORY" ) && ( !strcmp( getenv( "MOSH_DIRECTORY" ), "1" ) || !strcmp( getenv( "MOSH_DIRECTORY" ), "2" ) ),
+                     getenv( "MOSH_DIRECTORY" ) && !strcmp( getenv( "MOSH_DIRECTORY" ), "2" ) ),
+      files( false, !s_tmux_control && getenv( "MOSH_FILES" ) && !strcmp( getenv( "MOSH_FILES" ), "1" ), s_crypto_mode ), escape_key( 0x1E ),
       escape_pass_key( '^' ), escape_pass_key2( '^' ), escape_requires_lf( false ), escape_key_help( L"?" ),
       saved_termios(), raw_termios(), window_size(), local_framebuffer( 1, 1 ), new_state( 1, 1 ), overlays(),
-      network(), display( true ) /* use TERM environment var to initialize display */,
-      osc52_input(), expecting_osc52_reply( false ),
-      forwarder( StreamForwarder::ClientSide, stream_delay_ms, stream_rate_bytes_per_second ),
+      network(), display( true, allow_kitty ) /* use TERM environment var to initialize display */,
+      startup_screen(), osc52_input(), expecting_osc52_reply( false ),
+      forwarder( StreamForwarder::ClientSide, stream_delay_ms, stream_rate_bytes_per_second, s_crypto_mode ),
       bulk_control( "client" ), state_sample_log( s_state_sample_log ), state_sample_min_size( s_state_sample_min_size ),
       connecting_notification(),
-      repaint_requested( false ), lf_entered( false ), quit_sequence_started( false ), clean_shutdown( false ),
+      screen_initialized( false ), repaint_requested( false ), lf_entered( false ), quit_sequence_started( false ), clean_shutdown( false ),
       verbose( s_verbose )
   {
+    control_panel.set_files( &files );
     overlays.get_notification_engine().set_keepalive_interval(
       compact_keepalive ? Network::KEEPALIVE_INTERVAL_MIN : Network::ACK_INTERVAL );
 

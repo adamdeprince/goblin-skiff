@@ -283,7 +283,7 @@ def parse_args() -> argparse.Namespace:
 
     if args.variant is None:
         args.variant = [
-            Variant("patched", ("/usr/local/bin/adam-mosh",)),
+            Variant("patched", ("/usr/local/bin/goblin-mosh",)),
             Variant("system", ("mosh",)),
         ]
     if args.workload is None:
@@ -353,7 +353,7 @@ def ssh_argv(ssh_text: str) -> list[str]:
 
 def deploy_workload(ssh: list[str], host: str, source_path: Path) -> str:
     script = (
-        'umask 077; d="${XDG_CACHE_HOME:-$HOME/.cache}/adam-mosh-ip-volume"; '
+        'umask 077; d="${XDG_CACHE_HOME:-$HOME/.cache}/goblin-mosh-ip-volume"; '
         'mkdir -p "$d" || exit 1; cat > "$d/workload.py" || exit 1; '
         'chmod 700 "$d/workload.py" || exit 1; printf "%s\\n" "$d/workload.py"'
     )

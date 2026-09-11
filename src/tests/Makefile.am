@@ -39,8 +39,8 @@ displaytests = \
 	unicode-later-combining.test \
 	window-resize.test
 
-check_PROGRAMS = ocb-aes encrypt-decrypt base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry
-TESTS = ocb-aes encrypt-decrypt base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry local.test $(displaytests)
+check_PROGRAMS = ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control
+TESTS = ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control tmux-control-integration.test local.test $(displaytests)
 XFAIL_TESTS = \
 	e2e-failure.test \
 	emulation-attributes-256color8.test
@@ -56,6 +56,10 @@ ocb_aes_LDADD = ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
 encrypt_decrypt_SOURCES = encrypt-decrypt.cc test_utils.cc test_utils.h
 encrypt_decrypt_CPPFLAGS = -I$(srcdir)/../crypto -I$(srcdir)/../util
 encrypt_decrypt_LDADD = ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
+
+fips_crypto_SOURCES = fips-crypto.cc
+fips_crypto_CPPFLAGS = -I$(top_srcdir) $(CRYPTO_CFLAGS)
+fips_crypto_LDADD = ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
 
 base64_SOURCES = base64.cc base64_vector.cc base64_vector.h genbase64.pl
 base64_CPPFLAGS = $(ocb_aes_CPPFLAGS)
@@ -109,7 +113,70 @@ terminal_geometry_SOURCES = terminal-geometry.cc
 terminal_geometry_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS)
 terminal_geometry_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS)
 
+terminal_display_SOURCES = terminal-display.cc
+terminal_display_CPPFLAGS = -I$(top_srcdir) $(protobuf_CFLAGS)
+terminal_display_LDADD = ../statesync/libmoshstatesync.a ../terminal/libmoshterminal.a ../protobufs/libmoshprotos.a ../util/libmoshutil.a $(protobuf_LIBS) $(TINFO_LIBS) $(ZSTD_LIBS)
+
+tmux_control_SOURCES = tmux-control.cc
+tmux_control_CPPFLAGS = $(terminal_display_CPPFLAGS)
+tmux_control_LDADD = $(terminal_display_LDADD)
+
+EXTRA_DIST += tmux-control-integration.test tmux-control-integration.py
+
 clean-local: clean-local-check
+
+check_PROGRAMS += control-panel mascot
+check_PROGRAMS += file-transfer
+TESTS += file-transfer
+TESTS += file-transfer-integration.test
+EXTRA_DIST += file-transfer-integration.test
+file_transfer_SOURCES = file-transfer.cc
+file_transfer_CPPFLAGS = -I$(top_builddir) $(terminal_display_CPPFLAGS)
+file_transfer_LDADD = $(control_panel_LDADD)
+check_PROGRAMS += link-budget
+link_budget_SOURCES = link-budget.cc
+link_budget_CPPFLAGS = -I$(top_srcdir)
+check_PROGRAMS += sixel-state
+check_PROGRAMS += terminal-extensions
+check_PROGRAMS += download
+check_PROGRAMS += download-forward
+TESTS += download
+TESTS += download-forward
+TESTS += download-integration.test
+EXTRA_DIST += download-integration.py download-integration.test
+download_SOURCES = download.cc
+download_CPPFLAGS = -I$(top_builddir) $(terminal_display_CPPFLAGS) $(CRYPTO_CFLAGS) $(ZSTD_CFLAGS)
+download_LDADD = ../frontend/libmoshcontrol.a ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a $(terminal_display_LDADD) ../fec/libmoshfec.a $(CRYPTO_LIBS)
+download_forward_SOURCES = download-forward.cc
+download_forward_CPPFLAGS = $(download_CPPFLAGS)
+download_forward_LDADD = $(download_LDADD)
+TESTS += terminal-extensions
+TESTS += graphics-integration.test
+EXTRA_DIST += graphics-integration.py graphics-integration.test
+terminal_extensions_SOURCES = terminal-extensions.cc
+terminal_extensions_SOURCES += unicode16-tests.h
+terminal_extensions_CPPFLAGS = $(terminal_display_CPPFLAGS)
+terminal_extensions_LDADD = $(terminal_display_LDADD)
+TESTS += sixel-state
+sixel_state_SOURCES = sixel-state.cc
+sixel_state_CPPFLAGS = $(terminal_display_CPPFLAGS)
+sixel_state_LDADD = $(terminal_display_LDADD)
+TESTS += control-panel mascot
+TESTS += link-budget
+TESTS += link-budget-integration.test
+EXTRA_DIST += link-budget-integration.test
+TESTS += control-panel-integration.test
+TESTS += startup-screen.test
+TESTS += kittycairo.test
+EXTRA_DIST += kittycairo.test
+EXTRA_DIST += startup-screen.py startup-screen.test
+EXTRA_DIST += control-panel-integration.py control-panel-integration.test
+control_panel_SOURCES = control-panel.cc
+control_panel_CPPFLAGS = -I$(top_builddir) $(terminal_display_CPPFLAGS)
+control_panel_LDADD = ../frontend/libmoshcontrol.a ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a $(terminal_display_LDADD) ../fec/libmoshfec.a $(CRYPTO_LIBS) $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
+mascot_SOURCES = mascot.cc
+mascot_CPPFLAGS = -I$(top_builddir) $(terminal_display_CPPFLAGS)
+mascot_LDADD = ../frontend/libmoshmascot.a $(terminal_display_LDADD)
 .PHONY: clean-local-check
 clean-local-check:
 	-for i in $(displaytests); do rm -rf $$i.d/; done

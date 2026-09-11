@@ -122,6 +122,19 @@ std::string UserStream::diff_from( const UserStream& existing ) const
         geometry->set_cell_width_px( my_it->client_geometry.cell_width_px );
         geometry->set_cell_height_px( my_it->client_geometry.cell_height_px );
       } break;
+      case UserTmuxEventType: {
+        output.add_instruction()->SetExtension( tmux_input, my_it->tmux.data );
+      } break;
+      case UserGraphicsEventType: {
+        auto* caps = output.add_instruction()->MutableExtension( client_graphics );
+        caps->set_kitty( my_it->graphics.kitty );
+        caps->set_sixel( my_it->graphics.sixel );
+        caps->set_keyboard( my_it->graphics.keyboard );
+        caps->set_text_sizing( my_it->graphics.text_sizing );
+        caps->set_clipboard( my_it->graphics.clipboard );
+        caps->set_clipboard_fast_threshold( my_it->graphics.clipboard_fast_threshold );
+        caps->set_downloads( my_it->graphics.downloads );
+      } break;
       default:
         assert( !"unexpected event type" );
         break;
@@ -148,11 +161,18 @@ void UserStream::apply_string( const std::string& diff )
       actions.push_back( UserEvent( Resize( input.instruction( i ).GetExtension( resize ).width(),
                                             input.instruction( i ).GetExtension( resize ).height() ) ) );
     } else if ( input.instruction( i ).HasExtension( ClientBuffers::stream ) ) {
-      actions.push_back( UserEvent( stream_event_from_proto(
-        input.instruction( i ).GetExtension( ClientBuffers::stream ) ) ) );
+      actions.push_back(
+        UserEvent( stream_event_from_proto( input.instruction( i ).GetExtension( ClientBuffers::stream ) ) ) );
     } else if ( input.instruction( i ).HasExtension( ClientBuffers::clipboard ) ) {
       actions.push_back( UserEvent(
         Terminal::clipboard_event_from_proto( input.instruction( i ).GetExtension( ClientBuffers::clipboard ) ) ) );
+    } else if ( input.instruction( i ).HasExtension( tmux_input ) ) {
+      actions.push_back( UserEvent( Terminal::TmuxBytes( input.instruction( i ).GetExtension( tmux_input ) ) ) );
+    } else if ( input.instruction( i ).HasExtension( client_graphics ) ) {
+      const auto& caps = input.instruction( i ).GetExtension( client_graphics );
+      actions.push_back( UserEvent( Terminal::ClientGraphics( caps.kitty(), caps.sixel(), caps.keyboard(), caps.text_sizing(),
+                                                              caps.clipboard(), caps.clipboard_fast_threshold() ) ) );
+      actions.back().graphics.downloads = caps.downloads();
     } else if ( input.instruction( i ).HasExtension( client_geometry ) ) {
       const ClientGeometryMessage& geometry = input.instruction( i ).GetExtension( client_geometry );
       actions.push_back( UserEvent( Terminal::ClientGeometry( geometry.columns(),
@@ -174,6 +194,8 @@ const Parser::Action& UserStream::get_action( unsigned int i ) const
       return actions[i].resize;
     case UserStreamEventType:
     case UserClipboardEventType:
+    case UserTmuxEventType:
+    case UserGraphicsEventType:
     case UserClientGeometryEventType: {
       static const Parser::Ignore nothing = Parser::Ignore();
       return nothing;

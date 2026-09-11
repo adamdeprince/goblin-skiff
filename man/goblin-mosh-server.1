@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH ADAM-MOSH-SERVER 1 "October 2012"
+.TH GOBLIN-MOSH-SERVER 1 "October 2012"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,9 +16,9 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-adam-mosh-server \- server-side helper for mosh
+goblin-mosh-server \- server-side helper for mosh
 .SH SYNOPSIS
-.B adam-mosh-server
+.B goblin-mosh-server
 new
 [\-s]
 [\-v]
@@ -30,29 +30,30 @@ new
 [\-X]
 [\-t \fIMS\fP]
 [\-b \fIBPS\fP]
+[\-\-fips\-crypto]
 [\-\- command...]
 .br
 .SH DESCRIPTION
-\fBadam-mosh-server\fP is a helper program for the
+\fBgoblin-mosh-server\fP is a helper program for the
 .BR mosh(1)
 remote terminal application.
 
-\fBadam-mosh-server\fP binds to a high UDP port and chooses an encryption
+\fBgoblin-mosh-server\fP binds to a high UDP port and chooses an encryption
 key to protect the session. It prints both on standard output,
-detaches from the terminal, and waits for the \fBadam-mosh-client\fP to
+detaches from the terminal, and waits for the \fBgoblin-mosh-client\fP to
 establish a connection. It will exit if no client has contacted
 it within 60 seconds.
 
-By default, \fBadam-mosh-server\fP binds to a port between 60000 and
+By default, \fBgoblin-mosh-server\fP binds to a port between 60000 and
 61000 and executes the user's login shell.
 
-On platforms with \fButempter\fP, \fBadam-mosh-server\fP maintains an entry
+On platforms with \fButempter\fP, \fBgoblin-mosh-server\fP maintains an entry
 in the
 .BR utmp(5)
 file to indicate its process ID, whether the session is connected,
 and the client's current IP address.
 
-\fBadam-mosh-server\fP exits when the client terminates the connection.
+\fBgoblin-mosh-server\fP exits when the client terminates the connection.
 
 .SH OPTIONS
 
@@ -69,6 +70,13 @@ hosts)
 .B \-v
 Print some debugging information even after detaching.  More instances
 of this flag will result in more debugging information.
+
+.TP
+.B \-\-fips\-crypto
+Use the \fBaes128-gcm-v1\fP wire format and require cryptographic operations
+from a configured OpenSSL 3 FIPS provider. This must match the client mode.
+The server reports the selected suite in its setup response so the wrapper can
+fail closed before starting UDP transport.
 
 .TP
 .B \-i \fIIP\fP
@@ -92,7 +100,7 @@ set of UTF-8.
 .TP
 .B \-R \fISPEC\fP
 Request a remote TCP forward. See
-.BR adam-mosh (1)
+.BR goblin-mosh (1)
 for the format.
 
 .TP
@@ -122,18 +130,18 @@ Cap forwarded stream payload bytes per second.
 These variables allow server-side configuration of Mosh's behavior.
 They may be set by administrators in system login/rc files,
 /etc/login.conf, or similar mechanisms, or users in their shell's
-login/rc files.  \fBadam-mosh-server\fP passes these variables to the login
+login/rc files.  \fBgoblin-mosh-server\fP passes these variables to the login
 session and shell that it starts, but changing them there will have no
 effect.
 
 .TP
 .B MOSH_SERVER_NETWORK_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBadam-mosh-server\fP will wait to receive an update from the
+long (in seconds) \fBgoblin-mosh-server\fP will wait to receive an update from the
 client before exiting.  Since \fPmosh\fP is very useful for mobile
 clients with intermittent operation and connectivity, we suggest
 setting this variable to a high value, such as 604800 (one week) or
-2592000 (30 days).  Otherwise, \fBadam-mosh-server\fP will wait
+2592000 (30 days).  Otherwise, \fBgoblin-mosh-server\fP will wait
 indefinitely for a client to reappear.  This variable is somewhat
 similar to the \fBTMOUT\fP variable found in many Bourne shells.
 However, it is not a login-session inactivity timeout; it only applies
@@ -142,14 +150,14 @@ to network connectivity.
 .TP
 .B MOSH_SERVER_SIGNAL_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBadam-mosh-server\fP will ignore SIGUSR1 while waiting
+long (in seconds) \fBgoblin-mosh-server\fP will ignore SIGUSR1 while waiting
 to receive an update from the client.  Otherwise, \fBSIGUSR1\fP will
-always terminate \fBadam-mosh-server\fP.  Users and administrators may
+always terminate \fBgoblin-mosh-server\fP.  Users and administrators may
 implement scripts to clean up disconnected Mosh sessions.  With this
 variable set, a user or administrator can issue
 
 .nf
-$ pkill -SIGUSR1 adam-mosh-server
+$ pkill -SIGUSR1 goblin-mosh-server
 .fi
 
 to kill disconnected sessions without killing connected login
@@ -158,25 +166,32 @@ sessions.
 .TP
 .B MOSH_STREAM_DELAY
 Default forwarded-stream coalescing delay in milliseconds. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_CLIENT_TERM
-Client terminal type supplied by the \fBadam-mosh\fP wrapper. The server uses
+Client terminal type supplied by the \fBgoblin-mosh\fP wrapper. The server uses
 this value as \fBTERM\fP for the login session. If it is unset or empty, the
 server falls back to \fBxterm\fP or \fBxterm\-256color\fP based on the detected
 color count.
 
 .TP
+.B MOSH_CLIENT_CAPS
+Comma-separated capabilities advertised by the setup wrapper. When
+\fBtmux-control-v1\fP is present, the server confirms it with
+\fBMOSH TMUX control-v1\fP during bootstrap and forwards DCS-framed tmux -CC
+output as reliable bytes. Only advertise this when the client supports it.
+
+.TP
 .B MOSH_STREAM_BANDWIDTH
 Default forwarded-stream payload-byte-per-second cap. See
-.BR adam-mosh (1).
+.BR goblin-mosh (1).
 
 .TP
 .B MOSH_STATE_ZSTD_DICT
 Path to a zstd dictionary file to use for this server process. Files
 produced by
-.BR adam-mosh-compile-dictionary (1)
+.BR goblin-mosh-compile-dictionary (1)
 are stored compressed with zstd level 22 and are decompressed before
 use. The \fBmosh\fP wrapper sets this to a temporary uploaded copy
 when \fB\-\-state\-zstd\-dict\fP is used.
@@ -191,21 +206,21 @@ server-side.
 .SH EXAMPLE
 
 .nf
-$ adam-mosh-server
+$ goblin-mosh-server
 
 MOSH CONNECT 60001 UAkFedSsVJs2LfMeKyQB5g
 
-adam-mosh-server (mosh 1.1)
+goblin-mosh-server (mosh 1.1)
 [...] (copyright notice omitted)
 
-[adam-mosh-server detached, pid = 20443]
+[goblin-mosh-server detached, pid = 20443]
 .fi
 
 .SH SEE ALSO
-.BR adam-mosh (1),
-.BR adam-mosh-client (1),
-.BR adam-moshcp (1),
-.BR adam-mosh-compile-dictionary (1).
+.BR goblin-mosh (1),
+.BR goblin-mosh-client (1),
+.BR goblin-moshcp (1),
+.BR goblin-mosh-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org

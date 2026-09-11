@@ -1,4 +1,5 @@
-source = clipboard.proto kitty.proto stream.proto userinput.proto hostinput.proto transportinstruction.proto
+source = clipboard.proto kitty.proto stream.proto control.proto userinput.proto hostinput.proto transportinstruction.proto
+source += download.proto
 
 AM_CPPFLAGS = $(protobuf_CFLAGS)
 AM_CXXFLAGS = $(WARNING_CXXFLAGS) $(HARDEN_CFLAGS) $(MISC_CXXFLAGS) $(CODE_COVERAGE_CXXFLAGS) -Wno-error

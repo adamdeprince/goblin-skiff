@@ -30,9 +30,11 @@
     also delete it here.
 */
 
+#include <algorithm>
 #include <cstdio>
 
 #include "src/terminal/kittygraphics.h"
+#include "src/terminal/sixel.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldisplay.h"
 
@@ -48,7 +50,7 @@ static const Renditions& initial_rendition( void )
 
 std::string Display::open() const
 {
-  return std::string( smcup ? smcup : "" ) + std::string( "\033[?1h" );
+  return std::string( smcup ? smcup : "" ) + std::string( "\033[?1h" ) + ( render_keyboard ? "\033[>0u" : "" );
 }
 
 std::string Display::close() const
@@ -56,12 +58,93 @@ std::string Display::close() const
   return std::string( "\033[?1l\033[0m\033[?25h"
                       "\033[?1003l\033[?1002l\033[?1001l\033[?1000l"
                       "\033[?1015l\033[?1006l\033[?1005l" )
+         + ( render_keyboard ? "\033[<u" : "" ) + ( render_clipboard ? "\033[?5522l" : "" )
          + std::string( rmcup ? rmcup : "" );
 }
 
-std::string Display::new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f ) const
+/* A plain shell initially uses only the top of its logical framebuffer.
+   Keep the local prefix above it until output needs those physical rows.
+   Graphics and mouse coordinates must stay in the unshifted coordinate space. */
+static int startup_unused_rows( const Framebuffer& f )
 {
-  FrameState frame( last );
+  if ( !f.get_kitty_placements().empty() || f.ds.mouse_reporting_mode != DrawState::MOUSE_REPORTING_NONE
+       || f.ds.get_scrolling_region_top_row() != 0
+       || f.ds.get_scrolling_region_bottom_row() != f.ds.get_height() - 1 ) {
+    return 0;
+  }
+  const Cell blank( 0 );
+  int used = f.ds.get_cursor_row() + 1;
+  for ( int row = f.ds.get_height() - 1; row >= used; row-- ) {
+    for ( const Cell& cell : f.get_row( row )->cells ) {
+      if ( cell != blank ) {
+        return f.ds.get_height() - row - 1;
+      }
+    }
+  }
+  return f.ds.get_height() - used;
+}
+
+std::string Display::new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f,
+                                StartupScreen* startup ) const
+{
+  const bool resized = f.ds.get_width() != last.ds.get_width() || f.ds.get_height() != last.ds.get_height();
+  const bool attaching = startup && startup->row_offset < 0;
+  int row_offset = 0, scroll_rows = 0;
+  if ( startup ) {
+    if ( attaching ) {
+      // The cursor is already on the first free line below the splash, not
+      // necessarily at the bottom of the window. Consume existing blank space
+      // before scrolling anything into history. Unknown positions keep the
+      // conservative bottom-anchored fallback used by terminals without CPR.
+      const int origin = startup->cursor_row >= 0 && !resized
+                           ? std::min( startup->cursor_row, f.ds.get_height() - 1 ) : f.ds.get_height();
+      row_offset = std::min( origin, startup_unused_rows( f ) );
+      scroll_rows = origin - row_offset;
+    } else {
+      row_offset = initialized && !resized && startup->row_offset > 0
+                     ? std::min( startup->row_offset, startup_unused_rows( f ) ) : 0;
+      scroll_rows = startup->row_offset - row_offset;
+      /* A resize may already have moved rows in the physical terminal. Its
+         old coordinates are unknown: preserve the viewport before repainting. */
+      if ( resized && startup->row_offset > 0 ) {
+        scroll_rows = std::max( f.ds.get_height(), last.ds.get_height() );
+      }
+    }
+    startup->row_offset = row_offset;
+  }
+  FrameState frame( last, row_offset );
+  bool have_sized_text = false, redraw_sized_text = !initialized || resized;
+  for ( int y = 0; y < f.ds.get_height(); y++ ) {
+    for ( int x = 0; x < f.ds.get_width(); x++ ) {
+      const Cell& cell = *f.get_cell( y, x );
+      const Cell* old = y < last.ds.get_height() && x < last.ds.get_width() ? last.get_cell( y, x ) : NULL;
+      if ( cell.get_sized_text() || ( old && old->get_sized_text() ) ) {
+        have_sized_text = true;
+        if ( !old || cell != *old ) { redraw_sized_text = true; }
+      }
+    }
+  }
+  const bool redraw_sixel = render_sixel && ( !initialized || Sixel::changed( last, f ) );
+  redraw_sized_text = have_sized_text && ( redraw_sized_text || redraw_sixel );
+  std::vector<bool> graphics_dirty_rows( f.ds.get_height(), false );
+  if ( redraw_sixel ) {
+    // Native sixel has no delete-by-ID. Erase old cell coverage and repaint
+    // those text rows before composing current images, without clearing the
+    // viewport or scrollback. This also handles popup hide/restore.
+    frame.update_rendition( initial_rendition(), true );
+    frame.update_hyperlink( Hyperlink(), true );
+    for ( const auto& p : last.get_kitty_placements() ) {
+      const auto* image = last.find_kitty_image( p.image_id );
+      if ( !image || image->origin != ImageOrigin::Sixel || p.col < 0 || p.col >= f.ds.get_width() ) { continue; }
+      const unsigned width = std::min( p.columns, unsigned( f.ds.get_width() - p.col ) );
+      const int bottom = std::min( int64_t( f.ds.get_height() ), int64_t( p.row ) + p.rows );
+      for ( int y = std::max( p.row, 0 ); width && y < bottom; y++ ) {
+        frame.append_silent_move( y, p.col );
+        frame.str += "\033[" + std::to_string( width ) + "X";
+        graphics_dirty_rows[y] = true;
+      }
+    }
+  }
 
   char tmp[64];
 
@@ -116,8 +199,20 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
     /* reset scrolling region */
     frame.append( "\033[r" );
 
-    /* clear screen */
-    frame.append( "\033[0m\033[H\033[2J" );
+    if ( attaching || scroll_rows ) {
+      /* Allocate only the rows occupied by remote output. Scrolling a whole
+         viewport here would immediately hide the inline mascot. */
+      frame.append( "\033[0m\033]8;;\033\\" );
+      if ( scroll_rows ) {
+        snprintf( tmp, sizeof tmp, "\033[%d;1H\r", std::max( f.ds.get_height(), last.ds.get_height() ) );
+        frame.append( tmp );
+        frame.append( scroll_rows, '\n' );
+      }
+      snprintf( tmp, sizeof tmp, "\033[%d;1H", row_offset + 1 );
+      frame.append( tmp );
+    } else {
+      frame.append( "\033[0m\033[H\033[2J" );
+    }
     initialized = false;
     frame.cursor_x = frame.cursor_y = 0;
     frame.current_rendition = initial_rendition();
@@ -127,6 +222,40 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
     frame.cursor_y = frame.last_frame.ds.get_cursor_row();
     frame.current_rendition = frame.last_frame.ds.get_renditions();
     frame.current_hyperlink = frame.last_frame.ds.get_hyperlink();
+    if ( scroll_rows ) {
+      /* Grow the remote area with real full-screen scrolling, preserving the
+         prefix in native history. The already-rendered remote rows move with
+         it, so their logical coordinates and normal diff remain unchanged. */
+      frame.append( "\033[0m\033]8;;\033\\\033[r" );
+      snprintf( tmp, sizeof tmp, "\033[%d;1H\r", f.ds.get_height() );
+      frame.append( tmp );
+      frame.append( scroll_rows, '\n' );
+      frame.cursor_x = frame.cursor_y = -1;
+      frame.current_rendition = initial_rendition();
+      frame.current_hyperlink = Hyperlink();
+    }
+  }
+
+  if ( redraw_sized_text ) {
+    // Erase old blocks first, including their lower rows in a plain-text
+    // fallback. Draw current blocks after ordinary text so a later EL/ECH
+    // cannot erase a multi-row glyph we just emitted.
+    for ( const auto* screen : { &last, &f } ) {
+      for ( int y = 0; y < std::min( screen->ds.get_height(), f.ds.get_height() ); y++ ) {
+        for ( int x = 0; x < std::min( screen->ds.get_width(), f.ds.get_width() ); x++ ) {
+          const auto* cell = screen->get_cell( y, x );
+          if ( !cell->get_sized_text() || cell->get_text_x() || cell->get_text_y() ) { continue; }
+          const auto& text = *cell->get_sized_text();
+          frame.update_rendition( initial_rendition(), true );
+          frame.update_hyperlink( Hyperlink(), true );
+          for ( int row = y; row < std::min( f.ds.get_height(), y + int( text.scale ) ); row++ ) {
+            frame.append_silent_move( row, x );
+            frame.str += "\033[" + std::to_string( std::min( int( text.columns() ), f.ds.get_width() - x ) ) + "X";
+            graphics_dirty_rows[row] = true;
+          }
+        }
+      }
+    }
   }
 
   /* is cursor visibility initialized? */
@@ -155,34 +284,55 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
   }
 
   /* shortcut -- has display moved up by a certain number of lines? */
-  if ( initialized ) {
+  if ( initialized && !row_offset && !redraw_sixel && !have_sized_text ) {
     int lines_scrolled = 0;
     int scroll_height = 0;
 
-    for ( int row = 0; row < f.ds.get_height(); row++ ) {
-      const Row* new_row = f.get_row( 0 );
-      const Row* old_row = &*rows.at( row );
-      if ( !( new_row == old_row || *new_row == *old_row ) ) {
-        continue;
-      }
-      /* if row 0, we're looking at ourselves and probably didn't scroll */
-      if ( row == 0 ) {
+    /* A shared Row pointer is proof that an unchanged logical row moved.
+       Content equality alone is not: untouched blank rows deliberately share
+       storage and can otherwise look like a scroll in sparse applications.
+       Only use the shortcut when the new top row occurs once in each frame. */
+    const Row* new_top_row = f.get_row( 0 );
+    bool new_top_row_is_unique = true;
+    for ( int row = 1; row < f.ds.get_height(); row++ ) {
+      if ( f.get_row( row ) == new_top_row ) {
+        new_top_row_is_unique = false;
         break;
       }
-      /* found a scroll */
-      lines_scrolled = row;
-      scroll_height = 1;
+    }
 
-      /* how big is the region that was scrolled? */
-      for ( int region_height = 1; lines_scrolled + region_height < f.ds.get_height(); region_height++ ) {
-        if ( *f.get_row( region_height ) == *rows.at( lines_scrolled + region_height ) ) {
-          scroll_height = region_height + 1;
-        } else {
-          break;
+    if ( new_top_row_is_unique ) {
+      for ( int row = 1; row < f.ds.get_height(); row++ ) {
+        if ( rows.at( row ).get() != new_top_row ) {
+          continue;
         }
-      }
 
-      break;
+        bool old_row_is_unique = true;
+        for ( int other_row = 0; other_row < f.ds.get_height(); other_row++ ) {
+          if ( other_row != row && rows.at( other_row ).get() == new_top_row ) {
+            old_row_is_unique = false;
+            break;
+          }
+        }
+        if ( !old_row_is_unique ) {
+          continue;
+        }
+
+        /* found an unambiguous scroll */
+        lines_scrolled = row;
+        scroll_height = 1;
+
+        /* how big is the region that was scrolled? */
+        for ( int region_height = 1; lines_scrolled + region_height < f.ds.get_height(); region_height++ ) {
+          if ( f.get_row( region_height ) == rows.at( lines_scrolled + region_height ).get() ) {
+            scroll_height = region_height + 1;
+          } else {
+            break;
+          }
+        }
+
+        break;
+      }
     }
 
     if ( scroll_height ) {
@@ -242,16 +392,69 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
 
   /* Now update the display, row by row */
   bool wrap = false;
-  for ( ; frame_y < f.ds.get_height(); frame_y++ ) {
-    wrap = put_row( initialized, frame, f, frame_y, *rows.at( frame_y ), wrap );
+  for ( ; frame_y < f.ds.get_height() - row_offset; frame_y++ ) {
+    wrap = put_row( initialized && !graphics_dirty_rows[frame_y], frame, f, frame_y, *rows.at( frame_y ), wrap );
+  }
+
+  if ( redraw_sized_text ) {
+    for ( int y = 0; y < f.ds.get_height() - row_offset; y++ ) {
+      for ( int x = 0; x < f.ds.get_width(); x++ ) {
+        const auto* cell = f.get_cell( y, x );
+        if ( !cell->get_sized_text() || cell->get_text_x() || cell->get_text_y() ) { continue; }
+        frame.append_silent_move( y, x );
+        frame.update_rendition( cell->get_renditions() );
+        frame.update_hyperlink( cell->get_hyperlink() );
+        cell->print_grapheme( frame.str, render_sized_text );
+        frame.cursor_x = frame.cursor_y = -1;
+      }
+    }
+  }
+
+  if ( have_sized_text && render_sized_text && !frame.str.empty() ) {
+    // Deferred multi-row composition must also reconstruct soft-wrap flags.
+    // Reprint the last glyph and let the next glyph wrap naturally, including
+    // the protocol's skip over lower continuation rows. CUP alone loses that
+    // logical line relationship on the receiving state machine.
+    for ( int y = 0; y + 1 < f.ds.get_height() - row_offset; y++ ) {
+      if ( !f.get_row( y )->get_wrap() ) { continue; }
+      int x = f.ds.get_width() - 1;
+      const auto* end = f.get_cell( y, x );
+      if ( end->get_sized_text() ) {
+        if ( end->get_text_y() ) { continue; }
+        x -= end->get_text_x();
+      } else if ( x && f.get_cell( y, x - 1 )->get_wide() ) { x--; }
+      end = f.get_cell( y, x );
+      int next_y = y + 1, next_x = 0;
+      while ( next_y < f.ds.get_height() ) {
+        const auto* next = f.get_cell( next_y, next_x );
+        if ( !next->get_text_y() ) { break; }
+        next_x += next->get_width();
+        if ( next_x >= f.ds.get_width() ) { next_y++; next_x = 0; }
+      }
+      if ( next_y >= f.ds.get_height() - row_offset ) { continue; }
+      frame.append_silent_move( y, x );
+      frame.update_rendition( end->get_renditions() );
+      frame.update_hyperlink( end->get_hyperlink() );
+      frame.append_cell( *end );
+      const auto* next = f.get_cell( next_y, next_x );
+      frame.update_rendition( next->get_renditions() );
+      frame.update_hyperlink( next->get_hyperlink() );
+      frame.append_cell( *next );
+      frame.cursor_x = frame.cursor_y = -1;
+    }
   }
 
   if ( render_kitty ) {
     const size_t before_kitty = frame.str.size();
-    append_kitty_frame( frame.str, initialized, frame.last_frame, f );
+    append_kitty_frame( frame.str, initialized && !redraw_sixel, frame.last_frame, f, convert_sixel );
     if ( frame.str.size() != before_kitty ) {
       frame.cursor_x = frame.cursor_y = -1;
     }
+  }
+
+  if ( redraw_sixel ) {
+    Sixel::append_native_frame( frame.str, f, graphics_geometry );
+    frame.cursor_x = frame.cursor_y = -1;
   }
 
   /* has cursor location changed? */
@@ -275,6 +478,9 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
   frame.update_hyperlink( f.ds.get_hyperlink(), !initialized );
 
   /* has bracketed paste mode changed? */
+  if ( render_clipboard && ( !initialized || f.ds.mime_paste != last.ds.mime_paste ) ) {
+    frame.append( f.ds.mime_paste ? "\033[?5522h" : "\033[?5522l" );
+  }
   if ( ( !initialized ) || ( f.ds.bracketed_paste != frame.last_frame.ds.bracketed_paste ) ) {
     frame.append( f.ds.bracketed_paste ? "\033[?2004h" : "\033[?2004l" );
   }
@@ -317,6 +523,9 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
     }
   }
 
+  if ( render_keyboard && ( !initialized || f.ds.kitty_keyboard_flags != last.ds.kitty_keyboard_flags ) ) {
+    frame.str += "\033[=" + std::to_string( f.ds.kitty_keyboard_flags ) + "u";
+  }
   return frame.str;
 }
 
@@ -335,13 +544,15 @@ bool Display::put_row( bool initialized,
   const Row::cells_type& old_cells = old_row.cells;
 
   /* If we're forced to write the first column because of wrap, go ahead and do so. */
-  if ( wrap ) {
+  if ( wrap && !cells.at( 0 ).get_sized_text() ) {
     const Cell& cell = cells.at( 0 );
     frame.update_rendition( cell.get_renditions() );
     frame.update_hyperlink( cell.get_hyperlink() );
     frame.append_cell( cell );
     frame_x += cell.get_width();
     frame.cursor_x += cell.get_width();
+  } else if ( wrap ) {
+    frame.cursor_x = frame.cursor_y = -1;
   }
 
   /* If rows are the same object, we don't need to do anything at all. */
@@ -406,6 +617,11 @@ bool Display::put_row( bool initialized,
       }
     }
 
+    if ( cell.get_sized_text() ) {
+      frame_x += cell.get_width();
+      continue; // composed after all ordinary cells and erases
+    }
+
     /* Now draw a character cell. */
     /* Move to the right position. */
     const int cell_width = cell.get_width();
@@ -448,7 +664,7 @@ bool Display::put_row( bool initialized,
     }
   }
 
-  if ( !( wrote_last_cell && ( frame_y < f.ds.get_height() - 1 ) ) ) {
+  if ( !( wrote_last_cell && ( frame_y + frame.row_offset < f.ds.get_height() - 1 ) ) ) {
     return false;
   }
   /* To hint that a word-select should group the end of one line
@@ -472,8 +688,8 @@ bool Display::can_use_erase( const FrameState& frame ) const
   return has_bce || ( frame.current_rendition == initial_rendition() && frame.current_hyperlink.empty() );
 }
 
-FrameState::FrameState( const Framebuffer& s_last )
-  : str(), cursor_x( 0 ), cursor_y( 0 ), current_rendition( 0 ), current_hyperlink(),
+FrameState::FrameState( const Framebuffer& s_last, int s_row_offset )
+  : str(), cursor_x( 0 ), cursor_y( 0 ), row_offset( s_row_offset ), current_rendition( 0 ), current_hyperlink(),
     cursor_visible( s_last.ds.cursor_visible ), last_frame( s_last )
 {
   /* Preallocate for better performance.  Make a guess-- doesn't matter for correctness */
@@ -516,7 +732,7 @@ void FrameState::append_move( int y, int x )
     // More optimizations are possible.
   }
   char tmp[64];
-  snprintf( tmp, 64, "\033[%d;%dH", y + 1, x + 1 );
+  snprintf( tmp, 64, "\033[%d;%dH", y + row_offset + 1, x + 1 );
   append( tmp );
 }
 

@@ -57,11 +57,14 @@ std::vector<ClipboardEvent> Emulator::take_clipboard_events( void )
 
 void Emulator::execute( const Parser::Execute* act )
 {
+  dispatch.finish_download( false );
   dispatch.dispatch( CONTROL, act, &fb );
 }
 
 void Emulator::print( const Parser::Print* act )
 {
+  dispatch.finish_download( false );
+  dispatch.DCS_escape_end( 0, &fb );
   assert( act->char_present );
 
   const wchar_t ch = act->ch;
@@ -77,6 +80,8 @@ void Emulator::print( const Parser::Print* act )
   switch ( chwidth ) {
     case 1: /* normal character */
     case 2: /* wide character */
+      fb.skip_sized_continuations();
+      this_cell = fb.get_mutable_cell();
       if ( fb.ds.auto_wrap_mode && fb.ds.next_print_will_wrap ) {
         fb.get_mutable_row( -1 )->set_wrap( true );
         fb.ds.move_col( 0 );
@@ -107,6 +112,10 @@ void Emulator::print( const Parser::Print* act )
         this_cell = fb.get_mutable_cell();
       }
 
+      fb.skip_sized_continuations();
+      fb.erase_sized_text( -1, -1, 1, chwidth );
+      this_cell = fb.get_mutable_cell();
+      fb.erase_sixel_cells( -1, -1, 1, chwidth );
       fb.reset_cell( this_cell );
       this_cell->append( ch );
       this_cell->set_wide( chwidth == 2 ); /* chwidth had better be 1 or 2 here */
@@ -126,6 +135,7 @@ void Emulator::print( const Parser::Print* act )
       if ( combining_cell == NULL ) {                 /* character is now offscreen */
         break;
       }
+      if ( fb.append_sized_combining( combining_cell, ch ) ) { break; }
 
       if ( combining_cell->empty() ) {
         /* cell starts with combining character */
@@ -151,6 +161,8 @@ void Emulator::print( const Parser::Print* act )
 
 void Emulator::CSI_dispatch( const Parser::CSI_Dispatch* act )
 {
+  dispatch.finish_download( false );
+  dispatch.DCS_escape_end( 0, &fb );
   dispatch.dispatch( CSI, act, &fb );
 }
 
@@ -166,6 +178,11 @@ void Emulator::APC_end( const Parser::APC_End* act )
 
 void Emulator::Esc_dispatch( const Parser::Esc_Dispatch* act )
 {
+  dispatch.finish_download( act->ch == '\\' && dispatch.get_dispatch_chars().empty() );
+  dispatch.DCS_escape_end( act->ch, &fb );
+  // ST terminates an OSC/DCS, it is not a cursor operation. In particular,
+  // OSC 66 may have just filled the last column and armed delayed wrap.
+  if ( dispatch.get_dispatch_chars().empty() && act->ch == '\\' ) { return; }
   /* handle 7-bit ESC-encoding of C1 control characters */
   if ( ( dispatch.get_dispatch_chars().size() == 0 ) && ( 0x40 <= act->ch ) && ( act->ch <= 0x5F ) ) {
     Parser::Esc_Dispatch act2 = *act;

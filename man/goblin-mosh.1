@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH ADAM-MOSH 1 "April 2013"
+.TH GOBLIN-MOSH 1 "April 2013"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,9 +16,9 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-adam-mosh \- mobile shell with roaming and intelligent local echo
+goblin-mosh \- mobile shell with roaming and intelligent local echo
 .SH SYNOPSIS
-.B adam-mosh
+.B goblin-mosh
 .RI [ options ]
 [--]
 [user@]host
@@ -37,9 +37,9 @@ without waiting for a network round-trip.
 
 \fBmosh\fP uses \fBssh\fP to establish a connection to the remote host
 and authenticate with existing means (e.g., public-key authentication
-or a password). \fBadam-mosh\fP executes the unprivileged \fBadam-mosh-server\fP
+or a password). \fBgoblin-mosh\fP executes the unprivileged \fBgoblin-mosh-server\fP
 helper program on the server, then closes the SSH connection and
-starts the \fBadam-mosh-client\fP, which establishes a long-lived datagram
+starts the \fBgoblin-mosh-client\fP, which establishes a long-lived datagram
 connection over UDP.
 
 The wrapper passes the client's \fBTERM\fP value to the remote login session.
@@ -47,11 +47,11 @@ This lets remote applications detect client capabilities such as the Kitty
 graphics protocol advertised by \fBxterm\-ghostty\fP. The corresponding
 terminfo entry must be installed on the remote host.
 
-To improve responsiveness, \fBadam-mosh\fP runs a predictive model of the
+To improve responsiveness, \fBgoblin-mosh\fP runs a predictive model of the
 server's behavior in the background, trying to guess the effect of
 each keystroke on the screen. It makes predictions for normal typing,
 backspace, and the left- and right-arrow keys. When it is confident,
-\fBadam-mosh\fP displays the predictions without waiting for the
+\fBgoblin-mosh\fP displays the predictions without waiting for the
 server. The predictive model must prove itself anew on each row of the
 terminal and after each control character, so \fBmosh\fP avoids
 echoing passwords or non-echoing editor commands.
@@ -78,16 +78,35 @@ lifetime of the session.
 \fBmosh\fP will do its best to arrange a UTF-8 character set locale on
 the client and server. The client must have locale-related environment
 variables that specify UTF-8. \fBmosh\fP will pass these client
-variables to the \fBadam-mosh-server\fP on its command line, but in most
-cases they will not need to be used. \fBadam-mosh-server\fP first attempts
+variables to the \fBgoblin-mosh-server\fP on its command line, but in most
+cases they will not need to be used. \fBgoblin-mosh-server\fP first attempts
 to use its own locale-related environment variables, which come from
 the system default configuration (sometimes /etc/default/locale) or
 from having been passed over the SSH connection. But if these
-variables don't call for the use of UTF-8, \fBadam-mosh-server\fP will
+variables don't call for the use of UTF-8, \fBgoblin-mosh-server\fP will
 apply the locale-related environment variables from the client and try
 again.
 
 .SH OPTIONS
+.TP
+.B \-\-no\-kitty, \-\-no\-sixel
+Treat the named graphics protocol as unsupported by the local terminal.
+Disable its startup mascot probes and output. Disabling Kitty also suppresses
+remote Kitty image rendering locally. Both options together select an ASCII
+mascot. These options override forced mascot formats, which fall back to
+ASCII, without changing the remote TERM value.
+
+.TP
+.B \-\-mascot=\fIFORMAT\fP, \-\-no\-mascot
+Select auto, kitty, sixel, ascii, or none for the client-local startup mascot.
+The mascot is printed once as inline output. In native-scrollback mode, the
+remote output gradually scrolls earlier output into history as it needs more
+rows, rather than hiding the mascot immediately on connection. Full-screen
+applications, mouse reporting, graphics and explicit repaints release the
+remaining space.
+Retention of graphics in history depends on the local terminal.
+
+.PP
 Options named \fB \-\-experimental-*\fP are subject to change or
 removal in future versions of Mosh; their design or function is not
 yet final.
@@ -98,11 +117,11 @@ Command to run on remote host. By default, \fBmosh\fP executes a login shell.
 
 .TP
 .B \-\-client=\fIPATH\fP
-path to client helper on local machine (default: "adam-mosh-client")
+path to client helper on local machine (default: "goblin-mosh-client")
 
 .TP
 .B \-\-server=\fICOMMAND\fP
-command to run server helper on remote machine (default: "adam-mosh-server")
+command to run server helper on remote machine (default: "goblin-mosh-server")
 
 The server helper is unprivileged and can be installed in the user's
 home directory.
@@ -111,12 +130,69 @@ This option can be used to set environment variables for the server by
 using the
 .BR env (1)
 command to wrap the actual server command.  See
-.BR adam-mosh-server (1)
+.BR goblin-mosh-server (1)
 for available environment variables.
 
 .TP
+.B \-\-tmux\-control
+Negotiate reliable passthrough for \fBtmux -CC\fP integration with the local
+terminal (for example, iTerm2). Both endpoints must support this feature.
+Run \fBgoblin-mosh --tmux-control host -- tmux -CC new-session -A -s main\fP,
+or launch \fBtmux -CC\fP later from the remote shell. The unframed \fB-C\fP
+interface is not supported by this option.
+
+The control protocol uses the existing encrypted and compressed transport.
+All bytes must be delivered, which can use more bandwidth than screen diffs.
+Pending queues apply backpressure at 64 KiB plus at most one PTY read.
+Prediction, status overlays, and Mosh escape-key shortcuts are suspended during
+control mode; detach using the local terminal's tmux integration. Normal screen
+rendering resumes after detach. Temporary network loss and roaming remain
+supported; restarting the Mosh client requires a new tmux attachment.
+
+.TP
+.B \-\-no\-downloads
+Disable all routes of the Goblin inline download extension, including parent
+terminal probes. When enabled, OSC 777 goblin-download requests are forwarded
+to a supporting Goblin parent terminal, otherwise translated to Kitty file
+transfer if supported, otherwise an automatic prompt asks to save to local
+Downloads. Press y to select Save, then Enter after the confirmation appears.
+Enter defaults to declining; n always declines. The Mosh escape prefix followed
+by 0 (normally Ctrl-^ then 0) hides or reopens the
+pending offer. Pasted text cannot approve a download.
+Forwarding creates no intermediate copy; the parent handles permission and
+storage. A parent refusal is final, not a trigger for another save prompt.
+This requires support from both Mosh endpoints. Files use binary zstd level
+22 compression over the background FEC path, below terminal and socket traffic.
+The local fallback never overwrites existing files. Kitty owns its filesystem
+semantics; reported collisions are given a suffix before payload is sent.
+Downloaded content is never executed.
+The maximum file size and aggregate active download size is 64 MiB.
+
+.TP
+.B \-\-download\-directory=\fIDIR\fP
+Select the existing local fallback download directory (default: ~/Downloads).
+The local MOSH_DOWNLOAD_DIR environment variable also selects this directory.
+This option does not change the directory on a parent terminal's host.
+Completed local fallback downloads are permanent; incomplete
+files are removed on normal cancellation or session closure.
+
+.TP
+.B \-\-fips\-crypto
+Require the client and server to negotiate the \fBaes128-gcm-v1\fP transport
+suite during setup. This suite uses AES-128-GCM, HKDF-SHA-256, and random
+generation from a configured OpenSSL 3 FIPS provider. Setup fails rather than
+falling back if either endpoint cannot initialize that provider or the server
+does not confirm the suite. Provider-generated GCM IVs add 12 bytes to each UDP
+datagram compared with the default OCB framing.
+
+This mode is a building block for a future FIPS-compliant deployment; it is not
+by itself a claim that \fBgoblin-mosh\fP or the surrounding system is FIPS
+compliant. The OpenSSL module and configuration, entropy source, SSH bootstrap,
+operating environment, and operational controls must be assessed separately.
+
+.TP
 .B \-\-ssh=\fICOMMAND\fP
-OpenSSH command to remotely execute adam-mosh-server on remote machine (default: "ssh")
+OpenSSH command to remotely execute goblin-mosh-server on remote machine (default: "ssh")
 
 An alternate ssh port can be specified with, \fIe.g.\fP, \-\-ssh="ssh \-p 2222".
 
@@ -226,7 +302,7 @@ UDP connection and opened from the server side to
 Forward a remote TCP port to the local side of the Mosh session. This
 is similar to OpenSSH's
 .B \-R
-option: connections accepted by \fBadam-mosh-server\fP are carried over the
+option: connections accepted by \fBgoblin-mosh-server\fP are carried over the
 Mosh UDP connection and opened from the client side to
 \fIHOST\fP:\fIHOSTPORT\fP.
 
@@ -268,9 +344,11 @@ latency for interactive forwarded connections.
 
 .TP
 .B \-\-stream\-bandwidth=\fIBPS\fP
-Cap forwarded stream payload bytes per second. The default is 2048
-bytes per second. This limit applies to stream forwarding traffic, not
-to terminal state updates.
+Cap forwarded stream payload bytes per second. By default, supporting peers
+adapt forwarding to the independently estimated outgoing link budget;
+older peers use 2048 bytes per second. An explicit ceiling applies to
+forwarding, not terminal state updates. The shared session pacer still
+accounts for terminal, forwarding and bulk traffic together.
 
 .PP
 Terminal state compression is a core part of this branch's
@@ -283,7 +361,7 @@ so older peers remain compatible.
 .B \-\-state\-zstd\-dict=\fIFILE\fP
 Use \fIFILE\fP as a zstd dictionary for terminal state updates. The
 dictionary file is normally produced by
-.BR adam-mosh-compile-dictionary (1)
+.BR goblin-mosh-compile-dictionary (1)
 and stored compressed with zstd level 22. The wrapper uploads the
 compressed dictionary file to the server over SSH during setup. The
 server decompresses it, uses it for this session, and removes the
@@ -295,7 +373,7 @@ id.
 .B \-\-state\-sample\-log=\fIFILE\fP
 Write received, uncompressed terminal state samples to \fIFILE\fP in a
 zstd-compressed framed format suitable for
-.BR adam-mosh-compile-dictionary (1).
+.BR goblin-mosh-compile-dictionary (1).
 This file can contain terminal contents and should be treated as
 sensitive.
 
@@ -308,7 +386,7 @@ SSH agent forwarding are medium priority and use a separate stream
 token bucket from local, remote, and SOCKS5 TCP forwarding, which are
 low priority. Mosh emits at most one forwarded stream event per
 reliable send opportunity and caps forwarded stream chunks below the
-path-MTU payload budget. \fBadam-moshcp\fP bulk datagrams are sent only
+path-MTU payload budget. \fBgoblin-moshcp\fP bulk datagrams are sent only
 when no reliable terminal or stream-forwarding data is queued.
 
 .PP
@@ -326,7 +404,7 @@ heartbeat.
 
 .TP
 .B \-\-bind\-server={ssh|any|\fIIP\fP}
-Control the IP address that the \fBadam-mosh-server\fP binds to.
+Control the IP address that the \fBgoblin-mosh-server\fP binds to.
 
 The default is `ssh', in which case the server will reply from the IP
 address that the SSH connection came from (as found in the
@@ -342,21 +420,34 @@ With \-\-bind\-server=\fIIP\fP, the server will attempt to bind to the
 specified IP address.
 
 .TP
+.B \-\-native\-scroll
+Keep the session on the client's primary screen so upward screen motion is
+recorded by the local terminal emulator's native scrollback. This is the
+default. The scrollback contains the screen states that the client actually
+receives; output from intermediate states skipped on a slow or disconnected
+link cannot be reconstructed.
+
+.TP
+.B \-\-alternate\-screen
+Send the \fBsmcup\fP and \fBrmcup\fP terminal initialization strings, isolating
+the session in the alternate screen. This restores the traditional Mosh
+behavior but usually disables the local terminal's native scrollback.
+
+.TP
 .B \-\-no\-init
-Do not send the \fBsmcup\fP initialization string and \fBrmcup\fP
-deinitialization string to the client's terminal. On many terminals
-this disables alternate screen mode.
+Compatibility alias for \fB\-\-native\-scroll\fP. The inverse \fB\-\-init\fP
+is a compatibility alias for \fB\-\-alternate\-screen\fP.
 
 .TP
 .B \-\-local
-Invoke \fBadam-mosh-server\fP locally, without using \fBssh\fP.  This
+Invoke \fBgoblin-mosh-server\fP locally, without using \fBssh\fP.  This
 option requires the \fBhost\fP argument to be a local, numeric
 IPv4/IPv6 address.  This option is useful for testing.
 
 .TP
 .B \-\-experimental\-remote\-ip={proxy|local|remote}
 Select the method used to discover the IP address that the
-\fBadam-mosh-client\fP connects to.
+\fBgoblin-mosh-client\fP connects to.
 
 The default is \fBproxy\fP, which uses SSH's
 .B \-\-ssh\-proxy\-command
@@ -406,7 +497,81 @@ for \fBCtrl-B\fP you would type \fBB\fP).
 
 The escape sequence to shut down the connection is
 \fBEsc .\fP. The sequence \fBEsc Ctrl-Z\fP suspends the client.
+\fBEsc 0\fP toggles the local control panel, preserving its directories,
+selections, and pending requests while hidden. With the default prefix,
+type Ctrl-6 in Kitty (often Ctrl-Shift-6 in other terminals), release it,
+then press 0. The command also works while
+the panel is visible. Bracketed paste cannot invoke local commands.
+Alt-0 is not reserved by the client.
 Any other sequence passes both characters through to the server.
+.SS Live file browser
+Tab or Shift-Tab changes pane; Up/Down moves selection; Page Up/Down scroll
+a viewport. Left or Backspace opens the parent directory; Right enters a
+directory and does nothing on files; r refreshes. Reversing Up/Down moves the
+highlight immediately; the list scrolls only at the viewport edges. Each
+pane preserves its scroll position while switching sides or hiding the panel.
+The Unicode-bordered panes show file sizes in alphabetical order, with ASCII
+case ignored and original bytes breaking ties. Each host scans and sorts its
+own directory names inside a killable worker; only small windows cross the
+link. Non-ASCII names use byte ordering, not locale collation. There is no
+visible pagination. The sorted-name cache is limited to one million names or
+an estimated 64 MiB; slow scans do not block the terminal loop.
+At most eight 64-entry windows are cached. Both endpoints check the watched
+window every three seconds while open. Unchanged checks consume no network
+traffic; changed sizes send metadata deltas. Added or removed names renew
+the first window and invalidate old directory cookies. A deep scroll position
+therefore restarts on membership changes. Hidden browsing state is preserved,
+and watches resume when reopened. The remote terminal continues underneath.
+.SS Copying and synchronizing
+Enter, F5 or c copies the selected file or entire directory into the other pane.
+The transfer is queued immediately and the browser stays visible; there is
+no confirmation screen. Matching files are updated. x cancels the active
+transfer and queue. Bracketed paste and Kitty repeat/release events cannot
+start a copy. Remote-initiated Downloads offers still require permission.
+Existing regular files are synchronized with librsync: signatures travel
+from destination to source, then deltas travel back. Both directions use
+zstd-22 and the background FEC lane, with interactive acknowledgments.
+Large deltas fall back to sending the complete file. Reconstructed files
+are SHA-256 verified before atomic publication. Detected concurrent changes
+to an existing destination fail the transfer; new-file collisions never overwrite.
+Folder copies merge recursively, including empty directories. They never
+delete extra destination files. Symlinks and special files are rejected.
+Regular-file permissions (not special bits) are copied; timestamps, ownership,
+directory modes and hard-link relationships are not preserved.
+The popup shows progress and up to eight waiting jobs. x cancels the active
+job and queue, keeping completed files. Hiding/reopening the popup or a temporary
+disconnect preserves transfer state; exiting the session does not.
+Unsent data is discarded on cancel; the bounded in-flight FEC window can
+still drain before another job starts.
+Limits are 64 GiB per file, one million entries and 64 path components.
+Both endpoints need a build with librsync 2.3+ and OpenSSL 3. The capability
+is negotiated once as file-sync-v1. Configure with --with-librsync to require
+support, or --without-librsync for browsing only. This does not change the
+separate goblin-moshcp command protocol.
+.SS Adaptive link pacing
+Supporting peers negotiate independent outgoing send budgets once at setup.
+Each direction starts conservatively at 240 IP bytes/second and adjusts using
+authenticated delivery, loss and round-trip feedback from real traffic.
+There is no padding speed test or idle measurement traffic. The panel shows
+observed traffic and send budget separately for upload and download, in kbit/s,
+and outgoing loss. Sparse traffic cannot establish unused link capacity.
+Estimates are not guarantees; congestion probing may still lose packets.
+Terminal, forwarding and bulk packets share this byte-based pacer, with
+bounded foreground borrowing and lower priority for background transfers.
+Pending screen changes that are waiting for their frame timer do not block
+paced file traffic. Due foreground work always runs first.
+Clean, busy links can double their budget per feedback round (at least
+100 ms or one RTT); congestion switches to gentler growth. Clear slow-path
+evidence cuts toward measured delivery speed. At most 512 background packets
+can be outstanding while waiting for feedback. Scheduling slack is bounded
+to 1 ms or 4 KiB and never accumulates during idle time. File-menu transfers
+use this pacer instead of their legacy fixed 20 ms per-symbol delay.
+Feedback itself is capped to a quarter of the outgoing budget, so a fast
+incoming stream cannot crowd out keyboard input on a slow reverse path.
+The stream-bandwidth option remains a manual forwarding ceiling; otherwise
+forwarding follows its local directional estimate. The goblin-moshcp rate
+option remains an additional ceiling; rate=0 still obeys session pacing.
+Older peers retain their existing transport behavior and non-watching browser.
 
 .SH ENVIRONMENT VARIABLES
 These variables configure the client, server, or both. They are
@@ -427,7 +592,7 @@ overrides this variable.
 
 .TP
 .B MOSH_TITLE_NOPREFIX
-When set, inhibits prepending "[adam-mosh]" to window title.
+When set, inhibits prepending "[goblin-mosh]" to window title.
 
 .TP
 .B MOSH_STREAM_DELAY
@@ -443,7 +608,7 @@ Default payload-byte-per-second cap for forwarded stream traffic. The
 command-line option overrides this value.
 
 .SH FILE TRANSFER
-\fBadam-moshcp\fP transfers files over an active Mosh session using adjacent
+\fBgoblin-moshcp\fP transfers files over an active Mosh session using adjacent
 bulk datagrams on the same encrypted and authenticated UDP connection.
 Bulk datagrams are lowest priority and are scheduled only when
 terminal updates and forwarded streams are idle. Oversized bulk
@@ -453,19 +618,19 @@ Start the receiver on one side of the Mosh session and the sender on
 the other:
 
 .nf
-remote$ adam-moshcp receive .
-local$  adam-moshcp send --rate=2k --redundancy=20% file.bin
+remote$ goblin-moshcp receive .
+local$  goblin-moshcp send --rate=2k --redundancy=20% file.bin
 .fi
 
 See
-.BR adam-moshcp (1)
+.BR goblin-moshcp (1)
 for details.
 
 .SH SEE ALSO
-.BR adam-mosh-client (1),
-.BR adam-mosh-server (1),
-.BR adam-moshcp (1),
-.BR adam-mosh-compile-dictionary (1).
+.BR goblin-mosh-client (1),
+.BR goblin-mosh-server (1),
+.BR goblin-moshcp (1),
+.BR goblin-mosh-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org

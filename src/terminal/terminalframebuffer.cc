@@ -44,6 +44,8 @@ Cell::Cell( color_type background_color )
 
 void Cell::reset( color_type background_color )
 {
+  sized_text.reset();
+  text_x = text_y = 0;
   contents.clear();
   renditions = Renditions( background_color );
   hyperlink = Hyperlink();
@@ -323,6 +325,9 @@ void Framebuffer::insert_line( int before_row, int count )
     return;
   }
 
+  // Erase blocks cut by either boundary, preserving whole blocks which move.
+  if ( before_row > 0 ) { erase_sized_text_boundary( before_row ); }
+  erase_sized_text( ds.get_scrolling_region_bottom_row() + 1 - scroll, 0, scroll, ds.get_width() );
   // delete old rows
   rows_type::iterator start = rows.begin() + ds.get_scrolling_region_bottom_row() + 1 - scroll;
   rows.erase( start, start + scroll );
@@ -347,6 +352,8 @@ void Framebuffer::delete_line( int row, int count )
     return;
   }
 
+  erase_sized_text( row, 0, scroll, ds.get_width() );
+  erase_sized_text_boundary( ds.get_scrolling_region_bottom_row() + 1 );
   // delete old rows
   rows_type::iterator start = rows.begin() + row;
   rows.erase( start, start + scroll );
@@ -380,11 +387,15 @@ void Row::delete_cell( int col, color_type background_color )
 
 void Framebuffer::insert_cell( int row, int col )
 {
+  edit_sized_text_row( row, col, true );
+  erase_sixel_cells( row, col, 1, ds.get_width() - col );
   get_mutable_row( row )->insert_cell( col, ds.get_background_rendition() );
 }
 
 void Framebuffer::delete_cell( int row, int col )
 {
+  edit_sized_text_row( row, col, false );
+  erase_sixel_cells( row, col, 1, ds.get_width() - col );
   get_mutable_row( row )->delete_cell( col, ds.get_background_rendition() );
 }
 
@@ -419,6 +430,10 @@ void Framebuffer::resize( int s_width, int s_height )
 
   int oldheight = ds.get_height();
   int oldwidth = ds.get_width();
+  if ( s_width < oldwidth ) { erase_sized_text( 0, s_width, oldheight, oldwidth - s_width ); }
+  if ( s_height < oldheight ) { erase_sized_text( s_height, 0, oldheight - s_height, oldwidth ); }
+  if ( s_width < oldwidth ) { erase_sixel_cells( 0, s_width, oldheight, oldwidth - s_width ); }
+  if ( s_height < oldheight ) { erase_sixel_cells( s_height, 0, oldheight - s_height, oldwidth ); }
   ds.resize( s_width, s_height );
 
   row_pointer blankrow( newrow() );
@@ -440,6 +455,17 @@ void Framebuffer::resize( int s_width, int s_height )
     }
   }
   kitty_placements.swap( kept );
+}
+
+void Framebuffer::reset_row( Row* r )
+{
+  for ( int y = 0; y < ds.get_height(); y++ ) {
+    if ( rows[y].get() == r ) {
+      erase_sixel_cells( y, 0, 1, ds.get_width() );
+      erase_sized_text( y, 0, 1, ds.get_width() );
+    }
+  }
+  r->reset( ds.get_background_rendition() );
 }
 
 void DrawState::resize( int s_width, int s_height )
@@ -751,6 +777,7 @@ uint32_t Framebuffer::allocate_kitty_id( void )
 
 uint32_t Framebuffer::put_kitty_image( const KittyImage& image )
 {
+  if ( !image.data || image.data->size() > KITTY_ENCODED_QUOTA ) { return 0; }
   KittyImage stored = image;
   if ( stored.id == 0 ) {
     stored.id = allocate_kitty_id();
@@ -911,10 +938,13 @@ void Framebuffer::delete_kitty( const KittyCommand& cmd )
 
 void Framebuffer::scroll_kitty_placements( int first_row, int count, bool inserting )
 {
+  scroll_sixel( first_row, count, inserting );
   std::vector<KittyPlacement> kept;
   const int bottom = ds.get_scrolling_region_bottom_row();
   for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
     KittyPlacement p = kitty_placements[i];
+    const auto* image = find_kitty_image( p.image_id );
+    if ( image && image->origin == ImageOrigin::Sixel ) { kept.push_back( p ); continue; }
     if ( p.unicode_placeholder ) {
       kept.push_back( p );
       continue;
@@ -952,11 +982,12 @@ static size_t kitty_image_cost( const KittyImage& image )
 
 void Framebuffer::evict_kitty_images( uint32_t preserve_id )
 {
-  uint64_t total = 0;
+  uint64_t total = 0, encoded = 0;
   for ( std::map<uint32_t, KittyImage>::const_iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
     total += kitty_image_cost( it->second );
+    encoded += it->second.data ? it->second.data->size() : 0;
   }
-  if ( total <= KITTY_IMAGE_QUOTA ) {
+  if ( total <= KITTY_IMAGE_QUOTA && encoded <= KITTY_ENCODED_QUOTA ) {
     return;
   }
 
@@ -965,7 +996,7 @@ void Framebuffer::evict_kitty_images( uint32_t preserve_id )
     referenced[kitty_placements[i].image_id]++;
   }
 
-  while ( total > KITTY_IMAGE_QUOTA && !kitty_images.empty() ) {
+  while ( ( total > KITTY_IMAGE_QUOTA || encoded > KITTY_ENCODED_QUOTA ) && !kitty_images.empty() ) {
     std::map<uint32_t, KittyImage>::iterator victim = kitty_images.end();
     for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
       if ( ( it->first == preserve_id && kitty_images.size() > 1 )
@@ -987,6 +1018,7 @@ void Framebuffer::evict_kitty_images( uint32_t preserve_id )
     }
     assert( victim != kitty_images.end() );
     total -= kitty_image_cost( victim->second );
+    encoded -= victim->second.data ? victim->second.data->size() : 0;
     std::vector<KittyPlacement> kept;
     for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
       if ( kitty_placements[i].image_id != victim->first ) {

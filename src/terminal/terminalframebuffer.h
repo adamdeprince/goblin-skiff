@@ -45,6 +45,7 @@
 #include <vector>
 
 #include "src/terminal/kittygraphics.h"
+#include "src/terminal/sizedtext.h"
 
 /* Terminal framebuffer */
 
@@ -135,6 +136,8 @@ private:
   content_type contents;
   Renditions renditions;
   Hyperlink hyperlink;
+  std::shared_ptr<const SizedText> sized_text {};
+  unsigned text_x = 0, text_y = 0;
   unsigned int wide : 1;     /* 0 = narrow, 1 = wide */
   unsigned int fallback : 1; /* first character is combining character */
   unsigned int wrap : 1;
@@ -150,7 +153,9 @@ public:
   bool operator==( const Cell& x ) const
   {
     return ( ( contents == x.contents ) && ( fallback == x.fallback ) && ( wide == x.wide )
-             && ( renditions == x.renditions ) && ( hyperlink == x.hyperlink ) && ( wrap == x.wrap ) );
+             && ( renditions == x.renditions ) && ( hyperlink == x.hyperlink ) && ( wrap == x.wrap )
+             && text_x == x.text_x && text_y == x.text_y
+             && ( sized_text == x.sized_text || ( sized_text && x.sized_text && *sized_text == *x.sized_text ) ) );
   }
 
   bool operator!=( const Cell& x ) const { return !operator==( x ); }
@@ -158,7 +163,7 @@ public:
   /* Accessors for contents field */
   std::string debug_contents( void ) const;
 
-  bool empty( void ) const { return contents.empty(); }
+  bool empty( void ) const { return !sized_text && contents.empty(); }
   /* 32 seems like a reasonable limit on combining characters */
   bool full( void ) const { return contents.size() >= 32; }
   void clear( void ) { contents.clear(); }
@@ -166,7 +171,7 @@ public:
   bool is_blank( void ) const
   {
     // XXX fix.
-    return ( contents.empty() || contents == " " || contents == "\xC2\xA0" );
+    return !sized_text && ( contents.empty() || contents == " " || contents == "\xC2\xA0" );
   }
 
   bool contents_match( const Cell& other ) const
@@ -212,8 +217,12 @@ public:
     contents.insert( contents.end(), tmp, tmp + len );
   }
 
-  void print_grapheme( std::string& output ) const
+  void print_grapheme( std::string& output, bool sized_supported = true ) const
   {
+    if ( sized_text ) {
+      if ( !text_x && !text_y ) { output += sized_supported ? sized_text->sequence() : sized_text->fallback; }
+      return;
+    }
     if ( contents.empty() ) {
       output.append( 1, ' ' );
       return;
@@ -236,7 +245,12 @@ public:
   void set_renditions( const Renditions& r ) { renditions = r; }
   bool get_wide( void ) const { return wide; }
   void set_wide( bool w ) { wide = w; }
-  unsigned int get_width( void ) const { return wide + 1; }
+  unsigned int get_width( void ) const { return sized_text ? sized_text->columns() - text_x : wide + 1; }
+  const std::shared_ptr<const SizedText>& get_sized_text() const { return sized_text; }
+  unsigned get_text_x() const { return text_x; }
+  unsigned get_text_y() const { return text_y; }
+  void set_sized_text( std::shared_ptr<const SizedText> value, unsigned x, unsigned y )
+  { sized_text = std::move( value ); text_x = x; text_y = y; }
   bool get_fallback( void ) const { return fallback; }
   void set_fallback( bool f ) { fallback = f; }
   bool get_wrap( void ) const { return wrap; }
@@ -316,6 +330,7 @@ public:
   bool cursor_visible;
   bool reverse_video;
   bool bracketed_paste;
+  bool mime_paste = false;
 
   enum MouseReportingMode
   {
@@ -383,6 +398,7 @@ public:
   void resize( int s_width, int s_height );
 
   DrawState( int s_width, int s_height );
+  unsigned kitty_keyboard_flags = 0;
 
   bool operator==( const DrawState& x ) const
   {
@@ -392,7 +408,8 @@ public:
            && ( reverse_video == x.reverse_video ) && ( renditions == x.renditions )
            && ( bracketed_paste == x.bracketed_paste ) && ( mouse_reporting_mode == x.mouse_reporting_mode )
            && ( mouse_focus_event == x.mouse_focus_event ) && ( mouse_alternate_scroll == x.mouse_alternate_scroll )
-           && ( mouse_encoding_mode == x.mouse_encoding_mode ) && hyperlink == x.hyperlink;
+           && ( mouse_encoding_mode == x.mouse_encoding_mode ) && hyperlink == x.hyperlink
+           && kitty_keyboard_flags == x.kitty_keyboard_flags && mime_paste == x.mime_paste;
   }
 };
 
@@ -514,7 +531,7 @@ public:
   void resize( int s_width, int s_height );
 
   void reset_cell( Cell* c ) { c->reset( ds.get_background_rendition() ); }
-  void reset_row( Row* r ) { r->reset( ds.get_background_rendition() ); }
+  void reset_row( Row* r );
 
   void ring_bell( void ) { bell_count++; }
   unsigned int get_bell_count( void ) const { return bell_count; }
@@ -531,6 +548,16 @@ public:
   void delete_kitty( const KittyCommand& cmd );
   void scroll_kitty_placements( int first_row, int count, bool inserting );
   void evict_kitty_images( uint32_t preserve_id = 0 );
+  void erase_sixel_cells( int row, int col, int height, int width );
+  void scroll_sixel( int first_row, int count, bool inserting );
+  void prune_sixel_images();
+  void erase_sized_text( int row, int col, int height, int width );
+  void erase_sized_text_boundary( int row );
+  void edit_sized_text_row( int row, int col, bool inserting );
+  void put_sized_text( const SizedText& text );
+  void skip_sized_continuations();
+  bool append_sized_combining( Cell* cell, wchar_t ch );
+  bool sixel_mutations = true; // disabled while replaying synthetic text-state deltas
 
   bool operator==( const Framebuffer& x ) const
   {

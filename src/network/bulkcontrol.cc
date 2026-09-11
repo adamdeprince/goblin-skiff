@@ -35,6 +35,7 @@ using namespace Network::Bulk;
 
 namespace {
 const uint32_t MAX_FRAME = 1024 * 1024;
+const size_t MAX_QUEUED_DATAGRAMS = 16;
 
 void append_u32( std::string& out, uint32_t value )
 {
@@ -77,7 +78,7 @@ std::string runtime_dir( void )
   }
 
   char fallback[128];
-  snprintf( fallback, sizeof fallback, "/tmp/adam-moshcp-%ld", static_cast<long>( getuid() ) );
+  snprintf( fallback, sizeof fallback, "/tmp/goblin-moshcp-%ld", static_cast<long>( getuid() ) );
   if ( mkdir( fallback, 0700 ) < 0 && errno != EEXIST ) {
     throw std::runtime_error( std::string( "mkdir: " ) + strerror( errno ) );
   }
@@ -155,9 +156,9 @@ ControlServer::ControlServer( const std::string& role )
 {
   const std::string dir = runtime_dir();
   char pathbuf[256];
-  snprintf( pathbuf, sizeof pathbuf, "%s/adam-moshcp-%s-%ld.sock", dir.c_str(), role.c_str(), static_cast<long>( getpid() ) );
+  snprintf( pathbuf, sizeof pathbuf, "%s/goblin-moshcp-%s-%ld.sock", dir.c_str(), role.c_str(), static_cast<long>( getpid() ) );
   path = pathbuf;
-  latest_path = dir + "/adam-moshcp.latest";
+  latest_path = dir + "/goblin-moshcp.latest";
 
   listen_fd = socket( AF_UNIX, SOCK_STREAM, 0 );
   if ( listen_fd < 0 ) {
@@ -219,7 +220,8 @@ std::vector<int> ControlServer::fds( void ) const
     result.push_back( listen_fd );
   }
   for ( std::map<int, Client>::const_iterator it = clients.begin(); it != clients.end(); ++it ) {
-    result.push_back( it->first );
+    // Let the Unix stream backpressure an unlimited-rate local producer.
+    if ( outgoing.size() < MAX_QUEUED_DATAGRAMS ) { result.push_back( it->first ); }
   }
   return result;
 }
@@ -247,19 +249,21 @@ void ControlServer::accept_client( void )
       throw std::runtime_error( std::string( "accept: " ) + strerror( errno ) );
     }
     set_nonblocking( fd );
+    if ( clients.size() >= 16 ) { close( fd ); continue; }
     clients.insert( std::make_pair( fd, Client( fd ) ) );
   }
 }
 
 void ControlServer::read_client( int fd )
 {
+  if ( outgoing.size() >= MAX_QUEUED_DATAGRAMS ) { return; }
   std::map<int, Client>::iterator client = clients.find( fd );
   if ( client == clients.end() ) {
     return;
   }
 
   char buf[8192];
-  while ( true ) {
+  while ( client->second.in.size() < MAX_FRAME + 4 ) {
     ssize_t got = read( fd, buf, sizeof buf );
     if ( got < 0 && errno == EINTR ) {
       continue;
@@ -272,9 +276,10 @@ void ControlServer::read_client( int fd )
       return;
     }
     client->second.in.append( buf, got );
+    break; // Bounded work per event-loop turn, including --rate=0 writers.
   }
 
-  while ( client->second.in.size() >= 4 ) {
+  while ( client->second.in.size() >= 4 && outgoing.size() < MAX_QUEUED_DATAGRAMS ) {
     uint32_t frame_size = 0;
     read_u32( client->second.in, frame_size );
     if ( frame_size > MAX_FRAME ) {
@@ -309,6 +314,11 @@ bool ControlServer::pop_outgoing( Datagram& datagram )
   }
   datagram = outgoing.front();
   outgoing.pop_front();
+  // A complete frame may already be buffered even when the fd no longer
+  // signals readable. Service that backlog when queue space becomes free.
+  std::vector<int> buffered;
+  for ( const auto& client : clients ) { if ( !client.second.in.empty() ) { buffered.push_back( client.first ); } }
+  for ( int fd : buffered ) { read_client( fd ); }
   return true;
 }
 
@@ -376,9 +386,9 @@ bool ControlClient::recv( Datagram& datagram )
 
 std::string Network::Bulk::discover_control_socket( void )
 {
-  const char* env = getenv( "ADAM_MOSHCP_SOCK" );
+  const char* env = getenv( "GOBLIN_MOSHCP_SOCK" );
   if ( env && *env ) {
     return env;
   }
-  return runtime_dir() + "/adam-moshcp.latest";
+  return runtime_dir() + "/goblin-moshcp.latest";
 }

@@ -228,9 +228,13 @@ private:
   AddrInfo& operator=( const AddrInfo& );
 };
 
-Connection::Connection( const char* desired_ip, const char* desired_port, bool s_compact_keepalive ) /* server */
+Connection::Connection( const char* desired_ip,
+                        const char* desired_port,
+                        bool s_compact_keepalive,
+                        Crypto::Mode s_crypto_mode ) /* server */
   : socks(), has_remote_addr( false ), remote_addr(), remote_addr_len( 0 ), server( true ),
-    compact_keepalive( s_compact_keepalive ), MTU( DEFAULT_SEND_MTU ), key(), session( key ), direction( TO_CLIENT ),
+    compact_keepalive( s_compact_keepalive ), crypto_mode( s_crypto_mode ), MTU( DEFAULT_SEND_MTU ),
+    key( s_crypto_mode ), session( key, s_crypto_mode, Crypto::Endpoint::Server ), direction( TO_CLIENT ),
     saved_timestamp( -1 ), saved_timestamp_received_at( 0 ), expected_receiver_seq( 0 ), last_heard( -1 ),
     keepalive_interval( KEEPALIVE_INTERVAL_MIN ), next_keepalive( timestamp() + KEEPALIVE_INTERVAL_MIN ),
     keepalive_outstanding( false ), last_port_choice( -1 ), last_roundtrip_success( -1 ), RTT_hit( false ),
@@ -344,9 +348,11 @@ bool Connection::try_bind( const char* addr, int port_low, int port_high )
 Connection::Connection( const char* key_str,
                         const char* ip,
                         const char* port,
-                        bool s_compact_keepalive ) /* client */
+                        bool s_compact_keepalive,
+                        Crypto::Mode s_crypto_mode ) /* client */
   : socks(), has_remote_addr( false ), remote_addr(), remote_addr_len( 0 ), server( false ),
-    compact_keepalive( s_compact_keepalive ), MTU( DEFAULT_SEND_MTU ), key( key_str ), session( key ),
+    compact_keepalive( s_compact_keepalive ), crypto_mode( s_crypto_mode ), MTU( DEFAULT_SEND_MTU ), key( key_str ),
+    session( key, s_crypto_mode, Crypto::Endpoint::Client ),
     direction( TO_SERVER ), saved_timestamp( -1 ),
     saved_timestamp_received_at( 0 ), expected_receiver_seq( 0 ), last_heard( -1 ),
     keepalive_interval( KEEPALIVE_INTERVAL_MIN ), next_keepalive( timestamp() + KEEPALIVE_INTERVAL_MIN ),
@@ -384,6 +390,10 @@ void Connection::send( const std::string& s )
   std::string p = session.encrypt( px.toMessage() );
 
   ssize_t bytes_sent = sendto( sock(), p.data(), p.size(), MSG_DONTWAIT, &remote_addr.sa, remote_addr_len );
+  if ( bytes_sent == static_cast<ssize_t>( p.size() ) ) {
+    link.sent_packet( px.seq, p.size() + ( remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
+                      timestamp(), sending_feedback || s.empty() );
+  }
 
   if ( bytes_sent != static_cast<ssize_t>( p.size() ) ) {
     /* Make sendto() failure available to the frontend. */
@@ -426,6 +436,19 @@ int Connection::keepalive_wait_time( void ) const
 
 void Connection::tick( void )
 {
+  // A new wrapper can launch an old --client binary. Do not send an
+  // extension packet until the binary itself demonstrates support, and
+  // restore legacy pacing if it never confirms the advertised capability.
+  if ( link_offered && !link_confirmed && timestamp() >= link_confirmation_deadline ) { link.enable( false ); }
+  link.tick( timestamp(), SRTT );
+  // Reports are authenticated, bounded and sent only for newly received
+  // application packets. They never solicit an ACK or create an idle loop.
+  if ( has_remote_addr && link_confirmed && link.feedback_wait( timestamp() ) == 0 && pacing_wait_time( true ) == 0 ) {
+    const auto report = link.feedback( timestamp() );
+    sending_feedback = true;
+    send( report );
+    sending_feedback = false;
+  }
   const int keepalive_wait = keepalive_wait_time();
   if ( compact_keepalive && !server && has_remote_addr && keepalive_wait == 0 ) {
     if ( keepalive_outstanding ) {
@@ -517,10 +540,19 @@ std::string Connection::recv_one( int sock_to_recv )
   Packet p( session.decrypt( msg_payload, received_len ) );
 
   dos_assert( p.direction == ( server ? TO_SERVER : TO_CLIENT ) ); /* prevent malicious playback to sender */
+  if ( link_offered && !link_confirmed && p.payload.size() == 32
+       && !p.payload.compare( 0, 4, std::string( "\0GL1", 4 ) ) ) {
+    link_confirmed = true; link.enable( true );
+  }
+  const bool feedback = link.receive_feedback( p.payload, timestamp(), SRTT );
+  if ( !feedback && !p.payload.empty() ) {
+    link.received_packet( p.seq, received_len + ( packet_remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
+                          timestamp(), SRTT );
+  }
 
   if ( p.seq
        < expected_receiver_seq ) { /* don't use (but do return) out-of-order packets for timestamp or targeting */
-    return p.payload;
+    return feedback ? std::string() : p.payload;
   }
   expected_receiver_seq = p.seq + 1; /* this is security-sensitive because a replay attack could otherwise
                                         screw up the timestamp and targeting */
@@ -595,7 +627,7 @@ std::string Connection::recv_one( int sock_to_recv )
       last_roundtrip_success = timestamp();
     }
   }
-  return p.payload;
+  return feedback ? std::string() : p.payload;
 }
 
 std::string Connection::port( void ) const

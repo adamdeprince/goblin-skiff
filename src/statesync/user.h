@@ -39,6 +39,7 @@
 #include <string>
 
 #include "src/statesync/stream.h"
+#include "src/statesync/tmux.h"
 #include "src/terminal/osc52.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalgeometry.h"
@@ -50,7 +51,9 @@ enum UserEventType
   ResizeType = 1,
   UserStreamEventType = 2,
   UserClipboardEventType = 3,
-  UserClientGeometryEventType = 4
+  UserClientGeometryEventType = 4,
+  UserTmuxEventType = 5,
+  UserGraphicsEventType = 6
 };
 
 class UserEvent
@@ -62,23 +65,35 @@ public:
   StreamEvent stream;
   Terminal::ClipboardEvent clipboard;
   Terminal::ClientGeometry client_geometry;
+  Terminal::TmuxBytes tmux;
+  Terminal::ClientGraphics graphics {};
 
   UserEvent( const Parser::UserByte& s_userbyte )
-    : type( UserByteType ), userbyte( s_userbyte ), resize( -1, -1 ), stream(), clipboard(), client_geometry()
+    : type( UserByteType ), userbyte( s_userbyte ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
+      tmux()
   {}
   UserEvent( const Parser::Resize& s_resize )
-    : type( ResizeType ), userbyte( 0 ), resize( s_resize ), stream(), clipboard(), client_geometry()
+    : type( ResizeType ), userbyte( 0 ), resize( s_resize ), stream(), clipboard(), client_geometry(), tmux()
   {}
   UserEvent( const StreamEvent& s_stream )
-    : type( UserStreamEventType ), userbyte( 0 ), resize( -1, -1 ), stream( s_stream ), clipboard(), client_geometry()
+    : type( UserStreamEventType ), userbyte( 0 ), resize( -1, -1 ), stream( s_stream ), clipboard(),
+      client_geometry(), tmux()
   {}
   UserEvent( const Terminal::ClipboardEvent& s_clipboard )
     : type( UserClipboardEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard( s_clipboard ),
-      client_geometry()
+      client_geometry(), tmux()
   {}
   UserEvent( const Terminal::ClientGeometry& s_client_geometry )
     : type( UserClientGeometryEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard(),
-      client_geometry( s_client_geometry )
+      client_geometry( s_client_geometry ), tmux()
+  {}
+  UserEvent( const Terminal::TmuxBytes& s_tmux )
+    : type( UserTmuxEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
+      tmux( s_tmux )
+  {}
+  UserEvent( const Terminal::ClientGraphics& s_graphics )
+    : type( UserGraphicsEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
+      tmux(), graphics( s_graphics )
   {}
 
 private:
@@ -88,7 +103,8 @@ public:
   bool operator==( const UserEvent& x ) const
   {
     return ( type == x.type ) && ( userbyte == x.userbyte ) && ( resize == x.resize ) && ( stream == x.stream )
-           && ( clipboard == x.clipboard ) && ( client_geometry == x.client_geometry );
+           && ( clipboard == x.clipboard ) && ( client_geometry == x.client_geometry ) && ( tmux == x.tmux )
+           && ( graphics == x.graphics );
   }
 };
 
@@ -105,6 +121,20 @@ public:
   void push_back( const StreamEvent& s_stream ) { actions.push_back( UserEvent( s_stream ) ); }
   void push_back( const Terminal::ClipboardEvent& s_clipboard ) { actions.push_back( UserEvent( s_clipboard ) ); }
   void push_back( const Terminal::ClientGeometry& s_geometry ) { actions.push_back( UserEvent( s_geometry ) ); }
+  void push_back( const Terminal::TmuxBytes& bytes ) { actions.push_back( UserEvent( bytes ) ); }
+  void push_back( const Terminal::ClientGraphics& caps ) { actions.push_back( UserEvent( caps ) ); }
+  bool is_graphics_event( unsigned int i ) const { return actions[i].type == UserGraphicsEventType; }
+  const Terminal::ClientGraphics& get_graphics_event( unsigned int i ) const { return actions[i].graphics; }
+  bool is_tmux_event( unsigned int i ) const { return actions[i].type == UserTmuxEventType; }
+  const std::string& get_tmux_input( unsigned int i ) const { return actions[i].tmux.data; }
+  size_t tmux_input_size() const
+  {
+    size_t size = 0;
+    for ( const UserEvent& action : actions ) {
+      size += action.tmux.data.size();
+    }
+    return size;
+  }
 
   bool empty( void ) const { return actions.empty(); }
   size_t size( void ) const { return actions.size(); }
@@ -113,10 +143,7 @@ public:
   const StreamEvent& get_stream_event( unsigned int i ) const { return actions[i].stream; }
   bool is_clipboard_event( unsigned int i ) const { return actions[i].type == UserClipboardEventType; }
   const Terminal::ClipboardEvent& get_clipboard_event( unsigned int i ) const { return actions[i].clipboard; }
-  bool is_client_geometry_event( unsigned int i ) const
-  {
-    return actions[i].type == UserClientGeometryEventType;
-  }
+  bool is_client_geometry_event( unsigned int i ) const { return actions[i].type == UserClientGeometryEventType; }
   const Terminal::ClientGeometry& get_client_geometry_event( unsigned int i ) const
   {
     return actions[i].client_geometry;

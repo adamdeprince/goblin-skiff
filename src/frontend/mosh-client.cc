@@ -79,7 +79,7 @@
 
 static void print_version( FILE* file )
 {
-  fputs( "adam-mosh-client (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "goblin-mosh-client (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -91,8 +91,14 @@ static void print_usage( FILE* file, const char* argv0 )
 {
   print_version( file );
   fprintf( file,
-           "\nUsage: %s [-# 'ARGS'] [-A] [-X] [-L SPEC] [-D SPEC] [--stream-delay=MS] [--stream-bandwidth=BPS] [--state-zstd-dict=FILE] IP PORT\n"
-           "       %s -c\n",
+           "\nUsage: %s [-# 'ARGS'] [-A] [-X] [-L SPEC] [-D SPEC] [--fips-crypto] [--stream-delay=MS] [--stream-bandwidth=BPS] [--state-zstd-dict=FILE] IP PORT\n"
+           "       %s [--fips-crypto] [--tmux-control] -c\n"
+           "       --tmux-control enables negotiated tmux -CC passthrough\n"
+           "       --mascot=auto|kitty|sixel|ascii|none selects the local startup mascot\n"
+           "       --show-mascot=kitty|sixel|ascii previews the local mascot and exits\n"
+           "       --no-kitty disables local Kitty graphics and detection\n"
+           "       --no-sixel disables local sixel graphics and detection\n"
+           "       Alt-0 opens or resumes the local file browser\n",
            argv0,
            argv0 );
 }
@@ -162,11 +168,17 @@ int main( int argc, char* argv[] )
   bool agent_forwarding = false;
   bool x11_forwarding = false;
   unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
-  unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 2048 );
+  unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 0 );
   std::string state_zstd_dictionary = string_from_env( "MOSH_STATE_ZSTD_DICT" );
   std::string state_sample_log = string_from_env( "MOSH_STATE_SAMPLE_LOG" );
   unsigned int state_sample_min_size = uint_from_env( "MOSH_STATE_SAMPLE_MIN_SIZE", 0 );
   bool compact_keepalive = bool_from_env( "MOSH_COMPACT_KEEPALIVE", false );
+  bool tmux_control = false;
+  bool color_count = false;
+  std::string mascot_format = string_from_env( "MOSH_MASCOT" );
+  bool show_mascot = false;
+  bool allow_kitty = true, allow_sixel = true;
+  Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB;
   /* For security, make sure we don't dump core */
   Crypto::disable_dumping_core();
 
@@ -192,6 +204,12 @@ int main( int argc, char* argv[] )
     { "state-zstd-dict", required_argument, NULL, 258 },
     { "state-sample-log", required_argument, NULL, 259 },
     { "state-sample-min-size", required_argument, NULL, 260 },
+    { "fips-crypto", no_argument, NULL, 261 },
+    { "tmux-control", no_argument, NULL, 262 },
+    { "mascot", required_argument, NULL, 263 },
+    { "show-mascot", required_argument, NULL, 264 },
+    { "no-kitty", no_argument, NULL, 265 },
+    { "no-sixel", no_argument, NULL, 266 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -203,8 +221,8 @@ int main( int argc, char* argv[] )
         agent_forwarding = true;
         break;
       case 'c':
-        print_colorcount();
-        exit( 0 );
+        color_count = true;
+        break;
         break;
       case 'L':
         local_forwards.push_back( optarg );
@@ -237,11 +255,61 @@ int main( int argc, char* argv[] )
       case 260:
         state_sample_min_size = parse_uint_option( "--state-sample-min-size", optarg );
         break;
+      case 261:
+        crypto_mode = Crypto::Mode::FipsAES128GCM;
+        break;
+      case 262:
+        tmux_control = true;
+        break;
+      case 263:
+        mascot_format = optarg;
+        break;
+      case 264:
+        mascot_format = optarg;
+        show_mascot = true;
+        break;
+      case 265:
+        allow_kitty = false;
+        break;
+      case 266:
+        allow_sixel = false;
+        break;
       default:
         print_usage( stderr, argv[0] );
         exit( 1 );
         break;
     }
+  }
+
+  try {
+    Crypto::ensure_mode_available( crypto_mode );
+  } catch ( const Crypto::CryptoException& e ) {
+    fprintf( stderr, "Crypto exception: %s\n", e.what() );
+    exit( 1 );
+  }
+
+  if ( color_count ) {
+    print_colorcount();
+    exit( 0 );
+  }
+
+  Mascot::Format mascot_mode;
+  try {
+    mascot_mode = Mascot::constrain_format( Mascot::parse_format( mascot_format ), allow_kitty, allow_sixel );
+    if ( show_mascot ) {
+      struct winsize size = {};
+      ioctl( STDOUT_FILENO, TIOCGWINSZ, &size );
+      const Mascot::Size dimensions( size.ws_col ? size.ws_col : 80, size.ws_row ? size.ws_row : 24,
+                                     size.ws_col ? size.ws_xpixel / size.ws_col : 0,
+                                     size.ws_row ? size.ws_ypixel / size.ws_row : 0 );
+      // Preview is noninteractive: auto uses ASCII and never consumes stdin.
+      const std::string art = Mascot::render( mascot_mode, dimensions );
+      fwrite( art.data(), 1, art.size(), stdout );
+      return 0;
+    }
+  } catch ( const std::exception& error ) {
+    fprintf( stderr, "%s\n", error.what() );
+    return 1;
   }
 
   char *ip, *desired_port;
@@ -306,7 +374,12 @@ int main( int argc, char* argv[] )
                       stream_rate_bytes_per_second,
                       state_sample_log,
                       state_sample_min_size,
-                      compact_keepalive );
+                      compact_keepalive,
+                      crypto_mode,
+                      tmux_control,
+                      mascot_mode,
+                      allow_kitty,
+                      allow_sixel );
     client.init();
 
     try {
@@ -328,7 +401,7 @@ int main( int argc, char* argv[] )
     success = false;
   }
 
-  printf( "[adam-mosh is exiting.]\n" );
+  printf( "[goblin-mosh is exiting.]\n" );
 
   return !success;
 }

@@ -1,23 +1,25 @@
-Source: mosh
+Source: goblin-mosh
 Section: net
 Priority: optional
-Maintainer: Keith Winstein <keithw@mit.edu>
-Uploaders: Alex Chernyakhovsky <achernya@debian.org>
-Build-Depends: debhelper-compat (= 12), protobuf-compiler, libprotobuf-dev, pkg-config, libutempter-dev, zlib1g-dev, libncurses5-dev, libssl-dev, bash-completion, locales <!nocheck>, tmux <!nocheck>, less <!nocheck>
-Rules-Requires-Root: binary-targets
+Maintainer: Adam DePrince <adam.deprince@gmail.com>
+Build-Depends: debhelper-compat (= 13), protobuf-compiler, libprotobuf-dev, pkg-config, libutempter-dev, zlib1g-dev, libncurses-dev, libssl-dev (>= 3.0), librsync-dev (>= 2.3), libzstd-dev, libwebp-dev, libpng-dev, bash-completion, locales <!nocheck>, python3 <!nocheck>
+Rules-Requires-Root: no
 Standards-Version: 4.6.1
-Homepage: https://mosh.org
-Vcs-Git: https://github.com/mobile-shell/mosh.git
-Vcs-Browser: https://github.com/mobile-shell/mosh
+Homepage: https://mosh.goblinreactor.com
+Vcs-Git: https://github.com/adamdeprince/mosh.git -b low-bandwidth-mosh
+Vcs-Browser: https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh
 
-Package: mosh
+Package: goblin-mosh
 Architecture: any
-Pre-Depends: dpkg (>= 1.15.7.2)
 Depends: ${shlibs:Depends}, ${misc:Depends}, openssh-client
 Recommends: libio-socket-ip-perl
-Description: Mobile shell that supports roaming and intelligent local echo
- Mosh is a remote terminal application that supports:
-   - intermittent network connectivity,
-   - roaming to different IP address without dropping the connection, and
-   - intelligent local echo and line editing to reduce the effects
-     of "network lag" on high-latency connections.
+Conflicts: adam-mosh
+Replaces: adam-mosh
+Description: Mosh terminal and file transfers optimized for low-bandwidth links
+ Goblin Mosh extends Mosh with zstd-22 compression, adaptive per-direction
+ pacing, idle keepalive backoff, terminal graphics, and a two-pane file
+ transfer menu using librsync and forward error correction.
+ .
+ Includes the client, server, goblin-moshcp, dictionary compiler, manual
+ pages, and shell completion. The goblin-mosh command coexists with the
+ distribution's mosh package; it does not replace /usr/bin/mosh.

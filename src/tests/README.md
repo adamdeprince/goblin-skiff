@@ -1,5 +1,140 @@
 # Mosh Tests
 
+## Build-host clock isolation
+
+Tests must see native filesystem metadata and time. If a packaging host uses
+`libfaketime` for a process-only clock correction, set `NO_FAKE_STAT=1` for build
+tools and remove the helper before running tests. For that build environment:
+
+```sh
+make -C src/tests check \
+  TESTS_ENVIRONMENT='env -u LD_PRELOAD -u FAKETIME -u FAKETIME_SHARED -u FAKETIME_DONT_FAKE_MONOTONIC -u NO_FAKE_STAT'
+```
+
+Apply the same cleanup to installed-binary integration tests, and remove any
+other `FAKETIME_*` variables configured by the build environment. Verify both
+the test process's environment and its loaded libraries when checking isolation.
+Interposed file timestamps can falsely trip the file-transfer test's
+`Destination changed before signature` identity check. Separately, real
+filesystems can give rapid directory changes identical timestamps; do not hide
+that cache-invalidation bug by adding sleeps or skipping directory tests.
+
+## Inline downloads
+
+`download` covers the namespaced OSC 777 protocol, split/canceled escape
+sequences, strict base64 and UTF-8 filenames, size/queue bounds, binary zstd-22
+encoding, FEC loss/reordering/duplicate recovery, atomic no-overwrite saves,
+symlink collisions, cancellation, partial-file cleanup and a stopped disk
+worker. It also checks approval/rejection/expiry, out-of-order approvals, and
+two nested Goblin FEC hops with final-recipient consent and no intermediate
+filesystem writes. It never writes to the user's actual Downloads directory.
+
+`download-forward` tests Goblin-first and Kitty-second discovery, optional
+end-to-end approval, old Goblin parents, Kitty framing and collision handling,
+reply-ID isolation, pasted/late replies, checksum failures and timeouts.
+
+`download-integration.test` runs client and server through a lossy encrypted
+UDP relay with real PTYs and a private download destination. It checks capability
+negotiation and opt-out without graphics/clipboard support, the automatic
+confirmation popup, Mosh-prefix/0 hide/reopen, two-stage approval and default rejection.
+It continues typing and updating the screen while the Downloads worker is stopped, then verifies
+the exact saved file and remote `saved` status after resuming it. Simulated
+Goblin and Kitty parent terminals test actual client/server forwarding and
+refusal over the same lossy relay; neither may create an intermediate file,
+worker or local approval popup. These are protocol simulators, not GUI tests.
+Requires Python 3, PTYs, loopback UDP and permission to inspect its child processes.
+
+With Kitty installed, this optional headless check uses its actual transfer
+parser, invalid-probe rejection, file writer and response encoding. It injects
+only the accept/decline decision and maps destinations into a private fixture;
+it does not open a GUI or touch the user's Downloads. Run from `src/tests`:
+
+```sh
+kitty +runpy 'import runpy, sys; sys.argv = ["download-integration.py", "--kitty-engine"]; runpy.run_path("download-integration.py", run_name="__main__")'
+```
+
+## control-panel and mascot
+
+`control-panel` covers bounded framing, ACK pacing, SST loss recovery,
+stale navigation replies, persistent hide/reopen, input filtering, escaped
+filenames, and a stopped filesystem worker with nonblocking timeout/recovery.
+Download permission tests cover automatic popup wakeup, paste/split-key
+deferral, deliberate two-stage confirmation, default rejection, and cancellation.
+Rapid create/rename/delete tests exercise native directory notifications and
+polling-only fallback without sleeps to advance filesystem timestamps. A
+missing file must invalidate the sorted-name cache rather than remain as an
+UNKNOWN entry; unchanged membership must not produce wire traffic. Native
+notifications are armed before enumeration, and periodic name-only checks
+cover remote filesystem changes that do not produce local notifications. All
+enumeration and notification handling stays in the killable filesystem worker.
+It creates and removes 1,024 files in its own temporary directory. Run
+`src/tests/control-panel --stress` from the build root to repeat with 100,000
+files and print first-page latency and framed bytes (local filesystem, not a
+NAS throughput benchmark).
+
+`control-panel-integration.test` runs real client/server PTYs through a local
+UDP relay that drops every seventh packet and reorders some others. It stops
+only its own remote directory helper, checks that the underlying screen and
+keyboard remain live, and resumes the same pending page after Mosh-prefix/0 reopen.
+It checks legacy and Kitty command keys (including press-only mode, repeats,
+releases, alternate codes and lock modifiers), custom/disabled escape prefixes,
+paste protection, literal/unknown commands and quitting with the popup open.
+Alt-0 is verified to pass through to the remote application. Set
+`GOBLIN_TEST_CLIENT` and `GOBLIN_TEST_SERVER` to test installed binaries.
+It needs Python 3, loopback UDP, PTYs, and permission to inspect its child
+processes with `ps`.
+
+`mascot` checks the bundled lossy WebP size/dimensions, rendering envelopes,
+capability replies split at every boundary, fallback/opt-out, and preservation
+of ordinary input. The image and terminal capability probes are client-local.
+
+`startup-screen.test` uses real local client/server PTYs to test all combinations
+of graphics-disable flags, probe filtering, forced-format/preview overrides,
+remote Kitty suppression, and clean exit without screen erasure. An isolated
+tmux capture also verifies that pre-existing output and the ASCII chicken
+survive the first remote frame in native scrollback and that the chicken stays
+visible above a short remote session (this subtest is skipped when tmux is
+unavailable). When Kitty is installed, its headless terminal parser also checks
+fresh, partially used, and bottom-of-window layouts: remote text starts directly
+after the banner and a fresh window does not scroll unnecessarily. These checks
+do not open or change any GUI windows. Run only this subtest with
+`python3 startup-screen.py --kitty-layout` from the tests directory.
+The test needs Python 3, loopback UDP, and PTYs. `terminal-display` also checks
+every starting row in several window sizes, incremental startup scrolling,
+and full-viewport takeover for full-screen output, mouse reporting, scrolling
+regions, repaint and resize.
+The client-local source/license notice must appear exactly once and remain
+in the startup history ahead of the mascot; it must not enter remote input.
+The generic emulation comparisons explicitly use `--no-mascot --alternate-screen`
+so their physical row coordinates match the direct-terminal reference.
+To test an installed build, set `GOBLIN_MOSH_TEST_CLIENT`,
+`GOBLIN_MOSH_TEST_SERVER`, and `GOBLIN_MOSH_TEST_WRAPPER` to its executable paths
+and run `python3 startup-screen.py` from the tests directory.
+
+## sixel-state
+
+`sixel-state` tests the sixel codec and synchronized image-state
+representation. It covers native/WebP roundtrips,
+RGB/HLS palettes, transparency, aspect ratios, malformed input and resource
+quotas, cumulative state recovery after a skipped update, and reset. Renderer
+selection prefers native sixel, including on dual-capable clients; Kitty is
+used only when sixel is unavailable. Existing Kitty image messages retain
+their wire format. `graphics-integration.test` separately exercises live PTYs
+and encrypted, lossy UDP with simulated terminal capability replies. It checks
+native sixel, Kitty-only conversion, no-graphics fallback, 5,120-pixel images,
+unchanged-image retention, OSC 66 sizing/fallback, Alt events and clean exit.
+See `SIXEL_STATE.md` for integration details and limits.
+
+## Kitty pixel layout
+
+`kitty-graphics` checks pixel-sized PNG placements, crop rectangles, cell
+offsets, one-axis aspect-ratio sizing, cursor hold, virtual/relative placements,
+bounded cursor arithmetic, and changed attachment geometry. A synthetic
+`kittycairo` stream checks unchanged 640-by-480 dimensions through PNG/WebP/
+RGBA conversion and cursor positioning through state synchronization.
+`kittycairo.test` additionally pipes a real gnuplot plot through the same check;
+it skips when gnuplot or its `kittycairo` terminal is unavailable.
+
 ## ocb-aes
 
 This is a unit test for the OCB-AES encryption used in mosh, including
@@ -173,3 +308,39 @@ generally run correctly on an unloaded machine without the `make -j`
 flag.  Using `make -j` is obviously very convenient for development,
 and it works fine on faster machines, but I don't recommend it for
 automated testing.
+The `link-budget` test simulates independent 88/22 and 2.4/2.4 kbit/s queues
+with bounded buffering and satellite-like propagation delay. It also checks
+wire-byte pacing, duplicate feedback, idle reset and no idle probing. These
+are synthetic controller checks, not measurements on a satellite service.
+`python3 control-panel-integration.py --adaptive` exercises real encrypted
+UDP and PTYs with pacing enabled over the lossy relay. The regular panel
+tests cover live metadata deltas, silent unchanged watches, generation
+invalidation, parent-directory sorting, Tab/Shift-Tab and Left/Right bindings,
+viewport-edge scrolling (including resize and cache eviction), direct Enter
+transfers without leaving the browser, and a stopped-filesystem helper.
+
+`control-panel --stress` creates 100,000 private fixture entries, verifies
+alphabetical ordering across bounded windows and tests a stalled worker.
+The first-window timing includes the host-side name scan and sort.
+
+`file-transfer` exercises real forked workers and the file-menu FEC channel:
+librsync signatures and deltas, recursive upload/download, empty files and
+directories, queued work, network interruptions, duplicate/reordered/dropped
+packets in both directions, bounded backpressure, cancellation and symlink
+safety. It skips when configured without librsync. Fixture paths are private
+temporary directories; it does not copy into the user's Downloads folder.
+`file-transfer-integration.test` drives the actual two-pane menu using PTYs
+and encrypted loopback UDP with packet loss/reordering. It checks Enter, F5,
+Shift-Tab and Kitty keys, direct transfers and paste safety, recursive delta
+copies in both directions, adaptive pacing, a hidden/reopened transfer queue
+and live keyboard input. Remote-download consent is tested separately.
+
+`python3 control-panel-integration.py --file-speed` measures a 512 KiB
+incompressible upload and download through real encrypted loopback UDP,
+including cold-start transfer setup. This is not a 10 GbE hardware benchmark.
+Use `--file-speed-confirm` with `GOBLIN_TEST_CLIENT`/`GOBLIN_TEST_SERVER` to
+compare an older installed version that still has the copy confirmation.
+`link-budget` also simulates clean fast links, an abrupt downgrade to
+2.4 kbit/s, and continuous foreground traffic with random loss/reordering
+on an unconstrained path. Its simulated throughput is not an end-to-end
+file speed claim.

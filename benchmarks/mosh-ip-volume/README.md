@@ -7,10 +7,10 @@ the branch against stock Mosh over a real low-bandwidth path.
 ## Quick start
 
 Both Mosh variants and their corresponding servers must already be installed.
-By default the harness runs `/usr/local/bin/adam-mosh` against `mosh`. It needs
+By default the harness runs `/usr/local/bin/goblin-mosh` against `mosh`. It needs
 Python 3 on the client and server, plus `tcpdump` on the client.
 
-The patched wrapper invokes `adam-mosh-server`; the stock wrapper invokes
+The patched wrapper invokes `goblin-mosh-server`; the stock wrapper invokes
 `mosh-server`. Both server commands therefore need to be on the remote `PATH`.
 
 ```sh
@@ -26,7 +26,7 @@ interface explicitly:
 ./run.py adam@naamah \
   --server-ip 192.0.2.10 \
   --interface en0 \
-  --variant patched=/usr/local/bin/adam-mosh \
+  --variant patched=/usr/local/bin/goblin-mosh \
   --variant system=/opt/homebrew/bin/mosh
 ```
 

@@ -38,6 +38,10 @@
 
 using namespace Parser;
 
+void Hook::act_on_terminal( Terminal::Emulator* emu ) const { emu->dispatch.DCS_start( ch ); }
+void Put::act_on_terminal( Terminal::Emulator* emu ) const { emu->dispatch.DCS_put( ch ); }
+void Unhook::act_on_terminal( Terminal::Emulator* emu ) const { emu->dispatch.DCS_end( ch, &emu->fb ); }
+
 void Print::act_on_terminal( Terminal::Emulator* emu ) const
 {
   emu->print( this );

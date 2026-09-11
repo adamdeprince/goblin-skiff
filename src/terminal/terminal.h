@@ -61,6 +61,9 @@ class Emulator
   friend void Parser::APC_Start::act_on_terminal( Emulator* ) const;
   friend void Parser::APC_Put::act_on_terminal( Emulator* ) const;
   friend void Parser::APC_End::act_on_terminal( Emulator* ) const;
+  friend void Parser::Hook::act_on_terminal( Emulator* ) const;
+  friend void Parser::Put::act_on_terminal( Emulator* ) const;
+  friend void Parser::Unhook::act_on_terminal( Emulator* ) const;
 
   friend void Parser::UserByte::act_on_terminal( Emulator* ) const;
   friend void Parser::Resize::act_on_terminal( Emulator* ) const;
@@ -84,7 +87,13 @@ public:
 
   std::string read_octets_to_host( void );
   std::vector<ClipboardEvent> take_clipboard_events( void );
+  void set_mime_clipboard_enabled( bool enabled ) { dispatch.mime_clipboard_enabled = enabled; }
+  std::vector<std::string> take_download_events() { std::vector<std::string> out; out.swap( dispatch.download_events ); return out; }
+  std::vector<std::string> take_mime_clipboard_events() { std::vector<std::string> out; out.swap( dispatch.mime_clipboard_events ); return out; }
   void set_client_geometry( const ClientGeometry* geometry ) { dispatch.set_client_geometry( geometry ); }
+  void set_sixel_enabled( bool enabled ) { dispatch.sixel_enabled = enabled; }
+  void set_text_sizing_enabled( bool enabled ) { dispatch.text_sizing_enabled = enabled; }
+  void set_keyboard_enabled( bool enabled ) { dispatch.keyboard_enabled = enabled; }
 
   Framebuffer& get_fb( void ) { return fb; }
   const Framebuffer& get_fb( void ) const { return fb; }

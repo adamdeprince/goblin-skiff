@@ -47,6 +47,7 @@
 #include <sys/socket.h>
 
 #include "src/crypto/crypto.h"
+#include "linkbudget.h"
 
 using namespace Crypto;
 
@@ -177,6 +178,7 @@ private:
 
   bool server;
   bool compact_keepalive;
+  Crypto::Mode crypto_mode;
 
   int MTU; /* application datagram MTU */
 
@@ -203,6 +205,10 @@ private:
 
   /* Error from send()/sendto(). */
   std::string send_error;
+  LinkBudget link;
+  bool sending_feedback = false;
+  bool link_offered = false, link_confirmed = false;
+  uint64_t link_confirmation_deadline = 0;
 
   Packet new_packet( const std::string& s_payload );
 
@@ -224,23 +230,36 @@ public:
   /* Network transport overhead. */
   static const int ADDED_BYTES = 8 /* seqno/nonce */ + 4 /* timestamps */;
 
-  Connection( const char* desired_ip, const char* desired_port, bool s_compact_keepalive = false ); /* server */
+  Connection( const char* desired_ip,
+              const char* desired_port,
+              bool s_compact_keepalive = false,
+              Crypto::Mode s_crypto_mode = Crypto::Mode::LegacyOCB ); /* server */
   Connection( const char* key_str,
               const char* ip,
               const char* port,
-              bool s_compact_keepalive = false ); /* client */
+              bool s_compact_keepalive = false,
+              Crypto::Mode s_crypto_mode = Crypto::Mode::LegacyOCB ); /* client */
 
   void send( const std::string& s );
+  void enable_link_budget( bool enabled ) {
+    link.enable( enabled ); link_offered = enabled; link_confirmed = !server;
+    link_confirmation_deadline = timestamp() + 10000;
+  }
+  const LinkBudget& link_budget() const { return link; }
+  int pacing_wait_time( bool foreground = false ) { return link.wait_time( timestamp(), foreground ); }
+  int feedback_wait_time() const { return link_confirmed ? link.feedback_wait( timestamp() ) : INT_MAX; }
   std::string recv( void );
   int keepalive_wait_time( void ) const;
   void tick( void );
   const std::vector<int> fds( void ) const;
   int get_MTU( void ) const { return MTU; }
+  int packet_overhead( void ) const { return ADDED_BYTES + session.added_bytes(); }
 
   std::string port( void ) const;
   std::string get_key( void ) const { return key.printable_key(); }
   bool get_has_remote_addr( void ) const { return has_remote_addr; }
   bool get_compact_keepalive( void ) const { return compact_keepalive; }
+  Crypto::Mode get_crypto_mode( void ) const { return crypto_mode; }
   unsigned int get_keepalive_interval( void ) const { return keepalive_interval; }
 
   uint64_t timeout( void ) const;

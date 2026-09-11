@@ -169,13 +169,13 @@ CXX="$saved_CXX"
 LD="$saved_LD"
 
 AC_ARG_ENABLE([client],
-  [AS_HELP_STRING([--enable-client], [Build the adam-mosh-client program @<:@yes@:>@])],
+  [AS_HELP_STRING([--enable-client], [Build the goblin-mosh-client program @<:@yes@:>@])],
   [build_client="$enableval"],
   [build_client="yes"])
 AM_CONDITIONAL([BUILD_CLIENT], [test x"$build_client" != xno])
 
 AC_ARG_ENABLE([server],
-  [AS_HELP_STRING([--enable-server], [Build the adam-mosh-server program @<:@yes@:>@])],
+  [AS_HELP_STRING([--enable-server], [Build the goblin-mosh-server program @<:@yes@:>@])],
   [build_server="$enableval"],
   [build_server="yes"])
 AM_CONDITIONAL([BUILD_SERVER], [test x"$build_server" != xno])
@@ -285,16 +285,39 @@ AM_CONDITIONAL([HAVE_ZSTD], [test x"$have_zstd" = xyes])
 AC_SUBST([ZSTD_CFLAGS])
 AC_SUBST([ZSTD_LIBS])
 
+AC_ARG_WITH([librsync],
+  [AS_HELP_STRING([--with-librsync], [Enable file-menu delta transfers with librsync and OpenSSL 3 @<:@check@:>@])],
+  [with_librsync="$withval"], [with_librsync=check])
+AS_CASE([$with_librsync], [yes|no|check], [], [AC_MSG_ERROR([--with-librsync accepts yes or no])])
+have_file_sync=no
+AS_IF([test x"$with_librsync" != xno], [
+  PKG_CHECK_MODULES([FILECRYPTO], [libcrypto >= 3.0], [
+    AC_CHECK_HEADERS([librsync.h], [
+      AC_CHECK_LIB([rsync], [rs_sig_args],
+        [LIBRSYNC_LIBS=-lrsync
+         have_file_sync=yes], [:])
+    ], [:])
+  ], [:])
+  AS_IF([test x"$with_librsync" = xyes && test x"$have_file_sync" != xyes],
+    [AC_MSG_ERROR([--with-librsync requires librsync 2.3+ and OpenSSL 3 development files])])
+])
+AS_IF([test x"$have_file_sync" = xyes],
+  [AC_DEFINE([HAVE_FILE_SYNC], [1], [Define if librsync file-menu transfers are available.])])
+AC_SUBST([LIBRSYNC_LIBS])
+
 RAPTORQ_CPPFLAGS=""
 RAPTORQ_CXXFLAGS=""
 AC_ARG_WITH([libraptorq],
   [AS_HELP_STRING([--with-libraptorq@<:@=DIR@:>@],
-    [Enable RFC6330 FEC using libRaptorQ headers in DIR @<:@check@:>@])],
+    [Opt in to RaptorQ FEC for custom builds only; review patent terms @<:@no@:>@])],
   [with_libraptorq="$withval"],
-  [with_libraptorq="check"])
+  [with_libraptorq="no"])
+AS_IF([test x"$with_libraptorq" = xcheck || test x"$with_libraptorq" = x],
+  [AC_MSG_ERROR([RaptorQ auto-detection is disabled; use --with-libraptorq or --with-libraptorq=DIR for an explicit custom build])])
 have_libraptorq=no
 AS_IF([test x"$with_libraptorq" != xno], [
-  AS_IF([test x"$with_libraptorq" != xcheck && test x"$with_libraptorq" != xyes], [
+  AC_MSG_WARN([RaptorQ is for custom builds only, not prebuilt distribution artifacts. Review its patent terms in THIRD_PARTY.md.])
+  AS_IF([test x"$with_libraptorq" != xyes], [
     RAPTORQ_CPPFLAGS="-I$with_libraptorq/src -I$with_libraptorq/external/eigen3"
   ])
 
@@ -332,7 +355,7 @@ AS_IF([test x"$with_libraptorq" != xno], [
   CPPFLAGS="$old_CPPFLAGS"
   CXXFLAGS="$old_CXXFLAGS"
 
-  AS_IF([test x"$with_libraptorq" != xcheck && test x"$have_libraptorq" != xyes],
+  AS_IF([test x"$have_libraptorq" != xyes],
     [AC_MSG_ERROR([--with-libraptorq was given, but RaptorQ/RFC6330_v1_hdr.hpp could not be compiled])])
 ])
 AS_IF([test x"$have_libraptorq" = xyes],
@@ -512,6 +535,56 @@ case "${with_crypto_library}" in
     ;;
 esac
 
+dnl The optional FIPS mode is independent of the library used to implement
+dnl legacy OCB.  For example, macOS can retain CommonCrypto for normal mosh
+dnl sessions while an explicitly requested FIPS session uses OpenSSL 3.
+AC_ARG_WITH(
+  [fips-crypto],
+  [AS_HELP_STRING([--with-fips-crypto],
+    [build --fips-crypto support with OpenSSL 3 (requires a configured FIPS provider at runtime) @<:@check@:>@])],
+  [with_fips_crypto="$withval"],
+  [with_fips_crypto="check"]
+)
+
+AS_CASE([$with_fips_crypto],
+  [yes|no|check], [],
+  [AC_MSG_ERROR([bad value ${with_fips_crypto} for --with-fips-crypto (use yes, no, or check)])])
+
+have_fips_crypto=no
+AS_IF([test "x$with_fips_crypto" != xno], [
+  PKG_CHECK_MODULES([FIPS_OPENSSL], [libcrypto >= 3.0], [
+    saved_CPPFLAGS="$CPPFLAGS"
+    saved_LIBS="$LIBS"
+    CPPFLAGS="$CPPFLAGS $FIPS_OPENSSL_CFLAGS"
+    LIBS="$FIPS_OPENSSL_LIBS $LIBS"
+    AC_LINK_IFELSE(
+      [AC_LANG_PROGRAM(
+        [[#include <openssl/evp.h>
+          #include <openssl/kdf.h>
+          #include <openssl/provider.h>
+          #include <openssl/rand.h>]],
+        [[OSSL_LIB_CTX *ctx = OSSL_LIB_CTX_new();
+          EVP_CIPHER *cipher = EVP_CIPHER_fetch(ctx, "AES-128-GCM", "fips=yes");
+          EVP_KDF *kdf = EVP_KDF_fetch(ctx, "HKDF", "fips=yes");
+          EVP_CIPHER_free(cipher);
+          EVP_KDF_free(kdf);
+          OSSL_LIB_CTX_free(ctx);]])],
+      [have_fips_crypto=yes],
+      [have_fips_crypto=no])
+    CPPFLAGS="$saved_CPPFLAGS"
+    LIBS="$saved_LIBS"
+  ], [:])
+])
+
+AS_IF([test "x$with_fips_crypto" = xyes && test "x$have_fips_crypto" != xyes],
+  [AC_MSG_ERROR([--with-fips-crypto requires OpenSSL 3 libcrypto development files])])
+
+AS_IF([test "x$have_fips_crypto" = xyes], [
+  AC_DEFINE([HAVE_OPENSSL_FIPS_CRYPTO], [1], [Build support for the OpenSSL 3 FIPS provider.])
+  CRYPTO_CFLAGS="$CRYPTO_CFLAGS $FIPS_OPENSSL_CFLAGS"
+  CRYPTO_LIBS="$CRYPTO_LIBS $FIPS_OPENSSL_LIBS"
+])
+
 AC_ARG_ENABLE([static-crypto],
   [AS_HELP_STRING([--enable-static-crypto], [Link crypto library statically @<:@no@:>@])],
   [], [enable_static_crypto="$enable_static_libraries"])
@@ -625,7 +698,7 @@ PKG_CHECK_MODULES([protobuf], [protobuf])
 # On Debian Sid 2016-03-16ish at least, "pkgconfig --libs protobuf"
 # gives us the bogus "-lprotobuf -pthread -lpthread"; remove
 # "-lpthread" which misconfigures compile, causing a segfault in
-# adam-mosh-server.
+# goblin-mosh-server.
 AS_IF([echo "$protobuf_LIBS" | grep -q -- -pthread],
   [protobuf_LIBS="`echo $protobuf_LIBS | sed 's/-lpthread//g'`"])
 
@@ -697,7 +770,10 @@ AC_MSG_NOTICE([Warning CXXFLAGS:    $WARNING_CXXFLAGS])
 AC_MSG_NOTICE([Picky CXXFLAGS:      $PICKY_CXXFLAGS])
 AC_MSG_NOTICE([Harden CFLAGS:       $HARDEN_CFLAGS])
 AC_MSG_NOTICE([Cryptography:        $human_readable_cryptography_description])
+AC_MSG_NOTICE([FIPS crypto mode:    $have_fips_crypto (OpenSSL FIPS provider required at runtime)])
+AC_MSG_NOTICE([FEC Reed-Solomon:    yes])
 AC_MSG_NOTICE([FEC RFC6330:         $have_libraptorq])
 AC_MSG_NOTICE([moshcp zstd:         $have_zstd])
+AC_MSG_NOTICE([File-menu librsync:  $have_file_sync])
 AC_MSG_NOTICE([Kitty WebP state:    yes])
 AC_MSG_NOTICE([ =============================])

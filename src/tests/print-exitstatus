@@ -22,9 +22,15 @@ print STDERR "@@@ exitstatus: ${rc} @@@\n";
 my $grepfilename = $ENV{'MOSH_E2E_TEST'} . ".tmux.log";
 for my $i (1..600) {
     open(my $grepfile, "<", $grepfilename) or die;
+    my %tail;
     while (<$grepfile>) {
-	chomp;
-	/@@@ exitstatus: .* @@@/ && goto gotit;
+	# tmux can split the marker anywhere, including between every character.
+	if (/^%output (%\d+) (.*)/) {
+	    my ($pane, $chunk) = ($1, $2);
+	    $tail{$pane} .= $chunk;
+	    $tail{$pane} =~ /\Q@@@ exitstatus: ${rc} @@@\E/ && goto gotit;
+	    $tail{$pane} = substr($tail{$pane}, -64);
+	}
     }
     close($grepfile);
     sleep .1;

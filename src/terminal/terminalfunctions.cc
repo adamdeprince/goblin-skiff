@@ -39,6 +39,8 @@
 #include <unistd.h>
 
 #include "src/terminal/osc52.h"
+#include "src/terminal/osc5522.h"
+#include "src/terminal/download.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldispatcher.h"
@@ -49,6 +51,8 @@ using namespace Terminal;
 
 static void clearline( Framebuffer* fb, int row, int start, int end )
 {
+  fb->erase_sized_text( row, start, 1, end - start + 1 );
+  fb->erase_sixel_cells( row, start, 1, end - start + 1 );
   for ( int col = start; col <= end; col++ ) {
     fb->reset_cell( fb->get_mutable_cell( row, col ) );
   }
@@ -140,7 +144,7 @@ static Function func_CSI_cursormove_f( CSI, "f", CSI_cursormove );
 /* device attributes */
 static void CSI_DA( Framebuffer* fb __attribute( ( unused ) ), Dispatcher* dispatch )
 {
-  dispatch->terminal_to_host.append( "\033[?62c" ); /* plain vt220 */
+  dispatch->terminal_to_host.append( dispatch->sixel_enabled ? "\033[?62;4c" : "\033[?62c" );
 }
 
 static Function func_CSI_DA( CSI, "c", CSI_DA );
@@ -153,9 +157,59 @@ static void CSI_SDA( Framebuffer* fb __attribute( ( unused ) ), Dispatcher* disp
 
 static Function func_CSI_SDA( CSI, ">c", CSI_SDA );
 
+static void CSI_KB_QUERY( Framebuffer* fb, Dispatcher* d ) { d->keyboard_mode( fb, '?' ); }
+static void CSI_KB_SET( Framebuffer* fb, Dispatcher* d ) { d->keyboard_mode( fb, '=' ); }
+static void CSI_KB_PUSH( Framebuffer* fb, Dispatcher* d ) { d->keyboard_mode( fb, '>' ); }
+static void CSI_KB_POP( Framebuffer* fb, Dispatcher* d ) { d->keyboard_mode( fb, '<' ); }
+static Function func_CSI_KB_QUERY( CSI, "?u", CSI_KB_QUERY, false );
+static Function func_CSI_KB_SET( CSI, "=u", CSI_KB_SET, false );
+static Function func_CSI_KB_PUSH( CSI, ">u", CSI_KB_PUSH, false );
+static Function func_CSI_KB_POP( CSI, "<u", CSI_KB_POP, false );
+
+void Dispatcher::keyboard_mode( Framebuffer* fb, char operation )
+{
+  auto& stack = keyboard_stack[keyboard_alt ? 1 : 0];
+  unsigned flags = fb->ds.kitty_keyboard_flags;
+  if ( operation == '?' ) {
+    if ( keyboard_enabled ) { terminal_to_host += "\033[?" + std::to_string( flags ) + "u"; }
+    return;
+  }
+  if ( operation == '<' ) {
+    unsigned count = std::max( 1, getparam( 0, 1 ) );
+    while ( count-- ) {
+      if ( stack.empty() ) { flags = 0; break; }
+      flags = stack.back();
+      stack.pop_back();
+    }
+  } else {
+    if ( operation == '>' ) {
+      if ( stack.size() == 16 ) { stack.erase( stack.begin() ); }
+      stack.push_back( flags );
+    }
+    const unsigned requested = unsigned( getparam( 0, 0 ) ) & 31U;
+    const int mode = operation == '=' ? getparam( 1, 1 ) : 1;
+    if ( mode == 1 ) { flags = requested; }
+    else if ( mode == 2 ) { flags |= requested; }
+    else if ( mode == 3 ) { flags &= ~requested; }
+  }
+  fb->ds.kitty_keyboard_flags = flags;
+}
+
+void Dispatcher::keyboard_screen( Framebuffer* fb, bool alternate )
+{
+  if ( alternate == keyboard_alt ) { return; }
+  auto& old = keyboard_stack[keyboard_alt ? 1 : 0];
+  old.push_back( fb->ds.kitty_keyboard_flags );
+  keyboard_alt = alternate;
+  auto& now = keyboard_stack[keyboard_alt ? 1 : 0];
+  fb->ds.kitty_keyboard_flags = now.empty() ? 0 : now.back();
+  if ( !now.empty() ) { now.pop_back(); }
+}
+
 /* screen alignment diagnostic */
 static void Esc_DECALN( Framebuffer* fb, Dispatcher* dispatch __attribute( ( unused ) ) )
 {
+  fb->erase_sized_text( 0, 0, fb->ds.get_height(), fb->ds.get_width() );
   for ( int y = 0; y < fb->ds.get_height(); y++ ) {
     for ( int x = 0; x < fb->ds.get_width(); x++ ) {
       fb->reset_cell( fb->get_mutable_cell( y, x ) );
@@ -307,6 +361,8 @@ static bool* get_DEC_mode( int param, Framebuffer* fb )
       return &( fb->ds.mouse_alternate_scroll );
     case 2004: /* bracketed paste */
       return &( fb->ds.bracketed_paste );
+    case 5522: /* MIME paste events; support is queried separately */
+      return &( fb->ds.mime_paste );
     default:
       break;
   }
@@ -326,7 +382,11 @@ static void CSI_DECSM( Framebuffer* fb, Dispatcher* dispatch )
 {
   for ( int i = 0; i < dispatch->param_count(); i++ ) {
     int param = dispatch->getparam( i, 0 );
-    if ( param == 9 || ( param >= 1000 && param <= 1003 ) ) {
+    if ( param == 47 || param == 1047 || param == 1049 ) { dispatch->keyboard_screen( fb, true ); }
+    else if ( param == 80 ) { dispatch->sixel_display_mode = true; }
+    else if ( param == 1070 ) { dispatch->sixel_private_palette = true; }
+    else if ( param == 8452 ) { dispatch->sixel_cursor_right = true; }
+    else if ( param == 9 || ( param >= 1000 && param <= 1003 ) ) {
       fb->ds.mouse_reporting_mode = (Terminal::DrawState::MouseReportingMode)param;
     } else if ( param == 1005 || param == 1006 || param == 1015 ) {
       fb->ds.mouse_encoding_mode = (Terminal::DrawState::MouseEncodingMode)param;
@@ -341,7 +401,11 @@ static void CSI_DECRM( Framebuffer* fb, Dispatcher* dispatch )
 {
   for ( int i = 0; i < dispatch->param_count(); i++ ) {
     int param = dispatch->getparam( i, 0 );
-    if ( param == 9 || ( param >= 1000 && param <= 1003 ) ) {
+    if ( param == 47 || param == 1047 || param == 1049 ) { dispatch->keyboard_screen( fb, false ); }
+    else if ( param == 80 ) { dispatch->sixel_display_mode = false; }
+    else if ( param == 1070 ) { dispatch->sixel_private_palette = false; }
+    else if ( param == 8452 ) { dispatch->sixel_cursor_right = false; }
+    else if ( param == 9 || ( param >= 1000 && param <= 1003 ) ) {
       fb->ds.mouse_reporting_mode = Terminal::DrawState::MOUSE_REPORTING_NONE;
     } else if ( param == 1005 || param == 1006 || param == 1015 ) {
       fb->ds.mouse_encoding_mode = Terminal::DrawState::MOUSE_ENCODING_DEFAULT;
@@ -610,9 +674,13 @@ static void CSI_ECH( Framebuffer* fb, Dispatcher* dispatch )
 static Function func_CSI_ECH( CSI, "X", CSI_ECH );
 
 /* reset to initial state */
-static void Esc_RIS( Framebuffer* fb, Dispatcher* dispatch __attribute( ( unused ) ) )
+static void Esc_RIS( Framebuffer* fb, Dispatcher* dispatch )
 {
   fb->reset();
+  dispatch->reset_sixel();
+  dispatch->keyboard_stack[0].clear();
+  dispatch->keyboard_stack[1].clear();
+  dispatch->keyboard_alt = false;
 }
 
 static Function func_Esc_RIS( ESCAPE, "c", Esc_RIS );
@@ -624,6 +692,16 @@ static void CSI_DECSTR( Framebuffer* fb, Dispatcher* dispatch __attribute( ( unu
 }
 
 static Function func_CSI_DECSTR( CSI, "!p", CSI_DECSTR );
+
+static void CSI_mime_query( Framebuffer* fb, Dispatcher* dispatch )
+{
+  for ( int i = 0; i < dispatch->param_count(); i++ ) {
+    const int mode = dispatch->getparam( i, 0 );
+    const int state = mode == 5522 && dispatch->mime_clipboard_enabled ? ( fb->ds.mime_paste ? 1 : 2 ) : 0;
+    dispatch->terminal_to_host += "\033[?" + std::to_string( mode ) + ";" + std::to_string( state ) + "$y";
+  }
+}
+static Function func_CSI_mime_query( CSI, "?$p", CSI_mime_query, false );
 
 static bool Parse_OSC_8( const std::vector<wchar_t>& osc8_vector, std::string& osc8_str )
 {
@@ -659,8 +737,36 @@ static void OSC_8( const std::string& OSC_string, Framebuffer* fb )
 }
 
 /* xterm uses an Operating System Command to set the window title */
-void Dispatcher::OSC_dispatch( const Parser::OSC_End* act __attribute( ( unused ) ), Framebuffer* fb )
+void Dispatcher::OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb )
 {
+  if ( OSC_string.size() >= sizeof Download::PREFIX - 1
+       && std::equal( Download::PREFIX, Download::PREFIX + sizeof Download::PREFIX - 1, OSC_string.begin() ) ) {
+    // The collector is drained after each PTY read, before any state snapshot.
+    // Never render or replay a file transfer as part of a screen refresh.
+    if ( OSC_overflow || OSC_string.size() > Download::MAX_OSC || download_events.size() >= 512 ) { return; }
+    std::string body;
+    for ( wchar_t c : OSC_string ) { if ( c < 32 || c > 126 ) { return; } body += char( c ); }
+    if ( act->char_present && ( act->ch == 0x07 || act->ch == 0x9c ) ) { download_events.push_back( std::move( body ) ); }
+    else if ( act->char_present && act->ch == 0x1b ) { pending_download = std::move( body ); }
+    return;
+  }
+  if ( OSC_string.size() >= 5 && std::wstring( OSC_string.begin(), OSC_string.begin() + 5 ) == L"5522;" ) {
+    std::string body;
+    if ( OSC_overflow || OSC_string.size() > OSC5522_MAX_FRAME ) { return; }
+    for ( wchar_t c : OSC_string ) { if ( c < 32 || c > 126 ) { return; } body += char( c ); }
+    MimeClipboardMessage message;
+    if ( parse_osc5522( body, message ) ) {
+      if ( mime_clipboard_enabled && mime_clipboard_events.size() < 64 ) { mime_clipboard_events.push_back( body ); }
+      else if ( message.type == "read" || message.type == "write" ) {
+        terminal_to_host += "\033]" + osc5522_error( message, "ENOSYS" ) + "\033\\";
+      }
+    }
+    return;
+  }
+  if ( !OSC_overflow && OSC_string.size() >= 3 && OSC_string[0] == '6' && OSC_string[1] == '6' && OSC_string[2] == ';' ) {
+    if ( text_sizing_enabled ) { parse_sized_text( OSC_string, *fb ); }
+    return;
+  }
   ClipboardEvent ev;
   if ( parse_osc52_string( OSC_string, ev, OSC_overflow ) ) {
     /* Clipboard is a one-shot event. Do not park it in framebuffer

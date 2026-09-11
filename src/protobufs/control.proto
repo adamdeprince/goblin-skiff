@@ -1,0 +1,76 @@
+syntax = "proto2";
+package ControlBuffers;
+
+// Reserved reliable stream 0, negotiated as directory-v1. File data does
+// not belong here. Pages are pull-based and bounded by entries AND bytes.
+message Directory {
+  enum Kind { OPEN = 1; PAGE = 2; REPLY = 3; WATCH = 4; CHECK = 5; FILE_CONTROL = 6; }
+  required Kind kind = 1;
+  required uint64 request = 2;
+  optional bytes path = 3;
+  optional uint64 cursor = 4;
+  optional bytes error = 5;
+  optional bool eof = 6;
+  message Entry {
+    required bytes name = 1;
+    // Metadata is read only by the killable filesystem helper.
+    enum Type { UNKNOWN = 0; FILE = 1; DIRECTORY = 2; LINK = 3; }
+    optional Type type = 2;
+    optional uint64 size = 3;
+  }
+  repeated Entry entry = 7;
+  // directory-v2: bounded live windows. CHECK is helper-local; WATCH
+  // selects a cached window, or pauses observation when live is false.
+  optional bool live = 8;
+  optional uint64 start_cursor = 9;
+  optional uint64 revision = 10;
+  optional bool reset = 11;
+  optional bool update = 12;
+  optional bool unchanged = 13;
+  optional uint64 previous_cursor = 14;
+  // An update with delta replaces metadata for these names, not the list.
+  optional bool delta = 15;
+  optional FileControl file = 16;
+}
+
+// file-sync-v1: only requests, cancellation and coalesced status use SST.
+// Names/signatures/deltas/file bytes use the separate ordered bulk FEC lane.
+message FileControl {
+  enum Kind { START = 1; CANCEL = 2; STATUS = 3; }
+  required Kind kind = 1;
+  required uint64 id = 2;
+  optional bool send = 3;
+  optional bytes path = 4;
+  optional bytes name = 5;
+  optional bytes status = 6;
+  optional bool done = 7;
+  optional bool failed = 8;
+  optional uint64 files = 9;
+  optional uint64 bytes = 10;
+  optional uint64 signatures = 11;
+  optional uint64 deltas = 12;
+  optional uint64 payload = 13;
+}
+
+message FileRecord {
+  enum Kind {
+    DIRECTORY = 1; OFFER = 2; BASIS_SIGNATURE = 3; SIGNATURE_END = 4;
+    DATA = 5; END = 6; SAVED = 7; FINISH = 8; FINISHED = 9;
+    // Only from the filesystem helper to its parent, never accepted remotely.
+    PROGRESS = 10;
+  }
+  required Kind kind = 1;
+  required uint64 job = 2;
+  required uint64 serial = 3;
+  optional bytes path = 4;
+  optional bytes data = 5;
+  optional uint64 size = 6;
+  optional bytes sha256 = 7;
+  optional bool delta = 8;
+  optional uint32 mode = 9;
+  optional bytes status = 10;
+  optional uint64 files = 11;
+  optional uint64 bytes = 12;
+  optional bool done = 13;
+  optional bool failed = 14;
+}

@@ -44,8 +44,10 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             RemoteState& initial_remote,
                                             const char* desired_ip,
                                             const char* desired_port,
-                                            bool compact_keepalive )
-  : connection( desired_ip, desired_port, compact_keepalive ), sender( &connection, initial_state, compact_keepalive ),
+                                            bool compact_keepalive,
+                                            Crypto::Mode crypto_mode )
+  : connection( desired_ip, desired_port, compact_keepalive, crypto_mode ),
+    sender( &connection, initial_state, compact_keepalive ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
     state_sample_writer(), verbose( 0 )
@@ -59,8 +61,10 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             const char* key_str,
                                             const char* ip,
                                             const char* port,
-                                            bool compact_keepalive )
-  : connection( key_str, ip, port, compact_keepalive ), sender( &connection, initial_state, compact_keepalive ),
+                                            bool compact_keepalive,
+                                            Crypto::Mode crypto_mode )
+  : connection( key_str, ip, port, compact_keepalive, crypto_mode ),
+    sender( &connection, initial_state, compact_keepalive ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
     state_sample_writer(), verbose( 0 )
@@ -71,7 +75,7 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
 template<class MyState, class RemoteState>
 size_t Transport<MyState, RemoteState>::max_datagram_payload( void ) const
 {
-  const int payload = connection.get_MTU() - Network::Connection::ADDED_BYTES - Crypto::Session::ADDED_BYTES;
+  const int payload = connection.get_MTU() - connection.packet_overhead();
   return payload > 0 ? static_cast<size_t>( payload ) : 0;
 }
 
@@ -87,6 +91,10 @@ void Transport<MyState, RemoteState>::recv( void )
 
   Bulk::Datagram bulk;
   if ( Bulk::decode_datagram( s, bulk ) ) {
+    // Authenticated bulk traffic is evidence of a live peer even when the
+    // screen is idle for the duration of a long background download.
+    received_states.back().timestamp = timestamp();
+    sender.remote_heard( received_states.back().timestamp );
     bulk_datagrams.push_back( bulk );
     return;
   }

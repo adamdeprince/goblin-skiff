@@ -44,7 +44,7 @@ void require( bool condition, const char* message )
 
 std::string temp_path( void )
 {
-  char path[] = "/tmp/adam-mosh-state-samples-XXXXXX";
+  char path[] = "/tmp/goblin-mosh-state-samples-XXXXXX";
   int fd = mkstemp( path );
   if ( fd < 0 ) {
     throw std::runtime_error( "mkstemp failed" );

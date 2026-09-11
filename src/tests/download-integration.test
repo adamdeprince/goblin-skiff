@@ -1,0 +1,9 @@
+#!/bin/sh
+. "$(dirname "$0")/e2e-test-subrs"
+if ! set_locale; then
+    exit 99
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+    exit 77
+fi
+exec python3 "$(dirname "$0")/download-integration.py"
