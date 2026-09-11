@@ -37,6 +37,9 @@ Mosh does not support sshfs.  This version also includes experimental stream
 forwarding for selected SSH-like uses: local TCP forwards (`-L`), remote TCP
 forwards (`-R`), local SOCKS5 dynamic forwards (`-D`), SSH agent forwarding
 (`-A`), and basic X11 forwarding (`-X`).
+`-J` / `--jump` also relays the encrypted Mosh UDP session through up to four
+Goblin Mosh jump hosts, including routes discovered from SSH `ProxyJump`.
+It does not add arbitrary UDP port forwarding; `-L/-R/-D` remain TCP streams.
 
 Other features
 --------------
@@ -80,6 +83,19 @@ Usage
   The user runs:
 
     $ goblin-mosh [user@]host
+
+  To reach a destination through a jump host, for both setup and Mosh UDP:
+
+    $ goblin-mosh -J [user@]jump destination
+    $ goblin-mosh -J jump-a,jump-b destination
+
+  Install the updated `goblin-mosh-server` on every jump and the destination.
+  Each hop needs UDP reachability to the next, with UDP 60001–60999 permitted
+  by default. SSH is used only for setup; terminal traffic remains encrypted
+  end to end, with separately authenticated relay envelopes. `--jump-port`
+  selects the jumps' UDP range; `-p` still selects the destination's port.
+  See [UDP_RELAY.md](UDP_RELAY.md) for SSH configuration, NAT, relay expiry,
+  FIPS behavior, and the 24-byte (36-byte FIPS) per-hop wire overhead.
 
   The client displays the bundled mascot while connecting, using Kitty,
   sixel, or ASCII according to local terminal capability replies. Its only
@@ -180,8 +196,8 @@ Usage
   packages are `librsync-dev` and `libssl-dev`; on macOS install `librsync` and
   `openssl@3` with Homebrew. Pass its include/library directories via `CPPFLAGS`
   and `LDFLAGS` if needed. This feature does not change the separate
-  `goblin-moshcp` CLI protocol. Live forwarding controls and UDP proxy-jump are
-  not yet connected to this popup.
+  `goblin-moshcp` CLI protocol. Live forwarding edits are not yet connected to
+  this popup; UDP jump routes are selected at session startup with `-J`.
 
   The requested audio page (independent input/output codecs, on/off, volume,
   microphone meter and headphone test) is specified in [AUDIO.md](AUDIO.md)

@@ -1,5 +1,26 @@
 # Mosh Tests
 
+## UDP jump relays
+
+`udp-relay` checks outer encryption, independent keys, direction separation,
+tampering/truncation, a 1024-packet replay window, one-to-four-hop nesting and
+both endpoints' MTU budgets. It launches test-owned relay servers on IPv4 and
+IPv6 loopback to check fixed-destination filtering, port roaming without
+replay rollback, out-of-order delivery, authenticated close, and startup/idle
+expiry. FIPS envelope roundtrips run only when a configured provider is present.
+
+`udp-jump-wrapper.test` uses a fake SSH transport, never a real remote host,
+to check `-J`, configured and nested `ProxyJump`, `--ssh -J`, SSH ports and
+`-F`, first-hop NAT address selection, reverse-order relay setup, key order,
+FIPS selection, and fail-closed preflight/MTU/suite negotiation.
+
+`udp-relay-integration.test` runs real client/server PTYs with one and four
+actual Goblin relay processes, plus an outer loss/reordering simulator. It
+checks multi-packet screen updates, live typing, and recursive delta file
+transfers in both directions while the menu is hidden/reopened. Normal client
+exit must close every hop. All files and sockets belong to private fixtures;
+these tests do not contact jump hosts or change installed binaries.
+
 ## Build-host clock isolation
 
 Tests must see native filesystem metadata and time. If a packaging host uses

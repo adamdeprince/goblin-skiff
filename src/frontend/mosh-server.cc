@@ -105,6 +105,7 @@
 #include "mimeclipboard.h"
 #include "download.h"
 #include "filetransfer.h"
+#include "relay-server.h"
 
 using ServerConnection = Network::Transport<Terminal::Complete, Network::UserStream>;
 
@@ -152,6 +153,7 @@ static void print_usage( FILE* stream, const char* argv0 )
   fprintf( stream,
            "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [--fips-crypto] [-- COMMAND...]\n",
            argv0 );
+  fputs( "       goblin-mosh-server relay --help  (authenticated UDP jump relay)\n", stream );
 }
 
 static bool print_motd( const char* filename );
@@ -286,6 +288,8 @@ int main( int argc, char* argv[] )
 {
   /* For security, make sure we don't dump core */
   Crypto::disable_dumping_core();
+
+  if ( argc >= 2 && !strcmp( argv[1], "relay" ) ) { return relay_server_main( argc - 1, argv + 1 ); }
 
   /* Detect edge case */
   fatal_assert( argc > 0 );
@@ -631,6 +635,9 @@ static int run_server( const char* desired_ip,
   using NetworkPointer = std::shared_ptr<ServerConnection>;
   NetworkPointer network(
     new ServerConnection( terminal, blank, desired_ip, desired_port, compact_keepalive, crypto_mode ) );
+  const unsigned relay_hops = uint_from_env( "MOSH_RELAY_HOPS", 0 );
+  network->set_relay_hops( relay_hops );
+  unsetenv( "MOSH_RELAY_HOPS" ); // routing metadata is not an application environment setting
   const bool link_budget = compact_keepalive && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "link-budget-v1" );
   network->enable_link_budget( link_budget );
 
@@ -670,6 +677,7 @@ static int run_server( const char* desired_ip,
   if ( compact_keepalive ) {
     puts( "MOSH CAPS keepalive-v1" );
   }
+  if ( relay_hops ) { printf( "MOSH RELAY-MTU 1 %u\n", relay_hops ); }
   if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "sixel-state-v1" ) ) {
     puts( "MOSH GRAPHICS sixel-state-v1" );
   }
@@ -1018,7 +1026,9 @@ static void serve( int host_fd,
 
   while ( true ) {
     try {
-      static const uint64_t timeout_if_no_client = 60000;
+      const uint64_t timeout_if_no_client
+        = has_capability( getenv( "MOSH_CLIENT_CAPS" ), "udp-relay-v1" )
+            ? uint64_t( Network::Relay::STARTUP_TIMEOUT ) * 1000 : 60000;
       int timeout = INT_MAX;
       uint64_t now = Network::timestamp();
       if ( idle_cleanup_deadline ) {

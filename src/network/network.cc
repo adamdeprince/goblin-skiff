@@ -181,6 +181,7 @@ Connection::Socket::Socket( int family ) : _fd( socket( family, SOCK_DGRAM, 0 ) 
 void Connection::setup( void )
 {
   last_port_choice = timestamp();
+  link.set_feedback_packet_size( 32 + packet_overhead() + IPV6_HEADER_LEN );
 }
 
 const std::vector<int> Connection::fds( void ) const
@@ -379,6 +380,36 @@ Connection::Connection( const char* key_str,
   set_MTU( remote_addr.sa.sa_family );
 }
 
+Connection::~Connection()
+{
+  // Best effort, deepest first. A lost close is bounded by the relay's idle
+  // lease. Do not keep SSH alive or add a periodic relay heartbeat.
+  try {
+    for ( unsigned i = relays.size(); i; --i ) {
+      for ( unsigned retry = 0; retry < 3; ++retry ) {
+        const auto packet = relays.close_packet( i - 1 );
+        (void)sendto( sock(), packet.data(), packet.size(), MSG_DONTWAIT, &remote_addr.sa, remote_addr_len );
+      }
+    }
+  } catch ( ... ) {} // never throw while tearing down a session
+}
+
+void Connection::set_relay_hops( unsigned hops )
+{
+  (void)Relay::overhead( crypto_mode, hops ); // validate before changing the MTU
+  if ( !server ) { throw std::logic_error( "Relay hop budget is a server option" ); }
+  relay_hops = hops;
+  link.set_feedback_packet_size( 32 + packet_overhead() + Relay::overhead( crypto_mode, relay_hops ) + IPV6_HEADER_LEN );
+}
+
+void Connection::set_relay_keys( const std::string& keys )
+{
+  if ( server ) { throw std::logic_error( "Relay keys are a client option" ); }
+  relays.configure( keys, crypto_mode );
+  relay_hops = relays.size();
+  link.set_feedback_packet_size( 32 + packet_overhead() + Relay::overhead( crypto_mode, relay_hops ) + IPV6_HEADER_LEN );
+}
+
 void Connection::send( const std::string& s )
 {
   if ( !has_remote_addr ) {
@@ -387,11 +418,12 @@ void Connection::send( const std::string& s )
 
   Packet px = new_packet( s );
 
-  std::string p = session.encrypt( px.toMessage() );
+  std::string p = relays.seal( session.encrypt( px.toMessage() ) );
 
   ssize_t bytes_sent = sendto( sock(), p.data(), p.size(), MSG_DONTWAIT, &remote_addr.sa, remote_addr_len );
   if ( bytes_sent == static_cast<ssize_t>( p.size() ) ) {
-    link.sent_packet( px.seq, p.size() + ( remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
+    link.sent_packet( px.seq, p.size() + ( server ? Relay::overhead( crypto_mode, relay_hops ) : 0 )
+                       + ( relay_hops || remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
                       timestamp(), sending_feedback || s.empty() );
   }
 
@@ -537,7 +569,7 @@ std::string Connection::recv_one( int sock_to_recv )
     congestion_experienced = ( *ecn_octet_p & 0x03 ) == 0x03;
   }
 
-  Packet p( session.decrypt( msg_payload, received_len ) );
+  Packet p( session.decrypt( relays.open( std::string( msg_payload, received_len ) ) ) );
 
   dos_assert( p.direction == ( server ? TO_SERVER : TO_CLIENT ) ); /* prevent malicious playback to sender */
   if ( link_offered && !link_confirmed && p.payload.size() == 32
@@ -546,7 +578,8 @@ std::string Connection::recv_one( int sock_to_recv )
   }
   const bool feedback = link.receive_feedback( p.payload, timestamp(), SRTT );
   if ( !feedback && !p.payload.empty() ) {
-    link.received_packet( p.seq, received_len + ( packet_remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
+    link.received_packet( p.seq, received_len + ( server ? Relay::overhead( crypto_mode, relay_hops ) : 0 )
+                           + ( relay_hops || packet_remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
                           timestamp(), SRTT );
   }
 

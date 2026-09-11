@@ -1,8 +1,8 @@
 class GoblinMosh < Formula
   desc "Mobile shell and file transfers optimized for low-bandwidth links"
   homepage "https://mosh.goblinreactor.com/"
-  url "https://brew.goblinreactor.com/sources/goblin-mosh-1.4.0-goblin20260910.2.tar.gz"
-  version "1.4.0-goblin20260910.2"
+  url "https://brew.goblinreactor.com/sources/goblin-mosh-1.4.0-goblin20260911.1.tar.gz"
+  version "1.4.0-goblin20260911.1"
   sha256 "@SOURCE_SHA256@"
   license all_of: ["GPL-3.0-or-later", "ISC"]
 
@@ -40,7 +40,7 @@ class GoblinMosh < Formula
     system "make"
     system "sh", "packaging/check-prebuilt-fec.sh", "./src/moshcp/goblin-moshcp"
     # Keep Unix socket paths short on macOS and never share a live session's
-    # runtime directory. Core tests use local Unix sockets only.
+    # runtime directory. Tests use local Unix sockets and loopback UDP.
     Dir.mktmpdir("goblin-check-", "/tmp") do |runtime|
       ENV["XDG_RUNTIME_DIR"] = runtime
       tests = %w[
@@ -49,13 +49,14 @@ class GoblinMosh < Formula
         state-samples osc52-parse kitty-graphics terminal-geometry
         terminal-display tmux-control control-panel mascot file-transfer
         link-budget sixel-state terminal-extensions download download-forward
+        udp-relay udp-jump-wrapper.test
       ]
       system "make", "check", "TESTS=#{tests.join(" ")}"
     end
     system "make", "install"
     bash_completion.install "conf/bash-completion/completions/goblin-mosh"
     doc.install "README.md", "GOBLIN_DOWNLOAD_PROTOCOL.md", "SIXEL_STATE.md",
-                "AUDIO.md", "debian/copyright"
+                "AUDIO.md", "UDP_RELAY.md", "debian/copyright"
     (pkgshare/"tests").install "src/tests/control-panel-integration.py"
     (pkgshare/"tests").install "packaging/check-prebuilt-fec.sh"
     (pkgshare/"verification").install "src/tests/test-suite.log"
@@ -65,6 +66,8 @@ class GoblinMosh < Formula
     <<~EOS
       Install goblin-mosh on both endpoints, then run:
         goblin-mosh user@server
+      For UDP jump relays, install this release on each jump host too:
+        goblin-mosh -J user@jump user@server
       Open the file/control menu with Ctrl-^ (usually Ctrl-Shift-6), then 0.
       This package does not replace stock mosh or a manual /usr/local install.
       Existing sessions keep running; open a new session after an upgrade.
@@ -82,5 +85,7 @@ class GoblinMosh < Formula
     ENV["GOBLIN_TEST_SERVER"] = bin/"goblin-mosh-server"
     system formula_opt_bin("python@3.14")/"python3.14",
            pkgshare/"tests/control-panel-integration.py", "--files"
+    system formula_opt_bin("python@3.14")/"python3.14",
+           pkgshare/"tests/control-panel-integration.py", "--udp-relay"
   end
 end

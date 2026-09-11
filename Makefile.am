@@ -11,6 +11,7 @@ SUBDIRS = scripts src man conf
 EXTRA_DIST = autogen.sh ocb-license.html README.md COPYING.iOS SIXEL_STATE.md
 EXTRA_DIST += GOBLIN_DOWNLOAD_PROTOCOL.md
 EXTRA_DIST += AUDIO.md THIRD_PARTY.md
+EXTRA_DIST += UDP_RELAY.md
 EXTRA_DIST += build-package.sh build-source-package.sh
 EXTRA_DIST += packaging/check-prebuilt-fec.sh
 EXTRA_DIST += debian/control debian/rules debian/changelog debian/copyright debian/docs debian/source/format

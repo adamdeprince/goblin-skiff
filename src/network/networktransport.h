@@ -98,6 +98,8 @@ public:
                      std::max( connection.feedback_wait_time(), connection.pacing_wait_time( true ) ) );
   }
   void enable_link_budget( bool enabled ) { connection.enable_link_budget( enabled ); }
+  void set_relay_hops( unsigned hops ) { connection.set_relay_hops( hops ); }
+  void set_relay_keys( const std::string& keys ) { connection.set_relay_keys( keys ); }
   const LinkBudget& link_budget() const { return connection.link_budget(); }
   int bulk_wait_time() { return connection.pacing_wait_time(); }
   bool has_unsent_data( void ) const { return sender.has_unsent_data(); }

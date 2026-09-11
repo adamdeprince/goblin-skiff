@@ -31,6 +31,7 @@ class LinkBudget
   uint64_t last_report_sent = 0;
   uint64_t report_ack = 0, report_mask = 0;
   bool have_report = false;
+  unsigned feedback_packet_size = 128;
 
   static void put( std::string& out, uint64_t n, unsigned bytes )
   { for ( int shift = int( bytes * 8 ) - 8; shift >= 0; shift -= 8 ) { out += char( n >> shift ); } }
@@ -45,6 +46,7 @@ class LinkBudget
 
 public:
   void enable( bool value ) { enabled = value; }
+  void set_feedback_packet_size( unsigned bytes ) { feedback_packet_size = std::max( 128u, bytes ); }
   bool active() const { return enabled; }
   double budget() const { return rate; }
   double remote_budget() const { return peer_rate; }
@@ -127,9 +129,9 @@ public:
     if ( !enabled || !report_pending ) { return INT_MAX; }
     // Fast forward traffic must not turn feedback into a flood on a slow
     // reverse path or starve keyboard/SST ACKs. Reserve at most a quarter
-    // of this direction's budget (128 wire bytes per report, conservatively).
+    // of this direction's budget, including any outer jump-relay envelopes.
     const uint64_t due = std::max( report_due, last_report_sent
-      ? last_report_sent + uint64_t( std::ceil( 512000 / rate ) ) : 0 );
+      ? last_report_sent + uint64_t( std::ceil( 4000.0 * feedback_packet_size / rate ) ) : 0 );
     return now >= due ? 0 : int( std::min<uint64_t>( INT_MAX, due - now ) );
   }
 

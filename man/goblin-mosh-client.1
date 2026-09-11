@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH-CLIENT 1 "February 2012"
+.TH GOBLIN-MOSH-CLIENT 1 "September 11, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -34,7 +34,6 @@ IP PORT
 .br
 .B goblin-mosh-client
 \-c
-.br
 .SH DESCRIPTION
 \fBgoblin-mosh-client\fP is a helper program for the
 .BR goblin-mosh (1)
@@ -56,7 +55,8 @@ For constructing new setup wrappers for remote execution facilities
 other than SSH, it may be necessary to invoke \fBgoblin-mosh-client\fP
 directly.
 
-With the \-c option, \fBgoblin-mosh-client\fP instead prints the number of colors
+With the \-c option, \fBgoblin-mosh-client\fP instead prints the number of
+colors
 of the terminal given by the TERM environment variable.
 
 The \-v option will print some debugging information on standard
@@ -65,6 +65,16 @@ information.  If standard error is not redirected from the terminal,
 the display will be corrupted and quickly become unusable.
 
 .SH OPTIONS
+.TP
+.B \-\-udp\-relay
+Use the comma-separated independent relay keys in MOSH_RELAY_KEYS, ordered
+nearest-to-farthest (one to four hops). IP and PORT name the first relay;
+MOSH_KEY remains the final destination's key. The client consumes and unsets
+the key environment variables. This option is normally supplied by the
+wrapper's \-J/ProxyJump setup, not invoked manually. It can be combined with
+\-c to preflight support. With \-\-fips-crypto every outer layer also uses
+the configured FIPS provider; no fallback is allowed.
+
 .TP
 .B \-\-no\-kitty, \-\-no\-sixel
 Disable the named local graphics protocol, including its startup mascot
@@ -167,7 +177,8 @@ Only log received state samples at least this large. The default is 0.
 
 .TP
 .B MOSH_KEY
-This variable must be set, and must contain a Base64-encoded cryptographic key from
+This variable must be set, and must contain a Base64-encoded cryptographic
+key from
 .BR goblin-mosh-server (1).
 
 .TP
@@ -237,7 +248,6 @@ Default minimum serialized state sample size to log. See
 Project home page:
 .I https://mosh.org
 
-.br
 .SH AUTHOR
 mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS

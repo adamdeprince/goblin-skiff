@@ -56,6 +56,7 @@ class Relay:
         self.dropped = 0
         self.loss = not fast
         self.fast = fast
+        self.max_packet = [0, 0]
 
     def run(self):
         pending = []
@@ -64,6 +65,8 @@ class Relay:
             readable, _, _ = select.select([self.socket], [], [], 0.01)
             if readable:
                 data, origin = self.socket.recvfrom(65535)
+                side = int(origin == self.server)
+                self.max_packet[side] = max(self.max_packet[side], len(data))
                 if origin == self.server:
                     destination = self.client
                 else:
@@ -91,7 +94,7 @@ def children(pid):
     return {int(child) for child, parent in map(str.split, output.splitlines()) if int(parent) == pid}
 
 
-def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, confirm=False):
+def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, confirm=False, udp_hops=0):
     build = Path.cwd()
     client = os.environ.get("GOBLIN_TEST_CLIENT", str((build / "../frontend/goblin-mosh-client").resolve()))
     server = os.environ.get("GOBLIN_TEST_SERVER", str((build / "../frontend/goblin-mosh-server").resolve()))
@@ -129,6 +132,9 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 env["GOBLIN_PANEL_LINK_TEST"] = "1"
         if file_sync:
             env["MOSH_CLIENT_CAPS"] += ",file-sync-v1"
+        if udp_hops:
+            env["MOSH_RELAY_HOPS"] = str(udp_hops)
+            env["MOSH_CLIENT_CAPS"] += ",udp-relay-v1"
         bootstrap = subprocess.run([server, "new", "-i", "127.0.0.1", "-c", "256", "--",
                                     sys.executable, str(Path(__file__).resolve()), "--remote"],
                                    stdin=subprocess.DEVNULL, capture_output=True, cwd=root, env=env, timeout=10)
@@ -142,14 +148,29 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
             os.kill(server_pid, signal.SIGTERM)
             print("SKIP: file-menu synchronization not enabled in this build")
             raise SystemExit(77)
-        relay = Relay(int(match[1]), fast=speed)
+        jump_processes, jump_keys = [], []
+        port = int(match[1])
+        if udp_hops:
+            assert ("MOSH RELAY-MTU 1 %d" % udp_hops).encode() in bootstrap.stdout
+            for _ in range(udp_hops):
+                jump = subprocess.Popen([server, "relay", "--foreground", "--bind=127.0.0.1", "--port=0",
+                                         "--startup-timeout=10", "--idle-timeout=20", "127.0.0.1", str(port)],
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                jump_processes.append(jump)
+                assert select.select([jump.stdout], [], [], 5)[0], "relay bootstrap timed out"
+                banner = jump.stdout.readline().split()
+                assert banner[:4] == [b"MOSH", b"RELAY", b"1", b"ocb-aes128"], banner[:4]
+                port = int(banner[5])
+                jump_keys.insert(0, banner[6].decode())
+            env["MOSH_RELAY_KEYS"] = ",".join(jump_keys)
+        relay = Relay(port, fast=speed)
         env.update(MOSH_KEY=match[2].decode(), MOSH_DIRECTORY="2", MOSH_COMPACT_KEEPALIVE="1",
                    MOSH_FILES="1" if file_sync else "0",
                    MOSH_LINK_BUDGET="1" if adaptive else "0",
                    MOSH_MASCOT="none", MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 800, 480))
-        proc = subprocess.Popen([client, "127.0.0.1", str(relay.socket.getsockname()[1])],
+        proc = subprocess.Popen([client] + (["--udp-relay"] if udp_hops else []) + ["127.0.0.1", str(relay.socket.getsockname()[1])],
                                 cwd=local, env=env, stdin=slave, stdout=slave, stderr=slave,
                                 start_new_session=True,
                                 preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
@@ -278,6 +299,12 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 proc.wait(timeout=5)
                 collect(0.2)
                 assert proc.returncode == 0, ("file-menu shutdown", proc.returncode, output[-3000:])
+                for jump in jump_processes:
+                    assert jump.wait(timeout=5) == 0, "relay did not close after client exit"
+                if udp_hops:
+                    # Adaptive pacing may deliberately use smaller datagrams.
+                    # Full-MTU framing is exercised separately by udp-relay.
+                    assert all(0 < size <= 1216 for size in relay.max_packet), ("relay MTU", relay.max_packet)
                 print("PASS: file-menu direct Enter/Shift-Tab/Kitty keys, paste safety, recursive delta upload/download, encrypted UDP, live keyboard and persistent queue", flush=True)
                 return
             if adaptive:
@@ -399,6 +426,11 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                     proc.kill()
                     proc.wait(timeout=5)
             relay.close()
+            for jump in jump_processes:
+                if jump.poll() is None:
+                    jump.terminate()
+                jump.wait(timeout=5)
+                jump.stdout.close()
             try:
                 os.kill(server_pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -412,6 +444,9 @@ if __name__ == "__main__":
         integration("\x02", adaptive=True)
     elif sys.argv[1:] == ["--files"]:
         integration(file_sync=True, adaptive=True)
+    elif sys.argv[1:] == ["--udp-relay"]:
+        integration("\x02", adaptive=True, udp_hops=1)
+        integration(file_sync=True, adaptive=True, udp_hops=4)
     elif sys.argv[1:] in (["--file-speed"], ["--file-speed-confirm"]):
         integration(file_sync=True, adaptive=True, speed=True, confirm=sys.argv[1].endswith("-confirm"))
     else:

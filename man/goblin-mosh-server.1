@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH-SERVER 1 "October 2012"
+.TH GOBLIN-MOSH-SERVER 1 "September 11, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -33,6 +33,11 @@ new
 [\-\-fips\-crypto]
 [\-\- command...]
 .br
+.B goblin-mosh-server relay
+[\-\-bind=\fIIP\fP]
+[\-\-port=\fIPORT[:PORT2]\fP]
+[\-\-fips\-crypto]
+\fITARGET_IP TARGET_PORT\fP
 .SH DESCRIPTION
 \fBgoblin-mosh-server\fP is a helper program for the
 .BR mosh(1)
@@ -42,7 +47,7 @@ remote terminal application.
 key to protect the session. It prints both on standard output,
 detaches from the terminal, and waits for the \fBgoblin-mosh-client\fP to
 establish a connection. It will exit if no client has contacted
-it within 60 seconds.
+it within 60 seconds (ten minutes for negotiated UDP relay setup).
 
 By default, \fBgoblin-mosh-server\fP binds to a port between 60000 and
 61000 and executes the user's login shell.
@@ -54,6 +59,31 @@ file to indicate its process ID, whether the session is connected,
 and the client's current IP address.
 
 \fBgoblin-mosh-server\fP exits when the client terminates the connection.
+
+.SH UDP RELAY
+The \fBrelay\fP subcommand is normally launched by goblin-mosh's \-J option
+over SSH. It binds an unprivileged UDP socket, generates an independent
+authentication key, prints \fBMOSH RELAY 1 SUITE BIND_IP PORT KEY\fP, detaches,
+and relays only authenticated packets to a single fixed numeric destination.
+It does not receive the terminal session key or run a remote terminal.
+
+\fB\-\-bind=IP\fP defaults to the incoming SSH interface from SSH_CONNECTION.
+\fB\-\-port=PORT[:PORT2]\fP defaults to 60001:60999.
+\fB\-\-fips-crypto\fP requires the OpenSSL FIPS provider for the outer layer.
+\fB\-\-check\fP prints protocol/suite support and exits without opening sockets.
+\fB\-\-foreground\fP keeps the helper attached for diagnostics.
+
+\fB\-\-startup-timeout=SECONDS\fP defaults to 600 (maximum 3600).
+\fB\-\-idle-timeout=SECONDS\fP defaults to 86400 (1800 through 604800;
+foreground diagnostics also allow shorter values).
+Only a newer authenticated client packet renews the lease or changes its
+return address. An authenticated empty inner payload closes the relay.
+No relay heartbeats or unbounded application queues are used.
+
+The destination server consumes \fBMOSH_RELAY_HOPS\fP (1 through 4) during
+setup and acknowledges it with \fBMOSH RELAY-MTU 1 N\fP. It reserves 24 bytes
+per hop (36 in FIPS mode) below the conservative 1216-byte outer datagram MTU.
+Use the wrapper to arrange consistent keys, mode and MTU at both ends.
 
 .SH OPTIONS
 
@@ -137,7 +167,8 @@ effect.
 .TP
 .B MOSH_SERVER_NETWORK_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBgoblin-mosh-server\fP will wait to receive an update from the
+long (in seconds) \fBgoblin-mosh-server\fP will wait to receive an update from
+the
 client before exiting.  Since \fPmosh\fP is very useful for mobile
 clients with intermittent operation and connectivity, we suggest
 setting this variable to a high value, such as 604800 (one week) or
@@ -225,7 +256,6 @@ goblin-mosh-server (mosh 1.1)
 Project home page:
 .I https://mosh.org
 
-.br
 .SH AUTHOR
 mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS

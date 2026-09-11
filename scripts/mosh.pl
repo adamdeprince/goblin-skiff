@@ -80,6 +80,12 @@ my $family = 'prefer-inet';
 my $port_request = undef;
 
 my @ssh = ('ssh');
+my $jump = undef;
+my @jumps;
+my @jump_ssh;
+my $jump_server = 'goblin-mosh-server';
+my $jump_port = undef;
+my $jump_idle_timeout = 86400;
 my @local_forwards;
 my @remote_forwards;
 my @dynamic_forwards;
@@ -146,6 +152,14 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 -R [BIND:]PORT:HOST:HOSTPORT
                             forward a remote TCP port to the local side
 -D [BIND:]PORT             open a local SOCKS5 dynamic forward
+-J [USER@]HOST[:PORT][,...]
+        --jump=HOSTS       relay the Mosh UDP session through 1-4 jump hosts
+                                (also discovers OpenSSH ProxyJump configuration)
+        --jump-server=COMMAND   server command on each jump host
+                                (default: "goblin-mosh-server")
+        --jump-port=PORT[:PORT2] UDP listener range on each jump (default: 60001:60999)
+        --jump-idle-timeout=SEC  relay lease without authenticated client traffic
+                                (default: 86400; range: 1800..604800)
 -A                         forward the local SSH authentication agent
 -X                         forward X11 connections
         --fips-crypto      require the OpenSSL FIPS provider and use AES-128-GCM
@@ -232,6 +246,10 @@ GetOptions( 'client=s' => \$client,
 	    'L=s@' => \@local_forwards,
 	    'R=s@' => \@remote_forwards,
 	    'D=s@' => \@dynamic_forwards,
+	    'jump|J=s' => \$jump,
+	    'jump-server=s' => \$jump_server,
+	    'jump-port=s' => \$jump_port,
+	    'jump-idle-timeout=s' => \$jump_idle_timeout,
 	    'A' => \$agent_forwarding,
 	    'X' => \$x11_forwarding,
 	    'fips-crypto' => \$fips_crypto,
@@ -353,6 +371,8 @@ delete $ENV{ 'MOSH_PREDICTION_DISPLAY' };
 delete $ENV{ 'MOSH_COMPACT_KEEPALIVE' };
 delete $ENV{ 'MOSH_LINK_BUDGET' };
 delete $ENV{ 'MOSH_NO_TERM_INIT' };
+delete $ENV{ 'MOSH_RELAY_KEYS' };
+delete $ENV{ 'MOSH_RELAY_HOPS' };
 
 my $userhost;
 my @command;
@@ -429,10 +449,57 @@ if ( ! defined $fake_proxy ) {
   exit;
 }
 
+# Let OpenSSH evaluate Host/Match rules, including -J inside --ssh. Do not
+# install our legacy ProxyCommand when SSH selected a jump route.
+die "$0: --jump cannot be used with --local.\n" if defined $jump && $localhost;
+die "$0: --jump-idle-timeout must be 1800..604800 seconds.\n"
+  unless $jump_idle_timeout =~ /\A[0-9]+\z/ && $jump_idle_timeout >= 1800 && $jump_idle_timeout <= 604800;
+if ( defined $jump_port ) {
+  die "$0: invalid --jump-port.\n"
+    unless $jump_port =~ /\A([0-9]+)(?::([0-9]+))?\z/
+      && $1 <= 65535 && ( !defined $2 || ( $1 > 0 && $2 >= $1 && $2 <= 65535 ) );
+}
+if ( !$localhost ) {
+  push @ssh, ( '-J', $jump ) if defined $jump;
+  my %configuration = ssh_configuration( @ssh, '-G', '-T', $userhost );
+  $jump = $configuration{proxyjump} if defined $configuration{proxyjump};
+  if ( defined $jump && lc( $jump ) ne 'none' ) {
+    @jumps = split /,/, $jump, -1;
+    die "$0: UDP jump routes support one to four hosts.\n" unless @jumps >= 1 && @jumps <= 4;
+    parse_jump( $_ ) for @jumps;
+    $use_remote_ip = 'remote'; # target names may resolve only behind the jump
+    # Like OpenSSH -J, use per-host SSH configuration for jump credentials and
+    # ports, not destination-specific -l/-p/-i options. Carry -F to the hops.
+    @jump_ssh = ( $ssh[0] );
+    for ( my $i = 1; $i < @ssh; ++$i ) {
+      if ( $ssh[$i] eq '-F' ) {
+        die "$0: missing -F argument in --ssh.\n" if ++$i >= @ssh;
+        push @jump_ssh, ( '-F', $ssh[$i] );
+      } elsif ( $ssh[$i] =~ /\A-F(.+)/ ) { push @jump_ssh, $ssh[$i]; }
+    }
+    # OpenSSH also permits the first jump alias to have its own ProxyJump.
+    # Expand that prefix so the UDP path follows the complete SSH route.
+    my %expanded;
+    while ( 1 ) {
+      die "$0: cyclic ProxyJump configuration.\n" if $expanded{$jumps[0]}++;
+      my ( $first_host, $first_port ) = parse_jump( $jumps[0] );
+      my @query = ( @jump_ssh, '-G', '-T' );
+      push @query, ( '-p', $first_port ) if defined $first_port;
+      my %first = ssh_configuration( @query, $first_host );
+      last unless defined $first{proxyjump} && lc( $first{proxyjump} ) ne 'none';
+      my @prefix = split /,/, $first{proxyjump}, -1;
+      parse_jump( $_ ) for @prefix;
+      unshift @jumps, @prefix;
+      die "$0: UDP jump routes support at most four hosts, including nested ProxyJump settings.\n" if @jumps > 4;
+    }
+  }
+}
+
 # Count colors and, in FIPS mode, fail before starting anything remotely if
 # the local client cannot initialize its configured provider.
 my @colorcount_args = $fips_crypto ? ( '--fips-crypto', '-c' ) : ( '-c' );
 unshift @colorcount_args, '--tmux-control' if $tmux_control;
+unshift @colorcount_args, '--udp-relay' if @jumps;
 open COLORCOUNT, '-|', $client, @colorcount_args or die "Can't count colors: $!\n";
 my $colors = "";
 {
@@ -569,6 +636,7 @@ if ( $pid == 0 ) { # child
   my $server_sixel_state = 0;
   my $server_clipboard = 0;
   my $server_downloads = 0;
+  my $server_relay_hops = 0;
   my $bad_udp_port_warning = 0;
   LINE: while ( <$pipe> ) {
     chomp;
@@ -599,6 +667,9 @@ if ( $pid == 0 ) { # child
     } elsif ( m{^MOSH DOWNLOADS } ) {
       die "Bad MOSH DOWNLOADS string: $_\n" unless m{^MOSH DOWNLOADS goblin-download-v2\s*$};
       $server_downloads = 1;
+    } elsif ( m{^MOSH RELAY-MTU } ) {
+      die "Bad MOSH RELAY-MTU string.\n" unless m{^MOSH RELAY-MTU 1 ([1-4])\s*$};
+      $server_relay_hops = $1;
     } elsif ( m{^MOSH LINK } ) {
       die "Bad MOSH LINK string: $_\n" unless m{^MOSH LINK budget-v1\s*$};
       $server_link_budget = 1;
@@ -655,6 +726,23 @@ if ( $pid == 0 ) { # child
     die "$0: remote server selected a crypto suite that was not requested.\n";
   }
 
+  if ( $server_relay_hops != scalar @jumps ) {
+    die "$0: destination did not confirm the UDP relay MTU budget; update goblin-mosh-server.\n";
+  }
+  if ( @jumps ) {
+    # An explicit bind address supersedes the SSH interface on a multihomed
+    # destination. Relays resolve no destination names and cannot be retargeted.
+    $ip = $bind_ip if defined $bind_ip && $bind_ip !~ /\A(?:ssh|any)\z/i;
+    my @keys;
+    for ( my $hop = $#jumps; $hop >= 0; --$hop ) {
+      my ( $relay_ip, $relay_port, $relay_key ) = start_udp_relay( $hop, $ip, $port );
+      ( $ip, $port ) = ( $relay_ip, $relay_port );
+      unshift @keys, $relay_key;
+    }
+    $ENV{ 'MOSH_RELAY_KEYS' } = join ',', @keys;
+    warn "$0: Mosh UDP route: " . join( ' -> ', @jumps, $userhost ) . "\n";
+  }
+
   # Now start real goblin-mosh client
   if ( $tmux_control != $server_tmux_control ) {
     die "$0: remote server did not negotiate the requested tmux control mode.\n";
@@ -694,6 +782,7 @@ if ( $pid == 0 ) { # child
   push @client_crypto, '--tmux-control' if $tmux_control;
   push @client_crypto, '--no-kitty' if $no_kitty;
   push @client_crypto, '--no-sixel' if $no_sixel;
+  push @client_crypto, '--udp-relay' if @jumps;
   exec {$client} ("$client", "-# @cmdline |", @client_crypto, @client_forwarding, $ip, $port);
 }
 
@@ -702,6 +791,75 @@ sub shell_quote { join ' ', map {(my $a = $_) =~ s/'/'\\''/g; "'$a'"} @_ }
 sub shell_assign {
   my ( $name, $value ) = @_;
   return $name . "=" . shell_quote( $value );
+}
+
+sub ssh_configuration {
+  my @args = @_;
+  open my $config, '-|', @args or die "$0: cannot inspect SSH configuration: $!\n";
+  my %values;
+  while ( <$config> ) {
+    if ( /\A(hostname|proxyjump)\s+(.+?)\s*\z/i ) { $values{lc $1} = $2; }
+  }
+  close $config or die "$0: SSH configuration lookup failed (--ssh must support OpenSSH -G).\n";
+  die "$0: SSH did not return its configuration (--ssh must support OpenSSH -G).\n" unless $values{hostname};
+  return %values;
+}
+
+sub parse_jump {
+  my ( $spec ) = @_;
+  my ( $user, $ipv6, $host, $port ) = $spec =~
+    /\A(?:([A-Za-z0-9_.-]+)\@)?(?:\[([A-Fa-f0-9:.%a-zA-Z_-]+)\]|([A-Za-z0-9_][A-Za-z0-9_.-]*))(?::([0-9]+))?\z/;
+  die "$0: invalid jump host '$spec'; use [user\@]host[:port] (bracket IPv6).\n"
+    unless defined $host || defined $ipv6;
+  die "$0: invalid jump SSH port.\n" if defined $port && ( $port < 1 || $port > 65535 );
+  return ( ( defined $user ? "$user\@" : '' ) . ( defined $ipv6 ? $ipv6 : $host ), $port );
+}
+
+sub start_udp_relay {
+  my ( $hop, $target_ip, $target_port ) = @_;
+  my ( $host, $ssh_port ) = parse_jump( $jumps[$hop] );
+  my @args = ( @jump_ssh, '-n', '-T', '-S', 'none', '-o', 'ControlMaster=no', '-o', 'ClearAllForwardings=yes' );
+  push @args, ( '-p', $ssh_port ) if defined $ssh_port;
+  if ( $hop ) {
+    push @args, ( '-J', join( ',', @jumps[0 .. $hop - 1] ) );
+    push @args, '-4' if $family eq 'inet';
+    push @args, '-6' if $family eq 'inet6';
+  } else {
+    # Capture the address actually used by SSH, honoring HostName and address
+    # family selection. The SSH-facing interface may be private behind NAT.
+    my $proxy = shell_quote( $0, "--family=$family" );
+    push @args, ( '-o', "ProxyCommand=$proxy --fake-proxy -- %h %p" );
+  }
+  my @relay = ( 'relay', "--idle-timeout=$jump_idle_timeout" );
+  push @relay, '--fips-crypto' if $fips_crypto;
+  push @relay, "--port=$jump_port" if defined $jump_port;
+  push @relay, '--', $target_ip, $target_port;
+  push @args, $host, '--', $jump_server . ' ' . shell_quote( @relay );
+  my $pid = open( my $relay, '-|' );
+  die "$0: relay fork: $!\n" unless defined $pid;
+  if ( !$pid ) {
+    open STDERR, '>&STDOUT' or die;
+    $ENV{SHELL} = '/bin/sh' if !$hop;
+    exec @args;
+    die "$0: cannot start jump SSH: $!\n";
+  }
+  my ( $external_ip, $ip, $port, $key );
+  my $suite = $fips_crypto ? 'aes128-gcm-v1' : 'ocb-aes128';
+  while ( <$relay> ) {
+    if ( /\AMOSH IP (\S+)\s*\z/ ) {
+      die "$0: duplicate jump IP.\n" if defined $external_ip;
+      $external_ip = $1;
+    } elsif ( /\AMOSH RELAY / ) {
+      die "$0: jump $jumps[$hop] returned an invalid relay handshake.\n"
+        if defined $key || !/\AMOSH RELAY 1 \Q$suite\E (\S+) ([0-9]+) ([A-Za-z0-9\/+]{22})\s*\z/;
+      ( $ip, $port, $key ) = ( $1, $2, $3 );
+      die "$0: invalid jump UDP port.\n" if $port < 1 || $port > 65535;
+    } else { print; }
+  }
+  close $relay or die "$0: jump $jumps[$hop] failed to start its UDP relay.\n";
+  die "$0: jump $jumps[$hop] needs an updated goblin-mosh-server with UDP relay support.\n" unless defined $key;
+  die "$0: could not discover the client-facing jump IP.\n" if !$hop && !defined $external_ip;
+  return ( $hop ? $ip : $external_ip, $port, $key );
 }
 
 sub upload_state_dictionary {
@@ -772,6 +930,8 @@ sub server_environment_prefix {
   push @client_capabilities, "goblin-download-v2" unless $no_downloads;
   push @client_capabilities, "fips-aes128-gcm-v1" if $fips_crypto;
   push @client_capabilities, "tmux-control-v1" if $tmux_control;
+  push @client_capabilities, "udp-relay-v1" if @jumps;
+  push @assignments, shell_assign( "MOSH_RELAY_HOPS", scalar @jumps ) if @jumps;
   push @assignments, shell_assign( "MOSH_CLIENT_CAPS", join( ',', @client_capabilities ) );
   push @assignments, shell_assign( "MOSH_CLIENT_TERM", $client_term ) if defined $client_term and length $client_term;
   push @assignments, shell_assign( "MOSH_STREAM_DELAY", $stream_delay ) if defined $stream_delay;

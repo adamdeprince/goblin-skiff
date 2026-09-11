@@ -32,8 +32,9 @@ export XDG_RUNTIME_DIR=/build/installed-runtime
 export GOBLIN_TEST_CLIENT=/usr/bin/goblin-mosh-client GOBLIN_TEST_SERVER=/usr/bin/goblin-mosh-server
 cd src/tests
 python3 control-panel-integration.py --files > /out/installed-transfer.log 2>&1
+python3 control-panel-integration.py --udp-relay > /out/installed-relay.log 2>&1
 cp /build/*.deb /build/*.dsc /build/*.tar.xz /build/*.buildinfo /build/*.changes /out/
 cp test-suite.log /out/unit-tests.log
 dpkg-deb --info "$goblin_deb" > /out/package-info.txt
 dpkg-query -W > /out/build-packages.txt
-printf 'Package and installed transfer test passed: %s\n' "$goblin_version"
+printf 'Package and installed transfer/UDP-relay tests passed: %s\n' "$goblin_version"

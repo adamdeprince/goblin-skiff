@@ -13,7 +13,7 @@ goblin_save_logs() {
         -exec cp '{}' /out/unit-tests.log \;
 }
 trap goblin_save_logs EXIT
-cp /tmp/goblin-snapshot.tar.gz /build/rpmbuild/SOURCES/goblin-mosh-1.4.0-goblin20260909.1.tar.gz
+cp /tmp/goblin-snapshot.tar.gz /build/rpmbuild/SOURCES/goblin-mosh-1.4.0-goblin20260911.1.tar.gz
 cp /tmp/goblin-mosh.spec /build/rpmbuild/SPECS/goblin-mosh.spec
 rpmbuild -ba --noclean --define '_topdir /build/rpmbuild' --define '_smp_mflags -j12' \
     /build/rpmbuild/SPECS/goblin-mosh.spec
@@ -33,8 +33,9 @@ test "$(printf '%s\n' "$goblin_integration" | wc -l)" -eq 1
 cd "$(dirname "$goblin_integration")"
 sh ../../packaging/check-prebuilt-fec.sh /usr/bin/goblin-moshcp > /out/prebuilt-fec.log 2>&1
 python3 "$goblin_integration" --files > /out/installed-transfer.log 2>&1
+python3 "$goblin_integration" --udp-relay > /out/installed-relay.log 2>&1
 cp "$goblin_rpm" /build/rpmbuild/SRPMS/goblin-mosh-*.src.rpm /out/
 rpm -qip "$goblin_rpm" > /out/package-info.txt
 rpm -qpR "$goblin_rpm" > /out/package-requires.txt
 rpm -qa | sort > /out/build-packages.txt
-printf 'Package and installed transfer test passed: %s\n' "$goblin_suite"
+printf 'Package and installed transfer/UDP-relay tests passed: %s\n' "$goblin_suite"

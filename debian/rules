@@ -39,7 +39,7 @@ override_dh_auto_build:
 override_dh_auto_test:
 	mkdir -p debian/test-runtime
 	chmod 700 debian/test-runtime
-	XDG_RUNTIME_DIR=$(CURDIR)/debian/test-runtime dh_auto_test -- TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward'
+	XDG_RUNTIME_DIR=$(CURDIR)/debian/test-runtime dh_auto_test -- TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward udp-relay udp-jump-wrapper.test'
 
 override_dh_strip:
 	dh_strip --no-automatic-dbgsym

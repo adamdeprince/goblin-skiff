@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH 1 "April 2013"
+.TH GOBLIN-MOSH 1 "September 11, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -23,7 +23,6 @@ goblin-mosh \- mobile shell with roaming and intelligent local echo
 [--]
 [user@]host
 [command...]
-.br
 .SH DESCRIPTION
 \fBmosh\fP (mobile shell) is a remote terminal application that
 supports intermittent connectivity, allows roaming, and provides
@@ -37,7 +36,8 @@ without waiting for a network round-trip.
 
 \fBmosh\fP uses \fBssh\fP to establish a connection to the remote host
 and authenticate with existing means (e.g., public-key authentication
-or a password). \fBgoblin-mosh\fP executes the unprivileged \fBgoblin-mosh-server\fP
+or a password). \fBgoblin-mosh\fP executes the unprivileged
+\fBgoblin-mosh-server\fP
 helper program on the server, then closes the SSH connection and
 starts the \fBgoblin-mosh-client\fP, which establishes a long-lived datagram
 connection over UDP.
@@ -88,6 +88,49 @@ apply the locale-related environment variables from the client and try
 again.
 
 .SH OPTIONS
+.TP
+.B \-J \fI[user@]host[:port][,...]\fP, \-\-jump=\fIHOSTS\fP
+Route both SSH setup and the encrypted Mosh UDP session through one to four
+jump hosts. OpenSSH ProxyJump configuration (including nested first-hop
+aliases and \-J in \-\-ssh) is also discovered. The updated goblin-mosh-server
+must be installed on every jump and the destination. The client requires UDP
+reachability only to the first jump; each jump must reach the next over UDP.
+No SSH connection remains in the data path. This is not arbitrary UDP port
+forwarding; \-L/\-R and SOCKS5 \-D remain TCP-only.
+
+Use each jump's SSH Host configuration for its credentials and ports, or
+specify user/port in the jump list. Bracket IPv6 addresses. The \-F file from
+\-\-ssh is carried to jump connections; destination-specific \-i/\-l/\-p
+options are not. Custom \-\-ssh commands must support OpenSSH \-G.
+Arbitrary ProxyCommand programs are not translated to UDP relay routes.
+
+Each relay uses an independent authentication key and sees only the inner
+encrypted Mosh packets, not the terminal session key. Client address changes
+are accepted only after a newer authenticated packet. Outer framing adds
+24 bytes per hop, or 36 bytes with \-\-fips-crypto; both endpoints budget for
+this overhead. FIPS mode must be available on every jump too.
+
+.TP
+.B \-\-jump\-server=\fICOMMAND\fP
+Server command on all jump hosts (default: goblin-mosh-server).
+Separate from \-\-server on the final destination.
+
+.TP
+.B \-\-jump\-port=\fIPORT[:PORT2]\fP
+UDP listener range on all jumps (default: 60001:60999). The existing \-p
+still selects the final destination's UDP port. Each relay binds the incoming
+SSH interface. For a jump behind NAT, forward the selected UDP port without
+changing its number. Port zero requests an OS-assigned port.
+
+.TP
+.B \-\-jump\-idle\-timeout=\fISECONDS\fP
+Expire a relay after this much authenticated client silence (default: 86400,
+allowed range: 1800 through 604800). Normal keepalives traverse the relay;
+there is no additional periodic heartbeat. Normal client exit sends
+best-effort authenticated closes. Lost closes are bounded by the idle lease.
+Unused relays and relay-mode destination setup expire after ten minutes.
+Reconnecting after relay expiry requires a new session.
+
 .TP
 .B \-\-no\-kitty, \-\-no\-sixel
 Treat the named graphics protocol as unsupported by the local terminal.
@@ -192,7 +235,8 @@ operating environment, and operational controls must be assessed separately.
 
 .TP
 .B \-\-ssh=\fICOMMAND\fP
-OpenSSH command to remotely execute goblin-mosh-server on remote machine (default: "ssh")
+OpenSSH command to remotely execute goblin-mosh-server on the remote machine
+(default: "ssh")
 
 An alternate ssh port can be specified with, \fIe.g.\fP, \-\-ssh="ssh \-p 2222".
 
@@ -533,13 +577,15 @@ from destination to source, then deltas travel back. Both directions use
 zstd-22 and the background FEC lane, with interactive acknowledgments.
 Large deltas fall back to sending the complete file. Reconstructed files
 are SHA-256 verified before atomic publication. Detected concurrent changes
-to an existing destination fail the transfer; new-file collisions never overwrite.
+to an existing destination fail the transfer; new-file collisions never
+overwrite.
 Folder copies merge recursively, including empty directories. They never
 delete extra destination files. Symlinks and special files are rejected.
 Regular-file permissions (not special bits) are copied; timestamps, ownership,
 directory modes and hard-link relationships are not preserved.
 The popup shows progress and up to eight waiting jobs. x cancels the active
-job and queue, keeping completed files. Hiding/reopening the popup or a temporary
+job and queue, keeping completed files. Hiding/reopening the popup or a
+temporary
 disconnect preserves transfer state; exiting the session does not.
 Unsent data is discarded on cancel; the bounded in-flight FEC window can
 still drain before another job starts.
@@ -635,7 +681,6 @@ for details.
 Project home page:
 .I https://mosh.org
 
-.br
 .SH AUTHOR
 mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS

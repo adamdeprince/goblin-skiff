@@ -2,11 +2,11 @@
 
 Name:           goblin-mosh
 Version:        1.4.0
-Release:        20260909.1%{?dist}
+Release:        20260911.1%{?dist}
 Summary:        Mobile shell optimized for low-bandwidth links
 License:        GPL-3.0-or-later AND ISC
 URL:            https://mosh.goblinreactor.com/
-Source0:        goblin-mosh-1.4.0-goblin20260909.1.tar.gz
+Source0:        goblin-mosh-1.4.0-goblin20260911.1.tar.gz
 
 # Preserve the source-file OpenSSL linking exceptions and all upstream notices.
 BuildRequires:  gcc-c++, make, autoconf, automake, pkgconf-pkg-config
@@ -43,7 +43,7 @@ sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-moshcp
 %check
 mkdir -m 700 package-test-runtime
 XDG_RUNTIME_DIR="$PWD/package-test-runtime" %make_build check \
-    TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward'
+    TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward udp-relay udp-jump-wrapper.test'
 
 %install
 %make_install
@@ -51,7 +51,7 @@ XDG_RUNTIME_DIR="$PWD/package-test-runtime" %make_build check \
 # the shared data directory explicitly instead of the legacy /etc fallback.
 install -D -m 0644 conf/bash-completion/completions/goblin-mosh \
     %{buildroot}%{_datadir}/bash-completion/completions/goblin-mosh
-install -m 0644 README.md GOBLIN_DOWNLOAD_PROTOCOL.md SIXEL_STATE.md AUDIO.md \
+install -m 0644 README.md GOBLIN_DOWNLOAD_PROTOCOL.md SIXEL_STATE.md AUDIO.md UDP_RELAY.md \
     debian/copyright %{buildroot}%{_docdir}/%{name}/
 
 %files
@@ -66,6 +66,10 @@ install -m 0644 README.md GOBLIN_DOWNLOAD_PROTOCOL.md SIXEL_STATE.md AUDIO.md \
 %{_docdir}/%{name}/
 
 %changelog
+* Fri Sep 11 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260911.1
+- Carry session UDP traffic through authenticated, independently keyed jump relays.
+- Test installed four-hop transfers and keep prebuilt binaries RaptorQ-free.
+
 * Wed Sep 09 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260909.1
 - Package Goblin Mosh with matching source and native system dependencies.
 - Include the file-transfer scheduler and bounded download-consent test fixes.

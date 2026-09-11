@@ -21,7 +21,7 @@ libmoshcontrol_a_SOURCES += downloadforward.cc downloadforward.h
 libmoshcontrol_a_SOURCES += filetransfer.cc filetransfer.h
 libmoshmascot_a_SOURCES = mascot.cc mascot.h
 goblin_mosh_client_SOURCES = mosh-client.cc stmclient.cc stmclient.h streamforward.cc streamforward.h terminaloverlay.cc terminaloverlay.h
-goblin_mosh_server_SOURCES = mosh-server.cc streamforward.cc streamforward.h
+goblin_mosh_server_SOURCES = mosh-server.cc streamforward.cc streamforward.h relay-server.cc relay-server.h
 goblin_mosh_client_LDADD = libmoshcontrol.a libmoshmascot.a $(LDADD) ../fec/libmoshfec.a $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
 goblin_mosh_server_LDADD = libmoshcontrol.a $(LDADD) ../fec/libmoshfec.a $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
 

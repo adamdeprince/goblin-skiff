@@ -293,6 +293,7 @@ void STMClient::main_init( void )
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
   network = NetworkPointer(
     new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive, crypto_mode ) );
+  if ( !relay_keys.empty() ) { network->set_relay_keys( relay_keys ); relay_keys.clear(); }
   network->enable_link_budget( compact_keepalive && getenv( "MOSH_LINK_BUDGET" ) && !strcmp( getenv( "MOSH_LINK_BUDGET" ), "1" ) );
 
   if ( !state_sample_log.empty() ) {

@@ -48,6 +48,7 @@
 
 #include "src/crypto/crypto.h"
 #include "linkbudget.h"
+#include "relay.h"
 
 using namespace Crypto;
 
@@ -184,6 +185,8 @@ private:
 
   Base64Key key;
   Session session;
+  Relay::Chain relays {};
+  unsigned relay_hops = 0;
 
   void setup( void );
 
@@ -240,6 +243,10 @@ public:
               bool s_compact_keepalive = false,
               Crypto::Mode s_crypto_mode = Crypto::Mode::LegacyOCB ); /* client */
 
+  ~Connection();
+  void set_relay_hops( unsigned hops ); /* final server: reserve outer wire overhead */
+  void set_relay_keys( const std::string& keys ); /* client only */
+
   void send( const std::string& s );
   void enable_link_budget( bool enabled ) {
     link.enable( enabled ); link_offered = enabled; link_confirmed = !server;
@@ -252,7 +259,9 @@ public:
   int keepalive_wait_time( void ) const;
   void tick( void );
   const std::vector<int> fds( void ) const;
-  int get_MTU( void ) const { return MTU; }
+  int get_MTU( void ) const {
+    return relay_hops ? std::min( MTU, int( Relay::WIRE_MTU ) ) - Relay::overhead( crypto_mode, relay_hops ) : MTU;
+  }
   int packet_overhead( void ) const { return ADDED_BYTES + session.added_bytes(); }
 
   std::string port( void ) const;

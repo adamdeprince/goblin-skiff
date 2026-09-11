@@ -98,7 +98,8 @@ static void print_usage( FILE* file, const char* argv0 )
            "       --show-mascot=kitty|sixel|ascii previews the local mascot and exits\n"
            "       --no-kitty disables local Kitty graphics and detection\n"
            "       --no-sixel disables local sixel graphics and detection\n"
-           "       Alt-0 opens or resumes the local file browser\n",
+           "       --udp-relay uses MOSH_RELAY_KEYS supplied by the wrapper's -J route\n"
+           "       Ctrl-^ then 0 opens or resumes the local file browser\n",
            argv0,
            argv0 );
 }
@@ -175,6 +176,7 @@ int main( int argc, char* argv[] )
   bool compact_keepalive = bool_from_env( "MOSH_COMPACT_KEEPALIVE", false );
   bool tmux_control = false;
   bool color_count = false;
+  bool udp_relay = false;
   std::string mascot_format = string_from_env( "MOSH_MASCOT" );
   bool show_mascot = false;
   bool allow_kitty = true, allow_sixel = true;
@@ -210,6 +212,7 @@ int main( int argc, char* argv[] )
     { "show-mascot", required_argument, NULL, 264 },
     { "no-kitty", no_argument, NULL, 265 },
     { "no-sixel", no_argument, NULL, 266 },
+    { "udp-relay", no_argument, NULL, 267 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -273,6 +276,9 @@ int main( int argc, char* argv[] )
         break;
       case 266:
         allow_sixel = false;
+        break;
+      case 267:
+        udp_relay = true;
         break;
       default:
         print_usage( stderr, argv[0] );
@@ -345,6 +351,12 @@ int main( int argc, char* argv[] )
   /* can be NULL */
 
   std::string key( env_key );
+  std::string relay_keys = string_from_env( "MOSH_RELAY_KEYS" );
+  unsetenv( "MOSH_RELAY_KEYS" );
+  if ( udp_relay != !relay_keys.empty() ) {
+    fputs( "--udp-relay requires MOSH_RELAY_KEYS (set by the goblin-mosh wrapper).\n", stderr );
+    exit( 1 );
+  }
 
   if ( unsetenv( "MOSH_KEY" ) < 0 ) {
     perror( "unsetenv" );
@@ -380,6 +392,7 @@ int main( int argc, char* argv[] )
                       mascot_mode,
                       allow_kitty,
                       allow_sixel );
+    if ( udp_relay ) { client.set_relay_keys( relay_keys ); relay_keys.clear(); }
     client.init();
 
     try {

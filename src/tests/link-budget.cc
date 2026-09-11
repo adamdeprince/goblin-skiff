@@ -143,6 +143,9 @@ int main()
     for ( unsigned i = 2; i <= 33; ++i ) { fast_reports.received_packet( i, 400, 1051, 4 ); }
     require( fast_reports.feedback_wait( 1051 ) > 2000 && fast_reports.feedback( 1051 ).empty(),
              "fast forward traffic cannot flood an unmeasured slow reverse path with feedback" );
+    fast_reports.set_feedback_packet_size( 280 ); // four FIPS relay layers, Mosh and IPv6 headers
+    require( fast_reports.feedback_wait( 1051 ) > 4600,
+             "feedback allowance must include the whole relay chain's wire overhead" );
     Network::LinkBudget history_sender, history_receiver;
     history_sender.enable( true ); history_receiver.enable( true );
     for ( unsigned i = 1; i <= 96; ++i ) {

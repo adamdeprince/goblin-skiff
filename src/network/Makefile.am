@@ -4,4 +4,4 @@ AM_CXXFLAGS = $(WARNING_CXXFLAGS) $(PICKY_CXXFLAGS) $(HARDEN_CFLAGS) $(MISC_CXXF
 noinst_LIBRARIES = libmoshnetwork.a
 
 libmoshnetwork_a_SOURCES = network.cc network.h networktransport-impl.h networktransport.h transportfragment.cc transportfragment.h transportsender-impl.h transportsender.h transportstate.h compressor.cc compressor.h statesamples.cc statesamples.h bulkdatagram.cc bulkdatagram.h bulkcontrol.cc bulkcontrol.h
-libmoshnetwork_a_SOURCES += linkbudget.h
+libmoshnetwork_a_SOURCES += linkbudget.h relay.h relay.cc

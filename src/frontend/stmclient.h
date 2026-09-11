@@ -58,6 +58,7 @@ private:
   std::string ip;
   std::string port;
   std::string key;
+  std::string relay_keys {};
   Crypto::Mode crypto_mode;
   bool compact_keepalive;
   bool tmux_control;
@@ -212,6 +213,7 @@ public:
   }
 
   void init( void );
+  void set_relay_keys( const std::string& keys ) { relay_keys = keys; }
   void shutdown( void );
   bool main( void );
 
