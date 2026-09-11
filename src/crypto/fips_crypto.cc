@@ -319,6 +319,9 @@ int FipsAes128Gcm::encrypt( const void* associated_data,
             != 1 ) {
     throw CryptoException( openssl_error( "AES-128-GCM associated-data authentication failed" ) );
   }
+  /* The AAD update reports authenticated bytes, not ciphertext bytes.  Empty
+     payloads (including relay closes) skip the data update below. */
+  produced = 0;
   if ( plaintext_len > 0
        && EVP_EncryptUpdate( context,
                              static_cast<unsigned char*>( ciphertext ),
@@ -402,6 +405,8 @@ int FipsAes128Gcm::decrypt( const void* iv,
             != 1 ) {
     throw CryptoException( openssl_error( "AES-128-GCM associated-data authentication failed" ) );
   }
+  /* Do not count the preceding AAD update as plaintext for an empty packet. */
+  produced = 0;
   if ( encrypted_len > 0
        && EVP_DecryptUpdate( context,
                              static_cast<unsigned char*>( plaintext ),

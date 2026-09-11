@@ -64,6 +64,24 @@ int main( void )
       return EXIT_FAILURE;
     }
 
+    /* AAD-only packets authenticate the sequence and tag without introducing
+       payload bytes. Exercise empty packets before and after ordinary data,
+       and verify that a failed authentication does not poison the context. */
+    for ( const size_t size : { size_t( 0 ), size_t( 1 ), size_t( 16 ), size_t( 1200 ), size_t( 0 ) } ) {
+      const std::string text( size, 'x' );
+      const auto request = client.encrypt( Message( Nonce( 9 + size ), text ) );
+      if ( request.size() != size + 36 || !rejects( server, request, 0 )
+           || !rejects( server, request, 12 ) || !rejects( server, request, request.size() - 1 )
+           || server.decrypt( request ).text != text ) {
+        return EXIT_FAILURE;
+      }
+      const auto response = server.encrypt( Message( Nonce( ( uint64_t( 1 ) << 63 ) | ( 9 + size ) ), text ) );
+      if ( response.size() != size + 36 || !rejects( client, response, response.size() - 1 )
+           || client.decrypt( response ).text != text ) {
+        return EXIT_FAILURE;
+      }
+    }
+
     /* Directional traffic keys prevent a peer from accepting its own packet. */
     try {
       client.decrypt( first );
