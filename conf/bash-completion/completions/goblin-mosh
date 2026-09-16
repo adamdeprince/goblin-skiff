@@ -20,6 +20,7 @@ _mosh () {
     --bind-server= --ssh= --fips-crypto --tmux-control --native-scroll --alternate-screen
     --jump= --jump-server= --jump-port= --jump-idle-timeout=
     --mascot= --no-mascot --no-kitty --no-sixel
+    --lossy= --djvu-lossy
     --init --no-init --help --version"
 
     if [[ "$cur" == --* && "$COMP_CWORD" == 1 ]]; then

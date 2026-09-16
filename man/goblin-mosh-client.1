@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH-CLIENT 1 "September 11, 2026"
+.TH GOBLIN-MOSH-CLIENT 1 "September 15, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -35,6 +35,10 @@ IP PORT
 .B goblin-mosh-client
 \-c
 .SH DESCRIPTION
+.B \-\-image\-codecs
+prints supported image transport codecs and exits. The wrapper uses this
+query to negotiate palette/DjVu support with the server.
+.PP
 \fBgoblin-mosh-client\fP is a helper program for the
 .BR goblin-mosh (1)
 remote terminal application.
@@ -65,6 +69,23 @@ information.  If standard error is not redirected from the terminal,
 the display will be corrupted and quickly become unusable.
 
 .SH OPTIONS
+.TP
+.B \-\-connection\-version
+Print a machine-readable MOSH VERSION line containing the Goblin compatibility
+protocol, release and build, then exit. The wrapper uses this query to identify
+the selected client. Both endpoints also exchange identity in authenticated
+session traffic; \-v reports the peer identity.
+.TP
+.B \-\-socks5\-proxy=\fIHOST:PORT\fP
+Carry authenticated UDP through a SOCKS5 UDP ASSOCIATE proxy.
+IP may instead be a hostname, resolved at the proxy. Use [ADDRESS]:PORT
+for an IPv6 proxy. No direct fallback, SOCKS fragmentation or proxy
+username/password authentication is supported. The TCP control association
+is nonblocking and automatically recreated after disconnection; it does
+not carry the UDP data. Session keys and state are retained across recovery.
+With \-c, validate the option without connecting. The wrapper also uses
+this option to proxy SSH startup; invoking the client alone does not do SSH.
+
 .TP
 .B \-\-udp\-relay
 Use the comma-separated independent relay keys in MOSH_RELAY_KEYS, ordered

@@ -8,7 +8,7 @@ RUN if test -f /etc/rocky-release; then \
     dnf -y install gcc-c++ make autoconf automake rpm-build redhat-rpm-config \
         pkgconf-pkg-config perl protobuf-compiler protobuf-devel \
         libutempter-devel zlib-devel ncurses-devel openssl-devel librsync-devel \
-        libzstd-devel libwebp-devel libpng-devel bash-completion python3 \
+        libzstd-devel libwebp-devel libpng-devel djvulibre-devel djvulibre bash-completion python3 \
         glibc-langpack-en openssh-clients perl-IO-Socket-IP procps-ng \
         ca-certificates /usr/bin/curl gnupg2 file
 COPY snapshot.tar.gz /tmp/goblin-snapshot.tar.gz

@@ -28,7 +28,12 @@ void image_to_proto( const KittyImage& image, KittyBuffers::Image* output )
   }
   output->set_width( image.width );
   output->set_height( image.height );
-  output->set_webp( image.data ? *image.data : std::string() );
+  if ( image.format == KITTY_FORMAT_DJVU ) {
+    output->set_djvu( image.data ? *image.data : std::string() );
+    output->set_palette( image.palette );
+  } else {
+    output->set_webp( image.data ? *image.data : std::string() );
+  }
   if ( image.origin == ImageOrigin::Sixel ) { output->set_origin( KittyBuffers::Image::SIXEL ); }
 }
 
@@ -169,19 +174,26 @@ void apply_kitty_state_delta( const KittyBuffers::StateDelta& input, Framebuffer
 
   for ( int i = 0; i < input.image_size(); i++ ) {
     const KittyBuffers::Image& source = input.image( i );
-    uint32_t width = 0, height = 0;
-    if ( source.id() == 0 || !kitty_webp_dimensions( source.webp(), width, height ) || width != source.width()
-         || height != source.height() ) {
+    if ( source.id() == 0 || source.has_webp() == source.has_djvu()
+         || source.has_palette() != source.has_djvu() ) {
+      continue;
+    }
+    const std::string& encoded = source.has_djvu() ? source.djvu() : source.webp();
+    if ( source.palette().size() > GRAPHICS_MAX_PALETTE * 4
+         || encoded.size() > KITTY_ENCODED_QUOTA - source.palette().size() ) {
       continue;
     }
     KittyImage image;
     image.id = source.id();
     image.number = source.number();
-    image.format = KITTY_FORMAT_WEBP;
-    image.width = width;
-    image.height = height;
+    image.format = source.has_djvu() ? KITTY_FORMAT_DJVU : KITTY_FORMAT_WEBP;
+    image.width = source.width();
+    image.height = source.height();
     image.origin = source.origin() == KittyBuffers::Image::SIXEL ? ImageOrigin::Sixel : ImageOrigin::Kitty;
-    image.data = std::make_shared<std::string>( source.webp() );
+    image.data = std::make_shared<std::string>( encoded );
+    image.palette = source.palette();
+    std::string rgba;
+    if ( !kitty_image_to_rgba( image, rgba ) ) { continue; }
     framebuffer.put_kitty_image( image );
   }
 

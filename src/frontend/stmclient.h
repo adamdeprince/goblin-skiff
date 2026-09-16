@@ -59,6 +59,7 @@ private:
   std::string port;
   std::string key;
   std::string relay_keys {};
+  std::string socks5_proxy {};
   Crypto::Mode crypto_mode;
   bool compact_keepalive;
   bool tmux_control;
@@ -214,6 +215,7 @@ public:
 
   void init( void );
   void set_relay_keys( const std::string& keys ) { relay_keys = keys; }
+  void set_socks5_proxy( const std::string& proxy ) { socks5_proxy = proxy; }
   void shutdown( void );
   bool main( void );
 

@@ -12,13 +12,16 @@ EXTRA_DIST = autogen.sh ocb-license.html README.md COPYING.iOS SIXEL_STATE.md
 EXTRA_DIST += GOBLIN_DOWNLOAD_PROTOCOL.md
 EXTRA_DIST += AUDIO.md THIRD_PARTY.md
 EXTRA_DIST += UDP_RELAY.md
+EXTRA_DIST += USERSPACE_NETWORKING.md
+EXTRA_DIST += GOBLIN_VERSION COMPATIBILITY.md CHANGELOG.md
+EXTRA_DIST += html/index.html html/goblin.png
 EXTRA_DIST += build-package.sh build-source-package.sh
 EXTRA_DIST += packaging/check-prebuilt-fec.sh
 EXTRA_DIST += debian/control debian/rules debian/changelog debian/copyright debian/docs debian/source/format
 EXTRA_DIST += packaging/debian/Containerfile packaging/debian/build-release.sh packaging/debian/README.md
 EXTRA_DIST += packaging/rpm/Containerfile packaging/rpm/build-release.sh packaging/rpm/goblin-mosh.spec packaging/rpm/README.md
 EXTRA_DIST += packaging/homebrew/goblin-mosh.rb.in packaging/homebrew/render-formula.sh packaging/homebrew/README.md
-dist_doc_DATA = COPYING THIRD_PARTY.md
+dist_doc_DATA = COPYING THIRD_PARTY.md COMPATIBILITY.md CHANGELOG.md GOBLIN_VERSION USERSPACE_NETWORKING.md
 BUILT_SOURCES = VERSION.stamp
 AM_DISTCHECK_CONFIGURE_FLAGS += --enable-compile-warnings=distcheck --enable-examples --enable-syslog
 
@@ -44,7 +47,7 @@ OCLINT_OPTIONS = -enable-global-analysis -max-priority-2=1000 -max-priority-3=10
 .PHONY:	VERSION.stamp
 
 VERSION.stamp:
-	@echo @PACKAGE_STRING@ > VERSION.dist
+	@echo @GOBLIN_VERSION@ > VERSION.dist
 	@set -e; if git describe --dirty --always > VERSION.git 2>&1 && \
 		[ -z `git rev-parse --show-prefix` ]; then \
 		if ! diff -q VERSION.git VERSION.stamp > /dev/null 2>&1; then \

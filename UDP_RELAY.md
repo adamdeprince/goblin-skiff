@@ -35,6 +35,11 @@ back. The client no longer needs a UDP route to the destination. Each hop must
 still have UDP reachability to the next one. This does not tunnel UDP over
 SSH/TCP or make a UDP-blocked first hop reachable.
 
+For a client using userspace Tailscale, add
+`--socks5-proxy=127.0.0.1:1055` to carry SSH setup and first-hop UDP through
+the existing proxy. This does not change the remaining relay hops or their
+reachability requirements. See [userspace networking](USERSPACE_NETWORKING.md).
+
 By default each relay binds one UDP port in **60001–60999** on the interface
 used for its incoming SSH session. Permit that range from the preceding hop
 (from the client for the first jump), and permit the destination's Mosh port

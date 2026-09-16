@@ -76,7 +76,7 @@ DrawState::DrawState( int s_width, int s_height )
 
 Framebuffer::Framebuffer( int s_width, int s_height )
   : rows(), icon_name(), window_title(), clipboard(), bell_count( 0 ), title_initialized( false ), kitty_images(),
-    kitty_placements(), kitty_next_id( 1 ), kitty_serial( 1 ), ds( s_width, s_height )
+    kitty_placements(), kitty_next_id( 1 ), kitty_serial( 1 ), ds( s_width, s_height ), image_encoding()
 {
   assert( s_height > 0 );
   assert( s_width > 0 );
@@ -89,7 +89,8 @@ Framebuffer::Framebuffer( const Framebuffer& other )
   : rows( other.rows ), icon_name( other.icon_name ), window_title( other.window_title ),
     clipboard( other.clipboard ), bell_count( other.bell_count ), title_initialized( other.title_initialized ),
     kitty_images( other.kitty_images ), kitty_placements( other.kitty_placements ),
-    kitty_next_id( other.kitty_next_id ), kitty_serial( other.kitty_serial ), ds( other.ds )
+    kitty_next_id( other.kitty_next_id ), kitty_serial( other.kitty_serial ), ds( other.ds ),
+    image_encoding( other.image_encoding )
 {}
 
 Framebuffer& Framebuffer::operator=( const Framebuffer& other )
@@ -106,6 +107,7 @@ Framebuffer& Framebuffer::operator=( const Framebuffer& other )
     kitty_next_id = other.kitty_next_id;
     kitty_serial = other.kitty_serial;
     ds = other.ds;
+    image_encoding = other.image_encoding;
   }
   return *this;
 }
@@ -777,7 +779,8 @@ uint32_t Framebuffer::allocate_kitty_id( void )
 
 uint32_t Framebuffer::put_kitty_image( const KittyImage& image )
 {
-  if ( !image.data || image.data->size() > KITTY_ENCODED_QUOTA ) { return 0; }
+  if ( !image.data || image.palette.size() > GRAPHICS_MAX_PALETTE * 4
+       || image.data->size() > KITTY_ENCODED_QUOTA - image.palette.size() ) { return 0; }
   KittyImage stored = image;
   if ( stored.id == 0 ) {
     stored.id = allocate_kitty_id();
@@ -971,7 +974,7 @@ void Framebuffer::scroll_kitty_placements( int first_row, int count, bool insert
 
 static size_t kitty_image_cost( const KittyImage& image )
 {
-  const size_t encoded = image.data ? image.data->size() : 0;
+  const size_t encoded = ( image.data ? image.data->size() : 0 ) + image.palette.size();
   if ( image.width == 0 || image.width > KITTY_IMAGE_QUOTA / 4
        || image.height > KITTY_IMAGE_QUOTA / ( static_cast<size_t>( image.width ) * 4 ) ) {
     return KITTY_IMAGE_QUOTA + 1;
@@ -985,7 +988,7 @@ void Framebuffer::evict_kitty_images( uint32_t preserve_id )
   uint64_t total = 0, encoded = 0;
   for ( std::map<uint32_t, KittyImage>::const_iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
     total += kitty_image_cost( it->second );
-    encoded += it->second.data ? it->second.data->size() : 0;
+    encoded += ( it->second.data ? it->second.data->size() : 0 ) + it->second.palette.size();
   }
   if ( total <= KITTY_IMAGE_QUOTA && encoded <= KITTY_ENCODED_QUOTA ) {
     return;
@@ -1018,7 +1021,7 @@ void Framebuffer::evict_kitty_images( uint32_t preserve_id )
     }
     assert( victim != kitty_images.end() );
     total -= kitty_image_cost( victim->second );
-    encoded -= victim->second.data ? victim->second.data->size() : 0;
+    encoded -= ( victim->second.data ? victim->second.data->size() : 0 ) + victim->second.palette.size();
     std::vector<KittyPlacement> kept;
     for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
       if ( kitty_placements[i].image_id != victim->first ) {

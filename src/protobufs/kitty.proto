@@ -9,9 +9,16 @@ message Image {
   optional uint32 number = 2;
   required uint32 width = 3;
   required uint32 height = 4;
-  required bytes webp = 5;
+  // Exactly one of webp or djvu is present. Older peers receive only WebP.
+  optional bytes webp = 5;
   enum Origin { KITTY = 0; SIXEL = 1; }
   optional Origin origin = 6 [default = KITTY];
+  // palette-djvu-v1: a single DjVu page of stacked index bitplanes,
+  // least significant bit first, black = 1. Plane count is max(1, ceil(log2
+  // (palette.size / 4))). Page dimensions are width x (height * plane count).
+  // Lossless unless the sender explicitly enables lossy two-color encoding.
+  optional bytes djvu = 7;
+  optional bytes palette = 8; // 1..16 RGBA entries; absent for WebP
 }
 
 message Placement {

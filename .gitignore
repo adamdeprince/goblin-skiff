@@ -41,9 +41,13 @@ src/include/stamp-h1
 /scripts/goblin-mosh
 src/include/version.h
 
-# Product-site files are maintained separately and must not be committed.
-/html/
+# Track the product page and its artwork; ignore local site artifacts.
+/html/*
+!/html/index.html
+!/html/goblin.png
 
 # Local configure probes and Python test caches.
 /conf*.file
 __pycache__/
+/src/tests/socks5-proxy
+/src/tests/session-version

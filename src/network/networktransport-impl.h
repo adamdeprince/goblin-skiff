@@ -62,8 +62,9 @@ Transport<MyState, RemoteState>::Transport( MyState& initial_state,
                                             const char* ip,
                                             const char* port,
                                             bool compact_keepalive,
-                                            Crypto::Mode crypto_mode )
-  : connection( key_str, ip, port, compact_keepalive, crypto_mode ),
+                                            Crypto::Mode crypto_mode,
+                                            const std::string& proxy )
+  : connection( key_str, ip, port, compact_keepalive, crypto_mode, proxy ),
     sender( &connection, initial_state, compact_keepalive ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     bulk_datagrams(), receiver_quench_timer( 0 ), last_receiver_state( initial_remote ), fragments(),
@@ -106,6 +107,11 @@ void Transport<MyState, RemoteState>::recv( void )
 
     if ( inst.protocol_version() != MOSH_PROTOCOL_VERSION ) {
       throw NetworkException( "mosh protocol version mismatch", 0 );
+    }
+
+    if ( peer_version.observe( inst ) && verbose ) {
+      fprintf( stderr, "Goblin Mosh peer: %s [build %s], protocol %u\n", peer_version.release.c_str(),
+               peer_version.build.c_str(), peer_version.protocol );
     }
 
     sender.set_peer_zstd_capabilities( inst.has_zstd_supported() && inst.zstd_supported(),

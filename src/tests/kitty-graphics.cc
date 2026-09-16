@@ -19,13 +19,17 @@
 #include <unistd.h>
 
 #include <png.h>
+#include <webp/decode.h>
 #include <zlib.h>
 
 #include "src/protobufs/hostinput.pb.h"
 #include "src/protobufs/kitty.pb.h"
 #include "src/statesync/completeterminal.h"
+#include "src/statesync/kitty.h"
+#include "src/terminal/djvu.h"
 #include "src/terminal/kittygraphics.h"
 #include "src/terminal/osc52.h"
+#include "src/terminal/sixel.h"
 #include "src/terminal/terminaldisplay.h"
 
 namespace {
@@ -587,6 +591,214 @@ static void test_file_media()
   unlink( fifo.c_str() ); unlink( regular.c_str() ); rmdir( directory );
 }
 
+namespace {
+Terminal::ImageEncoding djvu_encoding()
+{
+  Terminal::ImageEncoding encoding;
+  encoding.palette_djvu = true;
+  return encoding;
+}
+
+std::string palette_pixels( unsigned colors, unsigned width, unsigned height )
+{
+  std::string rgba;
+  for ( unsigned y = 0; y < height; y++ ) {
+    for ( unsigned x = 0; x < width; x++ ) {
+      const unsigned color = ( x * 3 + y * 7 ) % colors;
+      rgba += rgb_cell( color * 13, 255 - color * 7, color * 5 );
+      rgba += char( color * 17 ); // includes hidden RGB under full transparency
+    }
+  }
+  return rgba;
+}
+
+Terminal::KittyImage normalize_image( unsigned width, unsigned height, const std::string& rgba,
+                                     const Terminal::ImageEncoding& encoding )
+{
+  Terminal::KittyImage image;
+  std::string error;
+  require( Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_RGBA, width, height, rgba, image, encoding, error ),
+           "normalize image using session encoding" );
+  return image;
+}
+
+void test_palette_djvu()
+{
+  const unsigned width = 37, height = 29; // non-byte-aligned rows, asymmetric pattern
+  auto encoding = djvu_encoding();
+  for ( unsigned colors : { 1, 2, 3, 4, 5, 8, 9, 16 } ) {
+    const auto pixels = palette_pixels( colors, width, height );
+    for ( bool webp_lossy : { false, true } ) {
+      encoding.quality = webp_lossy ? 0 : -1;
+      const auto image = normalize_image( width, height, pixels, encoding );
+      require( image.format == Terminal::KITTY_FORMAT_DJVU && image.palette.size() == colors * 4,
+               "small exact palette selects DjVu independently of WebP quality" );
+      require( image.data->compare( 0, 8, "AT&TFORM" ) == 0, "payload is a standalone DjVu file" );
+      std::string decoded;
+      require( Terminal::kitty_image_to_rgba( image, decoded ) && decoded == pixels,
+               "DjVu preserves every RGBA byte and bitplane orientation" );
+    }
+  }
+  encoding.quality = -1;
+  const auto many = normalize_image( width, height, palette_pixels( 17, width, height ), encoding );
+  require( many.format == Terminal::KITTY_FORMAT_WEBP && many.palette.empty(), "17 colors select WebP" );
+  const auto legacy = normalize_image( width, height, palette_pixels( 2, width, height ), Terminal::ImageEncoding() );
+  require( legacy.format == Terminal::KITTY_FORMAT_WEBP, "unnegotiated peers keep WebP" );
+
+  Terminal::KittyImage rgb, png;
+  std::string error, decoded;
+  require( Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_RGB, 1, 1, rgb_cell( 21, 43, 65 ), rgb,
+                                           encoding, error ) && Terminal::kitty_image_to_rgba( rgb, decoded )
+             && decoded == rgb_cell( 21, 43, 65 ) + char( 255 ), "RGB inputs use opaque DjVu palettes" );
+  require( Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_PNG, 0, 0, rgba_png( 21, 43, 65, 173 ), png,
+                                           encoding, error ) && Terminal::kitty_image_to_rgba( png, decoded )
+             && decoded == rgb_cell( 21, 43, 65 ) + char( 173 ), "PNG inputs use exact RGBA DjVu palettes" );
+}
+
+void test_lossy_webp_quality()
+{
+  const unsigned width = 128, height = 128;
+  std::string rgba;
+  for ( unsigned y = 0; y < height; y++ ) {
+    for ( unsigned x = 0; x < width; x++ ) {
+      rgba += rgb_cell( ( x * 2 + y * 3 ) % 256, ( x * 7 + y ) % 256, ( x + y * 5 ) % 256 );
+      rgba += char( 128 + ( x + y ) % 128 );
+    }
+  }
+  auto encoding = djvu_encoding();
+  auto image = normalize_image( width, height, rgba, encoding );
+  std::string decoded;
+  require( image.format == Terminal::KITTY_FORMAT_WEBP && Terminal::kitty_image_to_rgba( image, decoded )
+             && decoded == rgba, "WebP defaults to lossless" );
+  uint64_t low_error = 0, high_error = 0;
+  size_t low_size = 0, high_size = 0;
+  for ( int quality : { 0, 10, 90, 100 } ) {
+    encoding.quality = quality;
+    image = normalize_image( width, height, rgba, encoding );
+    WebPBitstreamFeatures features;
+    require( WebPGetFeatures( reinterpret_cast<const uint8_t*>( image.data->data() ), image.data->size(), &features )
+               == VP8_STATUS_OK && features.format == 1, "explicit quality selects lossy WebP, including 100" );
+    require( Terminal::kitty_image_to_rgba( image, decoded ), "decode lossy WebP" );
+    uint64_t error = 0;
+    for ( size_t i = 0; i < rgba.size(); i++ ) {
+      if ( i % 4 == 3 ) { require( decoded[i] == rgba[i], "lossy WebP retains alpha" ); }
+      else {
+        const int difference = int( uint8_t( rgba[i] ) ) - int( uint8_t( decoded[i] ) );
+        error += difference * difference;
+      }
+    }
+    if ( quality == 10 ) { low_error = error; low_size = image.data->size(); }
+    if ( quality == 90 ) { high_error = error; high_size = image.data->size(); }
+  }
+  require( low_error > high_error && low_size < high_size, "quality controls actual distortion and transmitted size" );
+  std::string error;
+  for ( int invalid : { -2, 101 } ) {
+    encoding.quality = invalid;
+    require( !Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_RGBA, width, height, rgba, image, encoding, error ),
+             "reject invalid quality in codec API" );
+  }
+}
+
+void test_djvu_lossy_opt_in()
+{
+  const unsigned width = 128, height = 128;
+  std::string pixels( width * height * 4, char( 255 ) );
+  for ( unsigned y = 10; y < height; y += 20 ) {
+    for ( unsigned x = 10; x < width; x += 20 ) {
+      pixels.replace( ( y * width + x ) * 4, 3, 3, '\0' ); // isolated specks that cjb2 -lossy removes
+    }
+  }
+  auto encoding = djvu_encoding();
+  encoding.quality = 0;
+  const auto exact = normalize_image( width, height, pixels, encoding );
+  std::string decoded;
+  require( Terminal::kitty_image_to_rgba( exact, decoded ) && decoded == pixels,
+           "WebP lossiness alone never enables cjb2 lossiness" );
+  encoding.quality = -1;
+  encoding.djvu_lossy = true;
+  const auto lossy = normalize_image( width, height, pixels, encoding );
+  require( lossy.format == Terminal::KITTY_FORMAT_DJVU && Terminal::kitty_image_to_rgba( lossy, decoded )
+             && decoded != pixels, "separate DjVu opt-in enables actual cjb2 lossy behavior" );
+  const auto multi_pixels = palette_pixels( 3, 37, 29 );
+  const auto multi = normalize_image( 37, 29, multi_pixels, encoding );
+  require( Terminal::kitty_image_to_rgba( multi, decoded ) && decoded == multi_pixels,
+           "larger palettes remain exact even with DjVu lossiness enabled" );
+}
+
+void test_djvu_state_and_rendering()
+{
+  Terminal::Complete src( 80, 24 ), blank( 80, 24 ), dst( 80, 24 );
+  src.set_image_encoding( djvu_encoding() );
+  const auto pixels = palette_pixels( 5, 37, 29 );
+  src.act( Terminal::encode_kitty_chunks( "a=T,C=1,i=88,f=32,s=37,v=29", pixels ) );
+  HostBuffers::HostMessage message;
+  const auto wire = src.diff_from( blank );
+  const auto* delta = find_kitty_delta( wire, message );
+  require( delta && delta->image_size() == 1 && delta->image( 0 ).has_djvu() && !delta->image( 0 ).has_webp()
+             && delta->image( 0 ).palette().size() == 20, "state sends palette and DjVu without WebP" );
+  dst.apply_string( wire );
+  const auto* image = dst.get_fb().find_kitty_image( 88 );
+  std::string decoded;
+  require( image && Terminal::kitty_image_to_rgba( *image, decoded ) && decoded == pixels,
+           "palette image survives protobuf state synchronization" );
+  Terminal::Display display( false );
+  display.set_graphics( Terminal::ClientGraphics( true ), true );
+  const auto output = display.new_frame( true, blank.get_fb(), dst.get_fb() );
+  Terminal::Complete terminal( 80, 24 );
+  terminal.set_image_encoding( djvu_encoding() );
+  terminal.act( output );
+  const auto* rendered = terminal.get_fb().find_kitty_image( 88 );
+  require( rendered && Terminal::kitty_image_to_rgba( *rendered, decoded ) && decoded == pixels,
+           "terminal receives standard Kitty RGBA with exact pixels" );
+  Terminal::Complete previous = src;
+  src.act( "\033_Ga=p,i=88,p=2,C=1,c=4,r=3;\033\\" );
+  delta = find_kitty_delta( src.diff_from( previous ), message );
+  require( delta && delta->image_size() == 0 && delta->replace_placements(), "DjVu placement updates omit pixels" );
+  src.act( "\033c" );
+  src.act( transmit_rgb( 99 ) );
+  require( src.get_fb().find_kitty_image( 99 )->format == Terminal::KITTY_FORMAT_DJVU,
+           "image encoding policy survives terminal reset" );
+
+  Terminal::Complete sixel( 80, 24 ), sixel_received( 80, 24 );
+  sixel.set_image_encoding( djvu_encoding() );
+  sixel.set_sixel_enabled( true );
+  sixel.act( "\033P0;1q\"1;1;8;16#1;2;100;0;0!8~\033\\" );
+  require( !sixel.get_fb().get_kitty_images().empty(), "sixel creates image state" );
+  require( sixel.get_fb().get_kitty_images().begin()->second.format == Terminal::KITTY_FORMAT_DJVU,
+           "sixel shares palette transport" );
+  sixel_received.apply_string( sixel.diff_from( blank ) );
+  std::string native, error;
+  const auto& received = sixel_received.get_fb().get_kitty_images().begin()->second;
+  require( Terminal::Sixel::render( received, true, false, native, error ) && native.find( "\033P" ) == 0,
+           "DjVu sixel state renders through native sixel" );
+}
+
+void test_invalid_djvu_state()
+{
+  auto image = normalize_image( 37, 29, palette_pixels( 3, 37, 29 ), djvu_encoding() );
+  std::string rgba;
+  for ( size_t length : { size_t( 0 ), size_t( 16 ), image.data->size() - 1 } ) {
+    require( !Terminal::decode_palette_djvu( image.palette, image.data->substr( 0, length ), 37, 29, rgba ),
+             "truncated DjVu rejected" );
+  }
+  for ( const auto& palette : { std::string(), std::string( 5, 'x' ), std::string( 68, 'x' ), image.palette.substr( 0, 4 ) } ) {
+    require( !Terminal::decode_palette_djvu( palette, *image.data, 37, 29, rgba ), "invalid palette rejected" );
+  }
+  require( !Terminal::decode_palette_djvu( image.palette, *image.data, 38, 29, rgba ), "mismatched dimensions rejected" );
+  require( !Terminal::decode_palette_djvu( image.palette, *image.data, 16384, 29, rgba ), "oversized dimensions rejected" );
+  KittyBuffers::StateDelta delta;
+  auto* source = delta.add_image();
+  source->set_id( 1 ); source->set_width( 37 ); source->set_height( 29 );
+  source->set_djvu( *image.data ); source->set_palette( image.palette ); source->set_webp( "invalid" );
+  Terminal::Framebuffer fb( 80, 24 );
+  Terminal::apply_kitty_state_delta( delta, fb );
+  require( fb.get_kitty_images().empty(), "ambiguous wire codecs rejected" );
+  source->clear_webp(); source->clear_palette();
+  Terminal::apply_kitty_state_delta( delta, fb );
+  require( fb.get_kitty_images().empty(), "missing palette rejected" );
+}
+}
+
 int main( int argc, char* argv[] )
 {
   try {
@@ -596,6 +808,11 @@ int main( int argc, char* argv[] )
       return 0;
     }
     test_parse_command();
+    test_palette_djvu();
+    test_lossy_webp_quality();
+    test_djvu_lossy_opt_in();
+    test_djvu_state_and_rendering();
+    test_invalid_djvu_state();
     test_file_media();
     test_query_reply();
     test_transmit_and_place();

@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential debhelper devscripts fakeroot ca-certificates curl gnupg \
     protobuf-compiler libprotobuf-dev pkg-config libutempter-dev zlib1g-dev \
     libncurses-dev libssl-dev librsync-dev libzstd-dev libwebp-dev libpng-dev \
-    bash-completion locales python3 procps file
+    libdjvulibre-dev djvulibre-bin bash-completion locales python3 procps file
 COPY snapshot.tar.gz /tmp/goblin-snapshot.tar.gz
 COPY build-release.sh /usr/local/bin/goblin-package-build
 ENTRYPOINT ["/bin/sh", "/usr/local/bin/goblin-package-build"]

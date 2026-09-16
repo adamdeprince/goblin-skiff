@@ -460,10 +460,9 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
     return;
   }
 
-  std::string webp;
-  uint32_t width = 0, height = 0;
+  KittyImage image;
   if ( data.size() > KITTY_IMAGE_QUOTA
-       || !kitty_normalize_webp( cmd.format, cmd.width, cmd.height, data, webp, width, height, error ) ) {
+       || !kitty_normalize_image( cmd.format, cmd.width, cmd.height, data, image, fb->image_encoding, error ) ) {
     kitty_reply( this, cmd, cmd.image_id, error.empty() ? "EINVAL: image exceeds storage quota" : error );
     return;
   }
@@ -479,13 +478,8 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
     return;
   }
 
-  KittyImage image;
   image.id = cmd.image_id;
   image.number = cmd.image_number;
-  image.format = KITTY_FORMAT_WEBP;
-  image.width = width;
-  image.height = height;
-  image.data = std::make_shared<std::string>( webp );
   if ( image.id == 0 && image.number == 0 ) {
     /* assign internally so the image can live in terminal state */
   }

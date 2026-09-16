@@ -11,6 +11,7 @@
 #include "src/include/config.h"
 
 #include "src/terminal/kittygraphics.h"
+#include "src/terminal/djvu.h"
 #include "src/terminal/osc52.h"
 #include "src/terminal/terminalframebuffer.h"
 
@@ -45,13 +46,14 @@ KittyCommand::KittyCommand()
 
 KittyImage::KittyImage()
   : id( 0 ), number( 0 ), format( KITTY_FORMAT_WEBP ), width( 0 ), height( 0 ), origin( ImageOrigin::Kitty ),
-    data( std::make_shared<std::string>() ), serial( 0 )
+    data( std::make_shared<std::string>() ), palette(), serial( 0 )
 {}
 
 bool KittyImage::operator==( const KittyImage& other ) const
 {
   return ( id == other.id ) && ( number == other.number ) && ( format == other.format ) && ( width == other.width )
          && ( height == other.height ) && ( origin == other.origin ) && ( serial == other.serial )
+         && ( palette == other.palette )
          && ( ( data == other.data ) || ( data && other.data && *data == *other.data ) );
 }
 
@@ -417,23 +419,44 @@ bool kitty_webp_dimensions( const std::string& webp, uint32_t& width, uint32_t& 
   return true;
 }
 
-static bool encode_lossless_webp( const unsigned char* pixels,
-                                  uint32_t width,
-                                  uint32_t height,
-                                  bool alpha,
-                                  std::string& webp,
-                                  std::string& error )
+static bool encode_image( const unsigned char* pixels,
+                          uint32_t width,
+                          uint32_t height,
+                          bool alpha,
+                          KittyImage& image,
+                          const ImageEncoding& encoding,
+                          std::string& error )
 {
+  if ( encoding.quality < -1 || encoding.quality > 100 ) {
+    error = "EINVAL: WebP quality must be between 0 and 100";
+    return false;
+  }
+  image.width = width;
+  image.height = height;
+  image.palette.clear();
+  image.data = std::make_shared<std::string>();
+  if ( encoding.palette_djvu
+       && encode_palette_djvu( pixels, width, height, alpha, encoding.djvu_lossy, image.palette, *image.data ) ) {
+    image.format = KITTY_FORMAT_DJVU;
+    return true;
+  }
+  // If cjb2 failed on a small palette, retain exact pixels in the fallback.
+  const bool lossy = encoding.quality >= 0 && image.palette.empty();
+  image.palette.clear();
+  image.format = KITTY_FORMAT_WEBP;
   const int stride = static_cast<int>( width * ( alpha ? 4 : 3 ) );
   uint8_t* encoded = NULL;
-  const size_t encoded_size = alpha ? WebPEncodeLosslessRGBA( pixels, width, height, stride, &encoded )
-                                    : WebPEncodeLosslessRGB( pixels, width, height, stride, &encoded );
+  const size_t encoded_size = lossy
+    ? ( alpha ? WebPEncodeRGBA( pixels, width, height, stride, encoding.quality, &encoded )
+              : WebPEncodeRGB( pixels, width, height, stride, encoding.quality, &encoded ) )
+    : ( alpha ? WebPEncodeLosslessRGBA( pixels, width, height, stride, &encoded )
+              : WebPEncodeLosslessRGB( pixels, width, height, stride, &encoded ) );
   if ( encoded_size == 0 || encoded == NULL || encoded_size > KITTY_IMAGE_QUOTA ) {
     WebPFree( encoded );
     error = "EINVAL: WebP encode failed";
     return false;
   }
-  webp.assign( reinterpret_cast<const char*>( encoded ), encoded_size );
+  image.data->assign( reinterpret_cast<const char*>( encoded ), encoded_size );
   WebPFree( encoded );
   return true;
 }
@@ -448,6 +471,17 @@ bool kitty_normalize_webp( uint32_t format,
                            std::string& error )
 {
   webp.clear();
+  KittyImage image;
+  if ( !kitty_normalize_image( format, width, height, input, image, ImageEncoding(), error ) ) { return false; }
+  webp = *image.data;
+  output_width = image.width;
+  output_height = image.height;
+  return true;
+}
+
+bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, const std::string& input,
+                            KittyImage& output, const ImageEncoding& encoding, std::string& error )
+{
   error.clear();
 
   if ( format == KITTY_FORMAT_RGB || format == KITTY_FORMAT_RGBA ) {
@@ -458,14 +492,13 @@ bool kitty_normalize_webp( uint32_t format,
       error = "EINVAL: pixel data size does not match dimensions";
       return false;
     }
-    output_width = width;
-    output_height = height;
-    return encode_lossless_webp( reinterpret_cast<const unsigned char*>( input.data() ),
-                                 width,
-                                 height,
-                                 format == KITTY_FORMAT_RGBA,
-                                 webp,
-                                 error );
+    return encode_image( reinterpret_cast<const unsigned char*>( input.data() ),
+                          width,
+                          height,
+                          format == KITTY_FORMAT_RGBA,
+                          output,
+                          encoding,
+                          error );
   }
 
   if ( format == KITTY_FORMAT_PNG ) {
@@ -494,10 +527,8 @@ bool kitty_normalize_webp( uint32_t format,
       return false;
     }
     png_image_free( &image );
-    output_width = png_width;
-    output_height = png_height;
-    return encode_lossless_webp(
-      reinterpret_cast<const unsigned char*>( rgba.data() ), output_width, output_height, true, webp, error );
+    return encode_image(
+      reinterpret_cast<const unsigned char*>( rgba.data() ), png_width, png_height, true, output, encoding, error );
   }
 
   error = "EINVAL: unsupported Kitty image format";
@@ -517,6 +548,22 @@ bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& w
                            rgba.size(),
                            static_cast<int>( width * 4 ) )
        == NULL ) {
+    rgba.clear();
+    return false;
+  }
+  return true;
+}
+
+bool kitty_image_to_rgba( const KittyImage& image, std::string& rgba )
+{
+  rgba.clear();
+  if ( !image.data ) { return false; }
+  if ( image.format == KITTY_FORMAT_DJVU ) {
+    return decode_palette_djvu( image.palette, *image.data, image.width, image.height, rgba );
+  }
+  if ( image.format != KITTY_FORMAT_WEBP || !image.palette.empty() ) { return false; }
+  uint32_t width = 0, height = 0;
+  if ( !kitty_webp_to_rgba( *image.data, rgba, width, height ) || width != image.width || height != image.height ) {
     rgba.clear();
     return false;
   }
@@ -618,21 +665,15 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     if ( initialized && old != old_images.end() && old->second.serial == it->second.serial ) {
       continue;
     }
-    if ( it->second.format != KITTY_FORMAT_WEBP || !it->second.data ) {
-      continue;
-    }
-    const std::string& webp = *it->second.data;
     std::string rgba;
-    uint32_t width = 0, height = 0;
-    if ( !kitty_webp_to_rgba( webp, rgba, width, height ) || width != it->second.width
-         || height != it->second.height ) {
+    if ( !kitty_image_to_rgba( it->second, rgba ) ) {
       continue;
     }
     std::string controls( "a=t,q=2" );
     append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
     append_u32_key( controls, "i", it->second.id, false );
-    append_u32_key( controls, "s", width );
-    append_u32_key( controls, "v", height );
+    append_u32_key( controls, "s", it->second.width );
+    append_u32_key( controls, "v", it->second.height );
     out.append( encode_kitty_chunks( controls, rgba ) );
   }
 

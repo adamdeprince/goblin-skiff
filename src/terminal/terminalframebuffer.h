@@ -456,6 +456,7 @@ public:
   Framebuffer( const Framebuffer& other );
   Framebuffer& operator=( const Framebuffer& other );
   DrawState ds;
+  ImageEncoding image_encoding; // local session policy, not synchronized state
 
   const rows_type& get_rows() const { return rows; }
 

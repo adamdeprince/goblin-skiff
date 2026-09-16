@@ -46,7 +46,7 @@ def remote(graphics):
     os.write(1, b"\x1b[<u\x1b[11;1HFINISHED")
 
 
-def session(kitty, sixel, sizing, escape_exit=False):
+def session(kitty, sixel, sizing, escape_exit=False, palette_djvu=True):
     spec = importlib.util.spec_from_file_location("graphics_relay", SCRIPT.with_name("control-panel-integration.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -55,11 +55,15 @@ def session(kitty, sixel, sizing, escape_exit=False):
     server = str((build / "../frontend/goblin-mosh-server").resolve())
     env = os.environ.copy()
     env.update(TERM="xterm-256color", MOSH_CLIENT_CAPS="keepalive-v1,sixel-state-v1", MOSH_SERVER_NETWORK_TMOUT="25")
-    bootstrap = subprocess.run([server, "new", "-i", "127.0.0.1", "-c", "256", "--", sys.executable,
+    if palette_djvu:
+        env["MOSH_CLIENT_CAPS"] += ",palette-djvu-v1"
+    image_options = ["--lossy=75", "--djvu-lossy"] if palette_djvu else []
+    bootstrap = subprocess.run([server, "new"] + image_options + ["-i", "127.0.0.1", "-c", "256", "--", sys.executable,
                                 str(SCRIPT), "--remote", str(int(kitty or sixel))],
                                stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=10)
     assert bootstrap.returncode == 0, bootstrap.stderr
     assert b"MOSH GRAPHICS sixel-state-v1" in bootstrap.stdout
+    assert (b"MOSH IMAGE palette-djvu-v1" in bootstrap.stdout) == palette_djvu
     match = re.search(rb"MOSH CONNECT (\d+) (\S+)", bootstrap.stdout)
     assert match, bootstrap.stdout
     server_pid = int(re.search(rb"detached, pid = (\d+)", bootstrap.stderr)[1])
@@ -164,4 +168,4 @@ if __name__ == "__main__":
     else:
         for capabilities in ((True, False, True), (False, True, False), (True, True, True), (False, False, False)):
             session(*capabilities)
-        session(True, False, True, escape_exit=True)
+        session(True, False, True, escape_exit=True, palette_djvu=False)

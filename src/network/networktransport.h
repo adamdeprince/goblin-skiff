@@ -44,6 +44,7 @@
 #include "src/network/bulkdatagram.h"
 #include "src/network/network.h"
 #include "src/network/statesamples.h"
+#include "src/network/sessionversion.h"
 #include "src/network/transportsender.h"
 #include "transportfragment.h"
 
@@ -68,6 +69,7 @@ private:
   RemoteState last_receiver_state; /* the state we were in when user last queried state */
   FragmentAssembly fragments;
   StateSampleWriter state_sample_writer;
+  SessionVersion peer_version {};
   unsigned int verbose;
 
 public:
@@ -83,7 +85,8 @@ public:
              const char* ip,
              const char* port,
              bool compact_keepalive = false,
-             Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB );
+             Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB,
+             const std::string& proxy = "" );
 
   /* Send data or an ack if necessary. */
   void tick( void )
@@ -127,6 +130,7 @@ public:
 
   std::string port( void ) const { return connection.port(); }
   std::string get_key( void ) const { return connection.get_key(); }
+  const SessionVersion& get_peer_version() const { return peer_version; }
 
   MyState& get_current_state( void ) { return sender.get_current_state(); }
   void set_current_state( const MyState& x ) { sender.set_current_state( x ); }

@@ -43,6 +43,7 @@
 #include "src/network/compressor.h"
 #include "src/network/transportfragment.h"
 #include "src/network/transportsender.h"
+#include "src/network/sessionversion.h"
 #include "src/util/fatal_assert.h"
 
 using namespace Network;
@@ -329,6 +330,9 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
   Instruction inst;
 
   inst.set_protocol_version( MOSH_PROTOCOL_VERSION );
+  // Retransmit identity until a nonzero state is acknowledged, then avoid
+  // adding release/build strings to every keystroke and screen update.
+  if ( sent_states.front().num == 0 ) { SessionVersion::local().advertise( inst ); }
   inst.set_old_num( assumed_receiver_state->num );
   inst.set_new_num( new_num );
   inst.set_ack_num( ack_num );

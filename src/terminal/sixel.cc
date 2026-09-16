@@ -449,7 +449,7 @@ bool render( const KittyImage& image, bool local_sixel, bool local_kitty, std::s
 {
   bytes.clear();
   error.clear();
-  if ( image.origin != ImageOrigin::Sixel || image.format != KITTY_FORMAT_WEBP || !image.data ) {
+  if ( image.origin != ImageOrigin::Sixel || !image.data ) {
     return reject( error, "Not a synchronized sixel image" );
   }
   const Renderer renderer = select_renderer( local_sixel, local_kitty );
@@ -457,10 +457,11 @@ bool render( const KittyImage& image, bool local_sixel, bool local_kitty, std::s
     return reject( error, "No supported local graphics protocol" );
   }
   Bitmap bitmap;
-  if ( !kitty_webp_to_rgba( *image.data, bitmap.rgba, bitmap.width, bitmap.height ) || bitmap.width != image.width
-       || bitmap.height != image.height ) {
+  if ( !kitty_image_to_rgba( image, bitmap.rgba ) ) {
     return reject( error, "Invalid sixel image state" );
   }
+  bitmap.width = image.width;
+  bitmap.height = image.height;
   if ( renderer == Renderer::Sixel ) {
     return encode( bitmap, bytes, error );
   }

@@ -40,6 +40,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,7 @@
 #include "src/crypto/crypto.h"
 #include "linkbudget.h"
 #include "relay.h"
+#include "socks5.h"
 
 using namespace Crypto;
 
@@ -173,6 +175,8 @@ private:
   };
 
   std::deque<Socket> socks;
+  std::unique_ptr<Socks5UDP> socks5 {};
+  uint64_t socks5_epoch = 0;
   bool has_remote_addr;
   Addr remote_addr;
   socklen_t remote_addr_len;
@@ -189,6 +193,8 @@ private:
   unsigned relay_hops = 0;
 
   void setup( void );
+  void service_proxy();
+  ssize_t send_datagram( const std::string& packet );
 
   Direction direction;
   uint16_t saved_timestamp;
@@ -241,7 +247,8 @@ public:
               const char* ip,
               const char* port,
               bool s_compact_keepalive = false,
-              Crypto::Mode s_crypto_mode = Crypto::Mode::LegacyOCB ); /* client */
+              Crypto::Mode s_crypto_mode = Crypto::Mode::LegacyOCB,
+              const std::string& proxy = "" ); /* client */
 
   ~Connection();
   void set_relay_hops( unsigned hops ); /* final server: reserve outer wire overhead */

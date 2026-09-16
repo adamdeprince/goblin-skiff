@@ -9,7 +9,7 @@ not automatic deployments of every change to this document.
 
 Sixel images belong in the normal terminal state alongside character cells.
 Use the existing state/delta transport, not a separate graphics channel or a
-reliable log of drawing commands. Store decoded pixels as lossless WebP with
+reliable log of drawing commands. Store pixels as WebP or palette/DjVu with
 image origin and placement. Do not put client capabilities or cell geometry
 in the replicated framebuffer.
 

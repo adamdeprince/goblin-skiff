@@ -79,7 +79,7 @@
 
 static void print_version( FILE* file )
 {
-  fputs( "goblin-mosh-client (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "goblin-mosh-client " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -98,7 +98,10 @@ static void print_usage( FILE* file, const char* argv0 )
            "       --show-mascot=kitty|sixel|ascii previews the local mascot and exits\n"
            "       --no-kitty disables local Kitty graphics and detection\n"
            "       --no-sixel disables local sixel graphics and detection\n"
+           "       --image-codecs lists supported image transport codecs and exits\n"
+           "       --connection-version reports release, build and compatibility protocol and exits\n"
            "       --udp-relay uses MOSH_RELAY_KEYS supplied by the wrapper's -J route\n"
+           "       --socks5-proxy=HOST:PORT carries UDP through a SOCKS5 proxy (proxy DNS)\n"
            "       Ctrl-^ then 0 opens or resumes the local file browser\n",
            argv0,
            argv0 );
@@ -177,6 +180,7 @@ int main( int argc, char* argv[] )
   bool tmux_control = false;
   bool color_count = false;
   bool udp_relay = false;
+  std::string socks5_proxy;
   std::string mascot_format = string_from_env( "MOSH_MASCOT" );
   bool show_mascot = false;
   bool allow_kitty = true, allow_sixel = true;
@@ -197,6 +201,14 @@ int main( int argc, char* argv[] )
       print_version( stdout );
       exit( 0 );
     }
+    if ( 0 == strcmp( argv[i], "--image-codecs" ) ) {
+      puts( "webp palette-djvu-v1" );
+      exit( 0 );
+    }
+    if ( 0 == strcmp( argv[i], "--connection-version" ) ) {
+      puts( Network::SessionVersion::local().bootstrap_line().c_str() );
+      exit( 0 );
+    }
   }
 
   int opt;
@@ -213,6 +225,7 @@ int main( int argc, char* argv[] )
     { "no-kitty", no_argument, NULL, 265 },
     { "no-sixel", no_argument, NULL, 266 },
     { "udp-relay", no_argument, NULL, 267 },
+    { "socks5-proxy", required_argument, NULL, 268 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -279,6 +292,11 @@ int main( int argc, char* argv[] )
         break;
       case 267:
         udp_relay = true;
+        break;
+      case 268:
+        socks5_proxy = optarg;
+        try { Network::Socks5UDP::validate_proxy( socks5_proxy ); }
+        catch ( const std::exception& e ) { fprintf( stderr, "%s\n", e.what() ); return 1; }
         break;
       default:
         print_usage( stderr, argv[0] );
@@ -393,6 +411,7 @@ int main( int argc, char* argv[] )
                       allow_kitty,
                       allow_sixel );
     if ( udp_relay ) { client.set_relay_keys( relay_keys ); relay_keys.clear(); }
+    client.set_socks5_proxy( socks5_proxy );
     client.init();
 
     try {

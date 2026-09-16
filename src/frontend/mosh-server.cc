@@ -43,6 +43,7 @@
 #include <exception>
 #include <getopt.h>
 #include <sstream>
+#include <stdexcept>
 #include <typeinfo>
 #include <vector>
 
@@ -136,11 +137,12 @@ static int run_server( const char* desired_ip,
                        bool unlink_state_zstd_dictionary,
                        bool compact_keepalive,
                        Crypto::Mode crypto_mode,
-                       bool tmux_control );
+                       bool tmux_control,
+                       const Terminal::ImageEncoding& image_encoding );
 
 static void print_version( FILE* file )
 {
-  fputs( "goblin-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "goblin-mosh-server " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -154,6 +156,8 @@ static void print_usage( FILE* stream, const char* argv0 )
            "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [--fips-crypto] [-- COMMAND...]\n",
            argv0 );
   fputs( "       goblin-mosh-server relay --help  (authenticated UDP jump relay)\n", stream );
+  fputs( "       --lossy=QUALITY  WebP quality 0-100 (higher is better; default lossless)\n"
+         "       --djvu-lossy     allow cjb2 symbol substitution for two-color images\n", stream );
 }
 
 static bool print_motd( const char* filename );
@@ -312,6 +316,8 @@ int main( int argc, char* argv[] )
   std::string state_zstd_dictionary = state_zstd_dictionary_env ? state_zstd_dictionary_env : "";
   bool unlink_state_zstd_dictionary = bool_from_env( "MOSH_STATE_ZSTD_DICT_UNLINK", false );
   const char* client_capabilities = getenv( "MOSH_CLIENT_CAPS" );
+  Terminal::ImageEncoding image_encoding;
+  image_encoding.palette_djvu = has_capability( client_capabilities, "palette-djvu-v1" );
   bool compact_keepalive = has_capability( client_capabilities, "keepalive-v1" );
   bool tmux_control = has_capability( client_capabilities, "tmux-control-v1" );
   bool client_supports_fips_crypto = has_capability( client_capabilities, "fips-aes128-gcm-v1" );
@@ -344,6 +350,8 @@ int main( int argc, char* argv[] )
     int opt;
     static const struct option long_options[] = {
       { "fips-crypto", no_argument, NULL, 256 },
+      { "lossy", required_argument, NULL, 257 },
+      { "djvu-lossy", no_argument, NULL, 258 },
       { 0, 0, 0, 0 },
     };
     while ( ( opt = getopt_long( argc - 1, argv + 1, "@:i:p:c:svl:R:AXt:b:", long_options, NULL ) ) != -1 ) {
@@ -409,6 +417,20 @@ int main( int argc, char* argv[] )
         case 256:
           crypto_mode = Crypto::Mode::FipsAES128GCM;
           break;
+        case 257:
+          if ( !*optarg || strlen( optarg ) > 3 || strspn( optarg, "0123456789" ) != strlen( optarg )
+               || parse_uint_option( "--lossy", optarg ) > 100 ) {
+            fputs( "--lossy requires an integer quality from 0 to 100\n", stderr );
+            return 1;
+          }
+          image_encoding.quality = parse_uint_option( "--lossy", optarg );
+          break;
+        case 258:
+          image_encoding.djvu_lossy = true;
+          break;
+        case '?':
+          print_usage( stderr, argv[0] );
+          return 1;
         default:
           /* don't die on unknown options */
           print_usage( stderr, argv[0] );
@@ -546,7 +568,8 @@ int main( int argc, char* argv[] )
                        unlink_state_zstd_dictionary,
                        compact_keepalive,
                        crypto_mode,
-                       tmux_control );
+                       tmux_control,
+                       image_encoding );
   } catch ( const Network::NetworkException& e ) {
     fprintf( stderr, "Network exception: %s\n", e.what() );
     return 1;
@@ -576,9 +599,13 @@ static int run_server( const char* desired_ip,
                        bool unlink_state_zstd_dictionary,
                        bool compact_keepalive,
                        Crypto::Mode crypto_mode,
-                       bool tmux_control )
+                       bool tmux_control,
+                       const Terminal::ImageEncoding& image_encoding )
 {
   Crypto::ensure_mode_available( crypto_mode );
+  if ( image_encoding.djvu_lossy && !image_encoding.palette_djvu ) {
+    throw std::runtime_error( "--djvu-lossy requires client capability palette-djvu-v1" );
+  }
 
   if ( !state_zstd_dictionary.empty() ) {
     Network::get_compressor().set_zstd_dictionary_from_file( state_zstd_dictionary );
@@ -629,6 +656,7 @@ static int run_server( const char* desired_ip,
 
   /* open parser and terminal */
   Terminal::Complete terminal( window_size.ws_col, window_size.ws_row );
+  terminal.set_image_encoding( image_encoding );
 
   /* open network */
   Network::UserStream blank;
@@ -677,10 +705,13 @@ static int run_server( const char* desired_ip,
   if ( compact_keepalive ) {
     puts( "MOSH CAPS keepalive-v1" );
   }
+  puts( Network::SessionVersion::local().bootstrap_line().c_str() );
   if ( relay_hops ) { printf( "MOSH RELAY-MTU 1 %u\n", relay_hops ); }
   if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "sixel-state-v1" ) ) {
     puts( "MOSH GRAPHICS sixel-state-v1" );
   }
+  if ( image_encoding.palette_djvu ) { puts( "MOSH IMAGE palette-djvu-v1" ); }
+  else if ( image_encoding.quality >= 0 ) { puts( "MOSH IMAGE webp" ); }
   if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "osc5522-v1" ) ) { puts( "MOSH CLIPBOARD osc5522-v1" ); }
   if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "goblin-download-v2" ) ) { puts( "MOSH DOWNLOADS goblin-download-v2" ); }
   if ( tmux_control ) {
@@ -714,7 +745,7 @@ static int run_server( const char* desired_ip,
   if ( the_pid < 0 ) {
     perror( "fork" );
   } else if ( the_pid > 0 ) {
-    fputs( "\ngoblin-mosh-server (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+    fputs( "\ngoblin-mosh-server " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
            "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
            "This is free software: you are free to change and redistribute it.\n"
@@ -929,7 +960,8 @@ static int run_server( const char* desired_ip,
     /* Drop unnecessary privileges */
 #ifdef HAVE_PLEDGE
     /* OpenBSD pledge() syscall */
-    if ( pledge( "stdio inet unix tty rpath proc", NULL ) ) {
+    if ( pledge( image_encoding.palette_djvu ? "stdio inet unix tty rpath wpath cpath proc exec"
+                                             : "stdio inet unix tty rpath proc", NULL ) ) {
       perror( "pledge() failed" );
       exit( 1 );
     }

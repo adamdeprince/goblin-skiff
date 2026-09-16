@@ -16,6 +16,7 @@ class GoblinMosh < Formula
   depends_on "pkgconf" => :build
   depends_on "python@3.14" => :test
   depends_on "abseil"
+  depends_on "djvulibre"
   depends_on "libpng"
   depends_on "librsync"
   depends_on :macos
@@ -45,7 +46,7 @@ class GoblinMosh < Formula
       ENV["XDG_RUNTIME_DIR"] = runtime
       tests = %w[
         ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs
-        bulk-datagram moshcp-protocol bulk-loss-sim transport-compression
+        bulk-datagram moshcp-protocol bulk-loss-sim transport-compression session-version
         state-samples osc52-parse kitty-graphics terminal-geometry
         terminal-display tmux-control control-panel mascot file-transfer
         link-budget sixel-state terminal-extensions download download-forward

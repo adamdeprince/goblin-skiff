@@ -18,4 +18,10 @@ message Instruction {
 
   optional bool zstd_supported = 8;
   optional bytes zstd_dict_id = 9;
+
+  // Goblin baseline 1. Advertise together until the first state is ACKed.
+  // Release/build identify the peer; only protocol changes break compatibility.
+  optional string goblin_release = 10;
+  optional string goblin_build = 11;
+  optional uint32 goblin_protocol = 12;
 }

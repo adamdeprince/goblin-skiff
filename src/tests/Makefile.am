@@ -97,6 +97,12 @@ transport_compression_SOURCES = transport-compression.cc
 transport_compression_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network $(protobuf_CFLAGS) $(ZSTD_CFLAGS)
 transport_compression_LDADD = ../network/libmoshnetwork.a ../protobufs/libmoshprotos.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(protobuf_LIBS) $(CRYPTO_LIBS) $(ZSTD_LIBS)
 
+check_PROGRAMS += session-version
+TESTS += session-version
+session_version_SOURCES = session-version.cc
+session_version_CPPFLAGS = -I$(top_builddir) $(transport_compression_CPPFLAGS)
+session_version_LDADD = $(transport_compression_LDADD)
+
 state_samples_SOURCES = state-samples.cc
 state_samples_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network $(protobuf_CFLAGS)
 state_samples_LDADD = ../network/libmoshnetwork.a ../protobufs/libmoshprotos.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(protobuf_LIBS) $(CRYPTO_LIBS) $(ZSTD_LIBS)
@@ -135,6 +141,12 @@ file_transfer_CPPFLAGS = -I$(top_builddir) $(terminal_display_CPPFLAGS)
 file_transfer_LDADD = $(control_panel_LDADD)
 check_PROGRAMS += link-budget
 check_PROGRAMS += udp-relay
+check_PROGRAMS += socks5-proxy
+TESTS += socks5-proxy socks5-integration.test socks5-session.test
+EXTRA_DIST += socks5-integration.test socks5-integration.py socks5-session.test
+socks5_proxy_SOURCES = socks5-proxy.cc
+socks5_proxy_CPPFLAGS = -I$(top_srcdir) $(CRYPTO_CFLAGS)
+socks5_proxy_LDADD = ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
 TESTS += udp-relay udp-relay-integration.test udp-jump-wrapper.test
 EXTRA_DIST += udp-relay-integration.test udp-jump-wrapper.test udp-jump-wrapper.py
 udp_relay_SOURCES = udp-relay.cc

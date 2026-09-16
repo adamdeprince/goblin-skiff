@@ -67,6 +67,7 @@ private:
   static const int ECHO_TIMEOUT = 50; /* for late ack */
 
 public:
+  void set_image_encoding( const ImageEncoding& encoding ) { terminal.get_fb().image_encoding = encoding; }
   void set_sixel_enabled( bool enabled ) { terminal.set_sixel_enabled( enabled ); }
   void set_text_sizing_enabled( bool enabled ) { terminal.set_text_sizing_enabled( enabled ); }
   void set_keyboard_enabled( bool enabled ) { terminal.set_keyboard_enabled( enabled ); }

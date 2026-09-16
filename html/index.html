@@ -1,0 +1,1325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Goblin Mosh: zstd-22 screen updates, adaptive link pacing, FEC file synchronization, Kitty and sixel graphics. Source artifacts, packages, and a comparison with Mosh, SSH, Eternal Terminal, and autossh.">
+  <meta name="theme-color" content="#f3f1e8">
+  <meta property="og:title" content="goblin-mosh — low-bandwidth patch record">
+  <meta property="og:description" content="What changed in Mosh, why it changed, and what the changes mean on bandwidth-constrained links.">
+  <meta property="og:image" content="goblin.png">
+  <link rel="icon" href="goblin.png" type="image/png" sizes="1254x1254">
+  <link rel="apple-touch-icon" href="goblin.png">
+  <title>goblin-mosh — low-bandwidth patch record</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f3f1e8;
+      --paper-deep: #ebe8dd;
+      --card: #faf9f4;
+      --ink: #161713;
+      --muted: #62645c;
+      --line: #c9c8be;
+      --line-dark: #888b80;
+      --green: #8fc51f;
+      --green-soft: #e3efc5;
+      --green-dark: #476d08;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+      --max: 1080px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(22, 23, 19, .035) 1px, transparent 1px) 0 0 / 100% 32px,
+        var(--paper);
+      color: var(--ink);
+      font: 16px/1.62 var(--sans);
+      text-rendering: optimizeLegibility;
+    }
+    a {
+      color: inherit;
+      text-decoration-color: var(--line-dark);
+      text-underline-offset: 3px;
+    }
+    a:hover { text-decoration-color: var(--green-dark); }
+    img { display: block; max-width: 100%; }
+    code, pre { font-family: var(--mono); }
+    ::selection { background: var(--green); color: var(--ink); }
+    :focus-visible { outline: 3px solid var(--green); outline-offset: 3px; }
+
+    .skip-link {
+      position: fixed;
+      z-index: 10;
+      top: 8px;
+      left: 8px;
+      transform: translateY(-160%);
+      padding: 8px 12px;
+      border: 1px solid var(--ink);
+      background: var(--card);
+      font: 700 .78rem var(--mono);
+    }
+    .skip-link:focus { transform: none; }
+
+    .shell {
+      width: min(calc(100% - 40px), var(--max));
+      margin-inline: auto;
+    }
+
+    .site-header {
+      border-top: 6px solid var(--ink);
+      border-bottom: 1px solid var(--ink);
+      background: rgba(243, 241, 232, .96);
+    }
+    .header-inner {
+      min-height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 28px;
+    }
+    .identity {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+    .mark {
+      width: 44px;
+      height: 44px;
+      overflow: hidden;
+      flex: 0 0 auto;
+      border: 1px solid var(--ink);
+      border-radius: 50%;
+      background: var(--card);
+    }
+    .mark img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scale(1.5) translateY(5%);
+    }
+    .identity-text { display: grid; gap: 2px; }
+    .identity-text strong {
+      font: 750 .95rem/1.1 var(--mono);
+      letter-spacing: -.02em;
+    }
+    .identity-text small {
+      color: var(--muted);
+      font: 600 .65rem/1.1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .header-nav {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      font: 650 .75rem var(--mono);
+    }
+    .header-nav a { text-decoration: none; }
+    .header-nav a:hover { color: var(--green-dark); }
+    .source-link {
+      padding: 8px 11px;
+      border: 1px solid var(--ink);
+      background: var(--card);
+      box-shadow: 3px 3px 0 var(--green);
+    }
+
+    main { padding-bottom: 80px; }
+
+    .intro {
+      padding: 72px 0 58px;
+      border-bottom: 1px solid var(--ink);
+    }
+    .eyebrow,
+    .section-index,
+    .mini-label {
+      margin: 0;
+      color: var(--green-dark);
+      font: 750 .7rem/1.3 var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .intro-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 270px;
+      gap: 70px;
+      align-items: end;
+    }
+    h1 {
+      max-width: 760px;
+      margin: 17px 0 22px;
+      font: 600 clamp(2.65rem, 6vw, 4.75rem)/.98 var(--serif);
+      letter-spacing: -.045em;
+    }
+    .lede {
+      max-width: 720px;
+      margin: 0;
+      color: #3e403a;
+      font: 1.12rem/1.65 var(--serif);
+    }
+    .summary-note {
+      padding: 18px 0 0;
+      border-top: 5px solid var(--green);
+    }
+    .summary-note p {
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: .86rem;
+    }
+
+    .record {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 48px;
+      border: 1px solid var(--ink);
+      background: var(--card);
+    }
+    .record-item {
+      min-width: 0;
+      padding: 15px 17px 16px;
+      border-right: 1px solid var(--line);
+    }
+    .record-item:last-child { border-right: 0; }
+    .record-item dt {
+      margin-bottom: 5px;
+      color: var(--muted);
+      font: 650 .64rem var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .record-item dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font: 700 .79rem/1.45 var(--mono);
+    }
+    .status-dot::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: inset 0 0 0 1px var(--green-dark);
+    }
+
+    .section {
+      padding: 70px 0 0;
+    }
+    .section-head {
+      display: grid;
+      grid-template-columns: 160px minmax(0, 1fr);
+      gap: 30px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--ink);
+    }
+    h2 {
+      margin: 0;
+      font: 600 clamp(2rem, 4vw, 3.2rem)/1.04 var(--serif);
+      letter-spacing: -.035em;
+    }
+    .section-deck {
+      max-width: 690px;
+      margin: 11px 0 0;
+      color: var(--muted);
+      font-size: .96rem;
+    }
+
+    .artifacts { border-bottom: 1px solid var(--ink); }
+    .artifact {
+      display: grid;
+      grid-template-columns: 70px minmax(230px, .85fr) minmax(0, 1.65fr);
+      gap: 28px;
+      padding: 34px 0 36px;
+      border-top: 1px solid var(--line);
+    }
+    .artifact:first-child { border-top: 0; }
+    .artifact-number {
+      color: var(--line-dark);
+      font: 650 .73rem var(--mono);
+    }
+    .artifact h3 {
+      margin: 0 0 12px;
+      font: 700 1.02rem/1.35 var(--sans);
+    }
+    .file-list {
+      display: grid;
+      gap: 6px;
+    }
+    .file-list a {
+      width: fit-content;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      color: var(--green-dark);
+      font: 650 .7rem/1.45 var(--mono);
+    }
+    .artifact-body {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 24px;
+    }
+    .artifact-body div {
+      padding-left: 14px;
+      border-left: 1px solid var(--line);
+    }
+    .artifact-body h4 {
+      margin: 0 0 7px;
+      color: var(--muted);
+      font: 700 .64rem var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .artifact-body p {
+      margin: 0;
+      font: .86rem/1.58 var(--sans);
+    }
+
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
+      gap: 40px;
+      margin-top: 30px;
+    }
+    .table-wrap {
+      min-width: 0;
+      overflow-x: auto;
+      border: 1px solid var(--ink);
+      background: var(--card);
+    }
+    .comparison-wrap { margin-top: 30px; max-height: 76vh; }
+    .feature-table { min-width: 1080px; table-layout: fixed; }
+    .feature-table caption {
+      padding: 15px;
+      text-align: left;
+      font: .8rem/1.6 var(--sans);
+      background: var(--card);
+    }
+    .feature-table th, .feature-table td { padding: 13px; }
+    .feature-table th[scope="col"] {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      color: var(--ink);
+      line-height: 1.6;
+    }
+    .feature-table th:first-child { width: 180px; }
+    .feature-table th[scope="row"] {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: var(--card);
+      color: var(--ink);
+      border-right: 1px solid var(--line);
+      font: 650 .76rem/1.55 var(--sans);
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .feature-table thead th:first-child { left: 0; z-index: 3; }
+    .feature-table tr > :nth-child(2) { background: var(--green-soft); }
+    .feature-table td { font: .78rem/1.55 var(--sans); }
+    .feature-table tr:last-child th { border-bottom: 0; }
+    .table-note {
+      margin: 15px 0 0;
+      color: var(--muted);
+      font: .8rem/1.65 var(--sans);
+    }
+    .source-notes {
+      padding-left: 22px;
+      color: var(--muted);
+      font-size: .8rem;
+    }
+    .source-notes li + li { margin-top: 8px; }
+    .package-table { min-width: 610px; }
+    .package-table th[scope="row"] {
+      background: var(--card);
+      color: var(--ink);
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    kbd {
+      padding: 1px 4px;
+      border: 1px solid var(--line-dark);
+      border-radius: 3px;
+      background: var(--card);
+      font: .85em var(--mono);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .84rem;
+    }
+    th, td {
+      padding: 13px 15px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: 0; }
+    th {
+      background: var(--paper-deep);
+      color: var(--muted);
+      font: 700 .64rem var(--mono);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    td:first-child {
+      white-space: nowrap;
+      font: 650 .75rem/1.55 var(--mono);
+    }
+    .priority {
+      display: inline-block;
+      min-width: 64px;
+      padding: 2px 6px;
+      border: 1px solid var(--line-dark);
+      background: var(--paper);
+      text-align: center;
+      font: 700 .61rem var(--mono);
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .priority.primary {
+      border-color: var(--green-dark);
+      background: var(--green-soft);
+      color: #314f03;
+    }
+    .plain-panel {
+      padding: 25px;
+      border: 1px solid var(--ink);
+      border-top: 6px solid var(--ink);
+      background: var(--paper-deep);
+    }
+    .plain-panel h3 {
+      margin: 0 0 13px;
+      font: 700 .82rem var(--mono);
+    }
+    .plain-panel p {
+      margin: 0 0 13px;
+      color: #44463f;
+      font: .9rem/1.62 var(--sans);
+    }
+    .plain-panel p:last-child { margin-bottom: 0; }
+
+    .build-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr);
+      gap: 40px;
+      margin-top: 30px;
+    }
+    .terminal {
+      overflow: hidden;
+      border: 1px solid var(--ink);
+      background: #171814;
+      color: #e9eadf;
+    }
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 13px;
+      border-bottom: 1px solid #3b3d35;
+      color: #a9ad9f;
+      font: 650 .63rem var(--mono);
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .terminal-bar span:last-child { color: var(--green); }
+    pre {
+      margin: 0;
+      padding: 21px;
+      overflow-x: auto;
+      font: .76rem/1.72 var(--mono);
+    }
+    .prompt { color: var(--green); }
+    .comment { color: #92978a; }
+
+    .verification {
+      padding: 24px;
+      border: 1px solid var(--ink);
+      background: var(--card);
+    }
+    .verification h3 {
+      margin: 0 0 17px;
+      font: 700 .78rem var(--mono);
+    }
+    .test-result {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin: 18px 0;
+      border: 1px solid var(--line);
+    }
+    .test-result div {
+      padding: 12px 10px;
+      border-right: 1px solid var(--line);
+      text-align: center;
+    }
+    .test-result div:last-child { border-right: 0; }
+    .test-result strong {
+      display: block;
+      font: 750 1.35rem var(--mono);
+    }
+    .test-result span {
+      color: var(--muted);
+      font: 650 .58rem var(--mono);
+      text-transform: uppercase;
+    }
+    .verification p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .8rem;
+    }
+
+    .limits {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 30px;
+      border-top: 1px solid var(--ink);
+      border-bottom: 1px solid var(--ink);
+    }
+    .limit {
+      padding: 22px 22px 24px 0;
+      border-right: 1px solid var(--line);
+    }
+    .limit + .limit { padding-left: 22px; }
+    .limit:last-child { border-right: 0; }
+    .limit h3 {
+      margin: 0 0 9px;
+      font: 700 .72rem var(--mono);
+    }
+    .limit p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .83rem;
+    }
+
+    .site-footer {
+      border-top: 1px solid var(--ink);
+      background: var(--paper-deep);
+    }
+    .footer-inner {
+      min-height: 120px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 30px;
+    }
+    .footer-note {
+      max-width: 540px;
+      margin: 0;
+      color: var(--muted);
+      font: .76rem/1.6 var(--mono);
+    }
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      font: 700 .73rem var(--mono);
+    }
+
+    @media (max-width: 860px) {
+      .header-nav a:not(.source-link) { display: none; }
+      .intro-grid,
+      .section-head,
+      .evidence-grid,
+      .build-grid {
+        grid-template-columns: 1fr;
+      }
+      .intro-grid { gap: 36px; }
+      .summary-note { max-width: 540px; }
+      .record { grid-template-columns: repeat(2, 1fr); }
+      .record-item:nth-child(2) { border-right: 0; }
+      .record-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .artifact {
+        grid-template-columns: 48px minmax(0, 1fr);
+      }
+      .artifact-body {
+        grid-column: 2;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .shell { width: min(calc(100% - 28px), var(--max)); }
+      .header-inner { min-height: 70px; }
+      .identity-text small { display: none; }
+      .source-link { box-shadow: 2px 2px 0 var(--green); }
+      .intro { padding: 52px 0 44px; }
+      h1 { font-size: clamp(2.55rem, 13vw, 3.5rem); }
+      .lede { font-size: 1rem; }
+      .record { grid-template-columns: 1fr; margin-top: 36px; }
+      .record-item,
+      .record-item:nth-child(2) {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .record-item:last-child { border-bottom: 0; }
+      .section { padding-top: 56px; }
+      .artifact {
+        grid-template-columns: 35px minmax(0, 1fr);
+        gap: 13px;
+        padding: 28px 0;
+      }
+      .artifact-body {
+        grid-template-columns: 1fr;
+        gap: 17px;
+      }
+      .build-grid { grid-template-columns: minmax(0, 1fr); }
+      pre { padding: 17px; font-size: .68rem; }
+      .limits { grid-template-columns: 1fr; }
+      .limit,
+      .limit + .limit {
+        padding: 20px 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .limit:last-child { border-bottom: 0; }
+      .footer-inner {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 28px 0;
+      }
+      .feature-table th:first-child { width: 145px; }
+      .feature-table { min-width: 1000px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to patch record</a>
+
+  <header class="site-header">
+    <div class="header-inner shell">
+      <a class="identity" href="#content" aria-label="goblin-mosh patch record">
+        <span class="mark"><img src="goblin.png" alt="" width="1254" height="1254"></span>
+        <span class="identity-text">
+          <strong>goblin-mosh</strong>
+          <small>low-bandwidth patch record</small>
+        </span>
+      </a>
+      <nav class="header-nav" aria-label="Primary navigation">
+        <a href="#changes">Changes</a>
+        <a href="#comparison">Compare</a>
+        <a href="#packages">Packages</a>
+        <a class="source-link" href="https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh">GitHub branch ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="content">
+    <section class="intro">
+      <div class="shell">
+        <div class="intro-grid">
+          <div>
+            <p class="eyebrow">Mosh patch series</p>
+            <h1>Mosh changes for bandwidth-constrained links.</h1>
+            <p class="lede">
+              Goblin Mosh keeps Mosh's roaming and predictive typing, and adds UDP jump relays
+              for sessions where the client cannot reach the destination directly over UDP.
+              It also adds zstd-22 compression, directional bandwidth pacing, repairable file transfers,
+              and modern terminal graphics.
+              The changes target very low-bandwidth satellite, radio, and metered links:
+              fewer unnecessary bytes, with input and screen updates ahead of background copies.
+            </p>
+          </div>
+          <aside class="summary-note" aria-label="Scope">
+            <p class="mini-label">Scope</p>
+            <p>
+              A record of what changed, why, and where to inspect it. Features below describe
+              the source snapshot; published packages have their own versions.
+            </p>
+          </aside>
+        </div>
+
+        <dl class="record" aria-label="Patch metadata">
+          <div class="record-item">
+            <dt>Branch</dt>
+            <dd><a href="https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh">low-bandwidth-mosh</a></dd>
+          </div>
+          <div class="record-item">
+            <dt>Source version</dt>
+            <dd><code>1.4.0-goblin20260915.1</code> · protocol 1 baseline · <time datetime="2026-09-15">15 Sep 2026</time></dd>
+          </div>
+          <div class="record-item">
+            <dt>License</dt>
+            <dd><a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/COPYING">GPL-3.0-or-later</a></dd>
+          </div>
+          <div class="record-item">
+            <dt>Status</dt>
+            <dd class="status-dot">working branch · packages available</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section shell" id="changes">
+      <div class="section-head">
+        <p class="section-index">01 / Artifacts</p>
+        <div>
+          <h2>What changed, in the source.</h2>
+          <p class="section-deck">
+            Each entry starts with the implementation artifact, then states the reason for the
+            change and the practical effect it is intended to have.
+          </p>
+        </div>
+      </div>
+
+      <div class="artifacts">
+        <article class="artifact" id="udp-relays">
+          <div class="artifact-number">A01</div>
+          <div>
+            <h3>Authenticated UDP jump relays</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/frontend/relay-server.cc">src/frontend/relay-server.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/relay.cc">src/network/relay.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/UDP_RELAY.md">UDP_RELAY.md</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div><h4>Changed</h4><p><code>-J</code> and SSH <code>ProxyJump</code> routes now carry the Mosh UDP session through up to four jump-host servers. SSH configures each fixed-destination relay, then exits.</p></div>
+            <div><h4>Why</h4><p>Jumping only for login does not help when the client cannot reach the destination over UDP. Adjacent hosts can relay that traffic while the terminal session remains encrypted end to end.</p></div>
+            <div><h4>Why it matters</h4><p>Each hop has an independent key, replay protection and authenticated client roaming. Framing adds 24 bytes per hop, or 36 with FIPS crypto, budgeted in both directions. Relays reuse Mosh's idle pings and expire after a configurable period of client silence.</p></div>
+          </div>
+        </article>
+        <article class="artifact">
+          <div class="artifact-number">A02</div>
+          <div>
+            <h3>Negotiated zstd-22 state compression</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/compressor.cc">src/network/compressor.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/transportsender-impl.h">src/network/transportsender-impl.h</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/protobufs/transportinstruction.proto">transportinstruction.proto</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>Once both peers advertise zstd, every serialized state update uses zstd level 22. Initial packets stay with zlib for negotiation.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>Screen updates are small but frequent, and satellite bandwidth is expensive. State compression is a core part of the link strategy.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>There is no size threshold, zlib comparison, or codec-level tuning. After negotiation, the state codec is always zstd-22.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A03</div>
+          <div>
+            <h3>Session-specific state dictionaries</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/statesamples.cc">src/network/statesamples.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/moshcp/mosh-compile-dictionary.cc">mosh-compile-dictionary.cc</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>State updates can be sampled, compiled into a zstd dictionary, and supplied during session setup.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>Terminal applications repeat structures, prompts, status lines, and escape sequences that a trained dictionary can represent compactly.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Dictionary compression activates only when both peers advertise the same dictionary ID, keeping the choice explicit and verifiable.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A04</div>
+          <div>
+            <h3>Directional pacing and stream priorities</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/frontend/streamforward.cc">src/frontend/streamforward.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/linkbudget.h">src/network/linkbudget.h</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>Each direction estimates its own delivery budget. A session-wide pacer covers terminal, forwarding and FEC traffic; <code>-L/-R/-D/-A/-X</code> streams have separate priorities.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>Uplink and downlink capacity can differ substantially. A file copy or tunnel must not fill the queue needed by an interactive shell.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Clean, busy links ramp up quickly; loss or a slower path cuts the budget. The menu shows traffic, send budgets and outgoing loss. Estimates are not guaranteed link capacity.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A05</div>
+          <div>
+            <h3>File browser, recursive copies and delta sync</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh/src/moshcp">src/moshcp/</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/frontend/filetransfer.cc">src/frontend/filetransfer.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/frontend/directory.cc">src/frontend/directory.cc</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>A persistent two-pane browser queues file or directory copies. Matching files use librsync signatures and deltas, with zstd-22 and background FEC in both directions.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>Resending an existing file wastes bandwidth. Shipping a complete large-directory listing wastes it before the copy even starts.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Helpers sort names locally and send bounded metadata windows. Live updates, queues and progress stay responsive over loss; SHA-256 checks reconstructed files before replacement.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A06</div>
+          <div>
+            <h3>Clipboard lanes and consent-aware downloads</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/frontend/mimeclipboard.cc">src/frontend/mimeclipboard.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/GOBLIN_DOWNLOAD_PROTOCOL.md">GOBLIN_DOWNLOAD_PROTOCOL.md</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>OSC 52 and MIME-aware OSC 5522 stay outside screen state. Goblin inline downloads use binary zstd-22/FEC and forward to a supporting Goblin parent, then Kitty, or a local save prompt.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>A paste is interactive; a large unsolicited remote blob is not. Applications also need a way to offer a file without silently writing into Downloads.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Local-to-remote and plain-text clipboard data stay fast. Remote non-text writes above a configurable 64 KiB cutoff go in the background. Local download saves require approval and never overwrite.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A07</div>
+          <div>
+            <h3>Retained Kitty and sixel image state</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/terminal/kittygraphics.cc">src/terminal/kittygraphics.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/statesync/kitty.cc">src/statesync/kitty.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/SIXEL_STATE.md">SIXEL_STATE.md</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>Static Kitty and sixel images use WebP or negotiated palette/DjVu state plus placement deltas. Images with up to 16 colors can use lossless DjVu bitplanes. Kitty uploads accept inline, file, temporary-file and shared-memory media on the server.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>Pixel data is expensive. Moving text or an existing image should not require retransmitting all its pixels.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Encoding stays lossless by default, with WebP fallback for older peers. <code>--lossy=0..100</code> opts into lossy WebP; <code>--djvu-lossy</code> separately enables lossy two-color DjVu. Sixel stays sixel on a capable client, with conversion on Kitty-only clients. Tests cover 5,120-pixel-wide images.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A08</div>
+          <div>
+            <h3>Geometry, keyboard events and sized text</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/scripts/mosh.pl">scripts/mosh.pl</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/frontend/mosh-server.cc">src/frontend/mosh-server.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/terminal/sizedtext.cc">src/terminal/sizedtext.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/tests/graphics-integration.py">graphics-integration.py</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>The remote session receives the local <code>TERM</code> and attachment geometry. Cell-size queries, Kitty keyboard events and OSC 66 text sizing have explicit handling.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>Terminal identity alone does not describe current cell pixels or enabled protocols. Resizing must update geometry without making it persistent screen content.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Applications can size images and position the cursor below them. Configured Alt events pass through; unsupported sized text falls back to ordinary text. Remote terminfo is still required.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="artifact">
+          <div class="artifact-number">A09</div>
+          <div>
+            <h3>Prefixed packages and an explicit FEC policy</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/GOBLIN_PREFIX_NOTES.md">GOBLIN_PREFIX_NOTES.md</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/configure.ac">configure.ac</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/packaging/check-prebuilt-fec.sh">packaging/check-prebuilt-fec.sh</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/THIRD_PARTY.md">THIRD_PARTY.md</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div>
+              <h4>Changed</h4>
+              <p>Programs and man pages use the <code>goblin-</code> prefix. Debian/Ubuntu, RPM and Homebrew recipes ship built-in Reed–Solomon FEC and reject RaptorQ-enabled binaries.</p>
+            </div>
+            <div>
+              <h4>Why</h4>
+              <p>The fork needs to coexist with stock Mosh, preserve its GPL-3.0-or-later license, and keep RaptorQ out of distributed binary packages.</p>
+            </div>
+            <div>
+              <h4>Why it matters</h4>
+              <p>Stock <code>mosh</code> remains separate. RaptorQ is off even in ordinary source builds; enabling it requires explicit custom compilation and review of its patent terms.</p>
+            </div>
+          </div>
+        </article>
+        <article class="artifact">
+          <div class="artifact-number">A10</div>
+          <div>
+            <h3>Native scrollback and tmux control mode</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/terminal/terminaldisplay.cc">src/terminal/terminaldisplay.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/statesync/tmux.cc">src/statesync/tmux.cc</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div><h4>Changed</h4><p>Native scrolling uses the primary screen by default. Optional <code>--tmux-control</code> transports <code>tmux -CC</code> as reliable ordered bytes.</p></div>
+            <div><h4>Why</h4><p>Earlier output and the local startup mascot should scroll into history. A terminal's native tmux tabs need the control protocol, not a rendered screen diff.</p></div>
+            <div><h4>Why it matters</h4><p>Received rows can stay in local history. Skipped intermediate output cannot be recovered. tmux control mode preserves protocol bytes but can cost more bandwidth.</p></div>
+          </div>
+        </article>
+        <article class="artifact">
+          <div class="artifact-number">A11</div>
+          <div>
+            <h3>Lower redraw rate and idle backoff</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/transportsender.h">src/network/transportsender.h</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/network/network.cc">src/network/network.cc</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div><h4>Changed</h4><p>Sustained screen updates run at 10–4 frames per second according to RTT. Negotiated idle pings back off from 15 seconds through 30, 60, 120, 240, 480 and 900 seconds.</p></div>
+            <div><h4>Why</h4><p>An unattended terminal should not keep paying for frequent state heartbeats. Fast redraws also consume bandwidth even when newer frames replace older ones.</p></div>
+            <div><h4>Why it matters</h4><p>The first update after idle still leaves promptly. Activity resets the ping interval; compact authenticated pings avoid screen serialization. Long idle intervals can let NAT mappings expire.</p></div>
+          </div>
+        </article>
+        <article class="artifact">
+          <div class="artifact-number">A12</div>
+          <div>
+            <h3>Fail-closed FIPS-provider crypto option</h3>
+            <div class="file-list">
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/crypto/fips_crypto.cc">src/crypto/fips_crypto.cc</a>
+              <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/tests/fips-crypto.cc">src/tests/fips-crypto.cc</a>
+            </div>
+          </div>
+          <div class="artifact-body">
+            <div><h4>Changed</h4><p><code>--fips-crypto</code> requires an installed OpenSSL 3 FIPS provider for AES-128-GCM, HKDF-SHA-256 and random generation. Setup fails if either endpoint cannot use it.</p></div>
+            <div><h4>Why</h4><p>A future FIPS-oriented deployment needs an explicit alternative to the normal OCB transport, without silently falling back to it.</p></div>
+            <div><h4>Why it matters</h4><p>This is a deployment building block, not FIPS certification. It adds 12 IV bytes per datagram; the validated module, SSH bootstrap and operating environment remain deployment responsibilities.</p></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section shell" id="release-changes">
+      <div class="section-head">
+        <p class="section-index">Release record</p>
+        <div>
+          <h2>20260915.1: a compatibility baseline.</h2>
+          <p class="section-deck">Source changes since the September 11 packages. This page and its artwork now share the code's Git history.</p>
+        </div>
+      </div>
+      <div class="limits">
+        <article class="limit">
+          <h3>Versions on connection</h3>
+          <p>Connections display the client and server releases and retain both build identities in authenticated session traffic. Compatible releases keep Goblin protocol 1; optional features are negotiated separately. Earlier builds are identified as unversioned.</p>
+          <p><a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/COMPATIBILITY.md">Compatibility policy</a> · <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/CHANGELOG.md">Changelog</a></p>
+        </article>
+        <article class="limit">
+          <h3>Userspace proxy networking</h3>
+          <p><code>--socks5-proxy=127.0.0.1:1055</code> carries SSH setup and session UDP through an existing SOCKS5 proxy, including proxy-side DNS and jump routes. A userspace Tailscale setup can connect without a TUN device or kernel changes.</p>
+          <p><a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/USERSPACE_NETWORKING.md">Setup and limitations</a></p>
+        </article>
+        <article class="limit">
+          <h3>Smaller palette images</h3>
+          <p>Negotiated palette/DjVu transport targets small-color images. Lossless remains the default; WebP quality and two-color DjVu lossiness have separate opt-in flags. Builds now require DjVuLibre and its encoder tools.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section shell" id="comparison">
+      <div class="section-head">
+        <p class="section-index">02 / Comparison</p>
+        <div>
+          <h2>What each tool provides.</h2>
+          <p class="section-deck">
+            Goblin Mosh adds integrated low-bandwidth features to Mosh. SSH remains a general-purpose
+            secure transport; Eternal Terminal resumes a byte stream; autossh supervises SSH.
+            These are different tradeoffs, not a performance ranking.
+          </p>
+        </div>
+      </div>
+      <p class="table-note" id="comparison-help">
+        Reviewed <time datetime="2026-09-11">11 September 2026</time>. Goblin column: release
+        <code>20260911.2</code>, built from <code>95d4a6f</code>, including authenticated UDP jump relays.
+        Upstream Mosh: 1.4.0. Other columns follow the linked project documentation.
+        “—” means no equivalent built-in feature documented, not that an external tool cannot supply it.
+        Scroll the table horizontally on smaller screens; row and column headings stay visible.
+      </p>
+      <div class="table-wrap comparison-wrap" role="region" aria-label="Remote terminal feature comparison" aria-describedby="comparison-help" tabindex="0">
+        <table class="feature-table">
+          <caption>Features and transport behavior. Source references are linked from each column.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Feature</th>
+              <th scope="col"><a href="#changes">Goblin Mosh</a><br>this branch</th>
+              <th scope="col"><a href="#source-mosh">Mosh [1]</a><br>upstream 1.4.0</th>
+              <th scope="col"><a href="#source-ssh">OpenSSH [2]</a><br>ssh client/server</th>
+              <th scope="col"><a href="#source-et">Eternal Terminal [3]</a></th>
+              <th scope="col"><a href="#source-autossh">autossh [4]</a><br>SSH supervisor</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Session transport</th>
+              <td>Authenticated UDP, direct or through Goblin relays; SSH for setup only</td><td>Authenticated UDP; SSH bootstrap</td>
+              <td>SSH over TCP</td><td>Reconnectable TCP; SSH bootstrap</td><td>Runs and monitors SSH</td>
+            </tr>
+            <tr>
+              <th scope="row">Roaming / temporary loss</th>
+              <td>Session continues with the running client, directly or through relays; relay lease applies</td><td>Session continues with the running client</td>
+              <td>No built-in session resumption</td><td>Reconnects to the same session</td><td>Restarts SSH; does not preserve the remote PTY by itself</td>
+            </tr>
+            <tr>
+              <th scope="row">Predictive local typing</th>
+              <td>Yes, inherited from Mosh</td><td>Yes</td><td>—</td><td>—</td><td>—; uses SSH</td>
+            </tr>
+            <tr>
+              <th scope="row">Catching up after congestion</th>
+              <td>Latest screen state; can skip intermediate frames</td><td>Latest screen state; can skip intermediate frames</td>
+              <td>Ordered byte delivery</td><td>Replays buffered bytes after reconnect</td><td>SSH byte delivery; restart is not replay</td>
+            </tr>
+            <tr>
+              <th scope="row">Compression</th>
+              <td>zstd-22 state updates; optional trained dictionaries</td><td>zlib state updates</td>
+              <td>Optional <code>-C</code> stream compression</td><td>No Mosh-style state compression</td><td>SSH's <code>-C</code> option</td>
+            </tr>
+            <tr>
+              <th scope="row">Local terminal scrollback</th>
+              <td>Native received-row history by default; skipped output is absent</td><td>Incomplete; remote tmux/screen is the documented workaround</td>
+              <td>Terminal-controlled byte-stream history</td><td>Terminal-controlled byte-stream history</td><td>As SSH; remote persistence needs tmux/screen</td>
+            </tr>
+            <tr>
+              <th scope="row">Carry Kitty / sixel graphics protocols</th>
+              <td>Yes — supported static graphics via image/placement state and client-side re-encoding</td>
+              <td>No — neither graphics protocol is carried</td>
+              <td>Yes — inline protocol byte passthrough</td><td>Yes — inline protocol byte passthrough</td><td>Yes — through SSH's byte passthrough</td>
+            </tr>
+            <tr>
+              <th scope="row">File copying and deltas</th>
+              <td>Two-pane file/directory copy, librsync deltas and <code>goblin-moshcp</code></td><td>Separate SSH/SFTP/rsync workflow</td>
+              <td>SFTP/scp; rsync as a separate tool</td><td>No built-in two-pane delta-copy workflow documented</td><td>No file browser; can supervise SSH tunnels used by other tools</td>
+            </tr>
+            <tr>
+              <th scope="row">Background file FEC</th>
+              <td>Reed–Solomon, paced below interactive work</td><td>—</td><td>—; TCP retransmission</td><td>—; TCP retransmission</td><td>—; uses SSH/TCP</td>
+            </tr>
+            <tr>
+              <th scope="row">TCP / SOCKS forwarding</th>
+              <td>Experimental <code>-L/-R</code> TCP and <code>-D</code> SOCKS5 CONNECT, carried over Mosh UDP</td><td>— in the Mosh session</td>
+              <td><code>-L/-R/-D</code></td><td>TCP port pairs via <code>-t</code></td><td>SSH forwards with restart monitoring</td>
+            </tr>
+            <tr>
+              <th scope="row">Agent / X11 forwarding</th>
+              <td><code>-A/-X</code>; experimental, medium priority</td><td>— in the Mosh session</td>
+              <td><code>-A/-X</code></td><td>No SSH agent/X11 channel equivalent documented</td><td>SSH options</td>
+            </tr>
+            <tr>
+              <th scope="row">Session traffic through jump hosts</th>
+              <td>Yes — <a href="#udp-relays">authenticated UDP relay</a> through 1–4 Goblin servers via <code>-J</code> / <code>ProxyJump</code></td>
+              <td>No built-in session relay — SSH setup can jump, but Mosh UDP still travels directly to the destination</td>
+              <td>Yes — TCP through <code>ProxyJump</code> / <code>-J</code></td><td>Yes — TCP, with an ET server on each hop</td><td>Yes — through SSH's TCP jump-host path</td>
+            </tr>
+            <tr>
+              <th scope="row">Native tmux <code>-CC</code></th>
+              <td>Explicit <code>--tmux-control</code> ordered channel</td><td>—; ordinary remote tmux still works</td>
+              <td>Protocol passthrough</td><td>Protocol passthrough</td><td>As SSH; reattachment needed after restart</td>
+            </tr>
+            <tr>
+              <th scope="row">Interactive vs bulk scheduling</th>
+              <td>Separate directional estimates; terminal first, background files last</td><td>RTT-adaptive terminal updates; no built-in bulk file path</td>
+              <td>SSH channels over TCP</td><td>Resumable byte stream over TCP</td><td>No new transport scheduler</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note">
+        The graphics row compares carrying a remote application's graphics protocol to the local terminal,
+        not whether the connection can run inside Kitty. Goblin Mosh interprets supported static graphics,
+        synchronizes image and placement state, then re-emits graphics client-side; it is not
+        byte-for-byte passthrough. Sixel is re-emitted as sixel when supported locally, or converted
+        client-side to Kitty on a Kitty-only terminal. SSH and Eternal Terminal carry the inline
+        protocol bytes without interpreting the images. Display still requires a capable local terminal;
+        byte passthrough alone does not resolve a remote filename or shared-memory reference locally.
+        Native tmux integration also needs a supporting local terminal. None of the rows claims
+        that Goblin Mosh implements every SSH feature or every Kitty extension.
+      </p>
+      <p class="table-note">
+        The jump-host row compares the session's data path, not just SSH login.
+        Goblin Mosh no longer needs direct client-to-destination UDP reachability when using its relays;
+        UDP must pass between adjacent hops. The client, every jump and the destination need updated
+        Goblin binaries. Session encryption remains end to end; each hop adds its own authentication.
+        This is not arbitrary UDP port forwarding: <code>-L/-R</code> and SOCKS5 <code>-D</code>
+        carry TCP streams. The new source option <code>--socks5-proxy</code> uses an external proxy's
+        UDP ASSOCIATE support for the Mosh session itself. Idle relays expire after
+        a configurable period of client silence (24 hours by default).
+        <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/UDP_RELAY.md">Relay setup and wire format</a>.
+      </p>
+      <ol class="source-notes" aria-label="Comparison sources">
+        <li id="source-mosh"><a href="https://mosh.org/#techinfo">Mosh's transport design</a>,
+          <a href="https://mosh.org/#faq">scrollback FAQ</a>, and upstream issues for
+          <a href="https://github.com/mobile-shell/mosh/issues/1248">Kitty graphics</a>,
+          <a href="https://github.com/mobile-shell/mosh/issues/1081">sixel</a> and
+          <a href="https://github.com/mobile-shell/mosh/issues/499">forwarding</a>.
+          Roaming and predictive typing are upstream Mosh features, not new inventions of this branch.</li>
+        <li id="source-ssh"><a href="https://man.openbsd.org/ssh.1">OpenSSH ssh(1)</a> and
+          <a href="https://man.openbsd.org/sftp.1">sftp(1)</a> document forwarding, compression,
+          jump hosts, PTYs and file transfer. Graphics/history entries describe byte-stream behavior,
+          not an OpenSSH graphics renderer.</li>
+        <li id="source-et"><a href="https://github.com/MisterTea/EternalTerminal#using">Eternal Terminal usage</a> and
+          <a href="https://eternalterminal.dev/howitworks/">transport design</a> describe reconnect/replay,
+          TCP forwarding, jump hosts and tmux control mode. Passthrough entries follow from its byte-stream design.</li>
+        <li id="source-autossh"><a href="https://www.harding.motd.ca/autossh/">autossh features</a> and
+          <a href="https://www.harding.motd.ca/autossh/README.txt">README</a> describe monitoring and restarting SSH.
+          It is included as a practical related utility, not as another Mosh protocol implementation.</li>
+      </ol>
+    </section>
+
+    <section class="section shell" id="behavior">
+      <div class="section-head">
+        <p class="section-index">03 / Wire behavior</p>
+        <div>
+          <h2>Which traffic goes first.</h2>
+          <p class="section-deck">
+            Compression reduces the amount of data. Scheduling determines which data gets the
+            scarce send opportunity when several features are active at once.
+          </p>
+        </div>
+      </div>
+
+      <div class="evidence-grid">
+        <div class="table-wrap" role="region" aria-label="Traffic scheduling" tabindex="0">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Traffic</th>
+                <th scope="col">Class</th>
+                <th scope="col">Send rule</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Terminal state + input</td>
+                <td><span class="priority primary">primary</span></td>
+                <td>Scheduled before forwarded streams and bulk transfer.</td>
+              </tr>
+              <tr>
+                <td>Directory requests</td>
+                <td><span class="priority primary">control</span></td>
+                <td>Reliable bounded metadata on reserved stream 0; filesystem work runs in a separate helper.</td>
+              </tr>
+              <tr>
+                <td>Interactive clipboard</td>
+                <td><span class="priority primary">fast</span></td>
+                <td>Separate authenticated FEC lane; local-to-remote and plain-text data do not wait behind background copies.</td>
+              </tr>
+              <tr>
+                <td>SSH agent + X11</td>
+                <td><span class="priority">medium</span></td>
+                <td>Shares a medium-priority token bucket.</td>
+              </tr>
+              <tr>
+                <td>TCP + SOCKS</td>
+                <td><span class="priority">low</span></td>
+                <td>Uses a separate low-priority token bucket.</td>
+              </tr>
+              <tr>
+                <td>Files + large remote blobs</td>
+                <td><span class="priority">background</span></td>
+                <td>Uses remaining paced opportunities. Due foreground work runs first; a screen waiting for its next frame timer need not stall a copy.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <aside class="plain-panel">
+          <h3>Why this matters</h3>
+          <p>
+            Satellite and radio paths may provide usable connectivity with a small or variable
+            capacity budget. A feature is not link-aware merely because it uses compression.
+          </p>
+          <p>
+            Upload and download budgets are estimated separately. A manual transfer-rate ceiling
+            still applies when configured; <code>goblin-moshcp --rate=0</code> removes its own ceiling,
+            not the session-wide pacer. Sparse traffic cannot measure unused link capacity.
+          </p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section shell" id="packages">
+      <div class="section-head">
+        <p class="section-index">04 / Distribution</p>
+        <div>
+          <h2>Published packages.</h2>
+          <p class="section-deck">Install <code>goblin-mosh</code> on both endpoints. These are the published binary targets, not a list of every platform upstream Mosh supports.</p>
+        </div>
+      </div>
+      <div class="table-wrap" style="margin-top: 30px" role="region" aria-label="Published Goblin Mosh packages" tabindex="0">
+        <table class="package-table">
+          <thead><tr><th scope="col">System</th><th scope="col">Binary architecture</th><th scope="col">Setup and artifacts</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Ubuntu 22.04, 24.04, 26.04</th><td>amd64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20260911.2</td></tr>
+            <tr><th scope="row">Debian 12, 13</th><td>amd64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20260911.2</td></tr>
+            <tr><th scope="row">Fedora 44; Rocky Linux 9, 10</th><td>x86_64</td><td><a href="https://apt.goblinreactor.com/">RPM setup</a> · release 20260911.2</td></tr>
+            <tr><th scope="row">macOS 26 Tahoe</th><td>Apple Silicon / arm64</td><td><a href="https://brew.goblinreactor.com/">Homebrew tap</a> · 1.4.0-goblin20260911.2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note">
+        Inventory checked 11 September 2026 against the public
+        <a href="https://apt.goblinreactor.com/packages.json">APT/RPM catalog</a> and
+        <a href="https://brew.goblinreactor.com/packages.json">Homebrew catalog</a>.
+        Linux ARM packages are not published yet. All listed Goblin Mosh binaries exclude RaptorQ.
+        Catalogs and repository setup pages provide exact versions, matching source, checksums and verification records.
+        These packages include the directory-cache fixes and authenticated UDP jump relays.
+        Install the updated server on every jump host as well as the destination.
+      </p>
+    </section>
+
+    <section class="section shell" id="build">
+      <div class="section-head">
+        <p class="section-index">05 / Inspect</p>
+        <div>
+          <h2>Inspect or build the source.</h2>
+          <p class="section-deck">
+            The prefixed binaries are intentional: they let this patch set live beside an
+            ordinary Mosh installation. See the <a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/README.md">README</a>
+            and <a href="https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh/packaging">packaging recipes</a>
+            for build dependencies. The package setup pages are the simpler installation route.
+          </p>
+        </div>
+      </div>
+
+      <div class="build-grid">
+        <div class="terminal" aria-label="Build commands">
+          <div class="terminal-bar">
+            <span>shell</span>
+            <span>low-bandwidth-mosh</span>
+          </div>
+          <pre><span class="prompt">$</span> git clone --branch low-bandwidth-mosh --single-branch \
+    https://github.com/adamdeprince/mosh.git
+<span class="prompt">$</span> cd mosh
+<span class="prompt">$</span> ./autogen.sh
+<span class="prompt">$</span> ./configure --with-zstd --with-librsync \
+    --without-libraptorq
+<span class="prompt">$</span> make
+<span class="prompt">$</span> make check
+<span class="prompt">$</span> sudo make install
+
+<span class="comment"># Run the prefixed client.</span>
+<span class="prompt">$</span> goblin-mosh user@host
+
+<span class="comment"># In the session: Ctrl-^, release, then 0 opens files.</span></pre>
+        </div>
+
+        <aside class="verification">
+          <p class="mini-label">Release verification</p>
+          <h3>Linux x86_64 + macOS arm64 · 11 Sep 2026</h3>
+          <div class="test-result" aria-label="Test results">
+            <div><strong>9</strong><span>binary targets</span></div>
+            <div><strong>26</strong><span>checks per build</span></div>
+            <div><strong>0</strong><span>final build failures</span></div>
+          </div>
+          <p>
+            Fedora and Rocky pass all 26 checks. Ubuntu, Debian and macOS pass 25 with one
+            missing-FIPS-provider skip. Relay checks cover authentication, replay rejection,
+            IPv4/IPv6 roaming, MTU boundaries, SSH setup and lossy one- and four-hop terminal/file transfers.
+            Installed-package checks and the RaptorQ-exclusion gate also pass. Catalogs contain
+            signed artifacts, matching source and verification logs. These are selected checks,
+            not the entire emulation suite or a performance benchmark.
+          </p>
+          <p style="margin-top: 14px"><a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/src/tests/README.md">Test descriptions</a> ·
+            <a href="https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh/benchmarks/mosh-ip-volume">IP-volume benchmark harness</a></p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section shell" id="limits">
+      <div class="section-head">
+        <p class="section-index">06 / Limits</p>
+        <div>
+          <h2>Evaluation notes.</h2>
+          <p class="section-deck">The branch is a working patch series, not an upstream Mosh release.</p>
+        </div>
+      </div>
+
+      <div class="limits">
+        <article class="limit">
+          <h3>Endpoints and jump hosts</h3>
+          <p>Enhanced features require compatible client and server builds. Starting with source version 1.4.0-goblin20260915.1, compatible releases share Goblin protocol 1 and negotiate optional features. UDP jump routes also need an updated Goblin server on every jump, with UDP reachability between adjacent hops. SSH-only jump hosts do not relay Mosh UDP.</p>
+        </article>
+        <article class="limit">
+          <h3>Four-hop transfer ramp-up</h3>
+          <p>In four-hop release stress checks with one in seven datagrams dropped plus reordering, first-file completion took up to 141 seconds while keyboard input remained live. Conservative pacing plus relay overhead still needs tuning; the file-completion test window is 300 seconds.</p>
+        </article>
+        <article class="limit">
+          <h3>Sensitive samples</h3>
+          <p>State sample logs contain uncompressed terminal updates and may include commands, output, or other sensitive terminal contents.</p>
+        </article>
+        <article class="limit">
+          <h3>Not implemented yet</h3>
+          <p><a href="https://github.com/adamdeprince/mosh/blob/low-bandwidth-mosh/AUDIO.md">Session audio</a>, live forwarding edits in the popup, arbitrary UDP port forwarding and automatic drag-and-drop uploads remain outside the implemented feature list. Founsure has not been added.</p>
+        </article>
+      </div>
+      <p class="table-note">
+        Open the file menu with <kbd>Ctrl-^</kbd>, release, then <kbd>0</kbd> (usually Ctrl-6 in Kitty).
+        Enter starts a copy without leaving the browser; Tab or Shift-Tab swaps panes, Left goes up,
+        and Right enters a directory. Hiding the menu preserves its state; ending the session does not.
+        Large directory workers and transfer queues have bounds, but a slow filesystem can still delay its own results.
+      </p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner shell">
+      <p class="footer-note">
+        Goblin Mosh is a GPL-3.0-or-later patch series built on Mosh, with upstream notices and
+        exceptions retained. A source-backed record, not an upstream release or a claim of FIPS certification.
+      </p>
+      <div class="footer-links">
+        <a href="https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh">GitHub branch ↗</a>
+        <a href="https://mosh.org/">Upstream Mosh ↗</a>
+        <a href="https://goblinreactor.com/">Goblin Reactor ↗</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH 1 "September 11, 2026"
+.TH GOBLIN-MOSH 1 "September 15, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -41,6 +41,14 @@ or a password). \fBgoblin-mosh\fP executes the unprivileged
 helper program on the server, then closes the SSH connection and
 starts the \fBgoblin-mosh-client\fP, which establishes a long-lived datagram
 connection over UDP.
+
+The wrapper displays both endpoint release versions on connection. Goblin
+1.4.0-goblin20260915.1 establishes compatibility protocol 1; compatible
+releases may differ and continue to negotiate optional features separately.
+Different Goblin protocols are rejected before launching the client or jump
+relays. Earlier endpoints are labelled unversioned and retain existing feature
+fallbacks, without a compatibility guarantee. Use \-\-version to inspect the
+local release and build identifier.
 
 The wrapper passes the client's \fBTERM\fP value to the remote login session.
 This lets remote applications detect client capabilities such as the Kitty
@@ -88,6 +96,35 @@ apply the locale-related environment variables from the client and try
 again.
 
 .SH OPTIONS
+.TP
+.B \-\-socks5\-proxy=\fIHOST:PORT\fP
+Use a SOCKS5 proxy for both SSH CONNECT and session UDP ASSOCIATE.
+Useful with tailscaled \-\-tun=userspace-networking on devices without TUN
+or kernel modules. Destination names are resolved by the proxy; only the
+proxy address is resolved locally. IPv6 proxies use [ADDRESS]:PORT.
+The proxy connection's address family is independent of \-\-family;
+use a numeric destination to constrain proxy-side IPv4/IPv6 selection.
+There is no direct fallback. The proxy must support no-authentication mode,
+UDP ASSOCIATE, and numeric UDP relay bind addresses. SOCKS fragmentation
+and proxy username/password authentication are not supported.
+
+SSH authentication, host-key checks and host settings remain in effect.
+This explicit option replaces ProxyCommand and disables SSH connection
+sharing. Discovered ProxyJump routes still apply: SSH follows the complete
+route, and session UDP reaches the first relay through the proxy.
+Subsequent hops require normal UDP reachability. Not compatible with
+\-\-local; overrides \-\-experimental-remote-ip destination discovery.
+
+The association is recreated after proxy disconnection without resetting
+session keys or screen state. Datagrams are not queued while disconnected.
+An idle association adds no periodic heartbeat beyond normal Mosh
+keepalives. Tailscale's own background traffic is outside Mosh's accounting.
+This is distinct from \-D, which provides TCP-only dynamic forwarding.
+
+.nf
+goblin-mosh \-\-socks5-proxy=127.0.0.1:1055 user@host
+.fi
+
 .TP
 .B \-J \fI[user@]host[:port][,...]\fP, \-\-jump=\fIHOSTS\fP
 Route both SSH setup and the encrypted Mosh UDP session through one to four
@@ -157,6 +194,21 @@ yet final.
 .TP
 .B \fIcommand\fP
 Command to run on remote host. By default, \fBmosh\fP executes a login shell.
+
+.TP
+.B \-\-lossy=\fIQUALITY\fP
+Use lossy WebP for image transport, with an integer quality from 0 to 100.
+Higher values preserve more detail; 100 is still lossy. The default is
+lossless WebP. Images with at most 16 RGBA colors use an exact palette and
+DjVuLibre cjb2 when the client supports it. This option does not enable
+lossy DjVu encoding.
+
+.TP
+.B \-\-djvu\-lossy
+Allow cjb2 lossy encoding for two-color images. This can remove small marks
+and substitute similar shapes, including text characters. The default is
+lossless. Images with three to sixteen colors remain lossless. This flag
+is independent of \fB\-\-lossy\fP and does not affect WebP quality.
 
 .TP
 .B \-\-client=\fIPATH\fP

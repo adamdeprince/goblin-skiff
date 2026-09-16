@@ -59,7 +59,7 @@ jobs:
 
     - name: "setup linux build environment"
       if: ${{ startsWith(matrix.os, 'ubuntu') }}
-      run: sudo apt update && sudo apt install -y protobuf-compiler libprotobuf-dev libutempter-dev autoconf automake nettle-dev libpng-dev libwebp-dev libzstd-dev
+      run: sudo apt update && sudo apt install -y protobuf-compiler libprotobuf-dev libutempter-dev autoconf automake nettle-dev libpng-dev libwebp-dev libzstd-dev libdjvulibre-dev djvulibre-bin
 
     - name: "Install gtar wrapper"
       if: ${{ startsWith(matrix.os, 'macos') }}

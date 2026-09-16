@@ -15,8 +15,11 @@ BuildRequires:  libutempter-devel, zlib-devel, ncurses-devel
 BuildRequires:  openssl-devel >= 3.0
 BuildRequires:  librsync-devel >= 2.3
 BuildRequires:  libzstd-devel, libwebp-devel, libpng-devel
+BuildRequires:  djvulibre-devel >= 3.5.28
+BuildRequires:  djvulibre
 BuildRequires:  bash-completion, python3, glibc-langpack-en
 Requires:       openssh-clients
+Requires:       djvulibre
 Requires:       perl(IO::Socket::IP)
 Conflicts:      adam-mosh
 Obsoletes:      adam-mosh < 1.4.0-20260909.1
@@ -43,7 +46,7 @@ sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-moshcp
 %check
 mkdir -m 700 package-test-runtime
 XDG_RUNTIME_DIR="$PWD/package-test-runtime" %make_build check \
-    TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward udp-relay udp-jump-wrapper.test'
+    TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression session-version state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward udp-relay udp-jump-wrapper.test'
 
 %install
 %make_install

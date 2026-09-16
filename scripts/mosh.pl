@@ -80,6 +80,8 @@ my $family = 'prefer-inet';
 my $port_request = undef;
 
 my @ssh = ('ssh');
+my $socks5_proxy;
+my $proxy_report = 1; # internal ProxyCommand: report the destination, not the proxy
 my $jump = undef;
 my @jumps;
 my @jump_ssh;
@@ -104,6 +106,8 @@ my $tmux_control = 0;
 my $mascot = $ENV{ 'MOSH_MASCOT' } // 'auto';
 my $no_kitty = 0;
 my $no_sixel = 0;
+my $lossy_quality = undef;
+my $djvu_lossy = 0;
 my $clipboard_fast_threshold = $ENV{ 'MOSH_CLIPBOARD_FAST_THRESHOLD' } // 65536;
 my $no_downloads = 0;
 my $download_directory = undef;
@@ -168,6 +172,8 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
         --mascot=FORMAT    startup goblin: auto, kitty, sixel, ascii, none
         --no-mascot        disable the local startup goblin
         --no-kitty         disable local Kitty graphics and detection
+        --lossy=QUALITY    lossy WebP images, quality 0-100 (higher is better)
+        --djvu-lossy       allow cjb2 symbol substitution for two-color images
         --no-sixel         disable local sixel graphics and detection
         --clipboard-fast-threshold=BYTES
                             unsolicited remote blobs above this use bulk FEC
@@ -195,6 +201,10 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
         --ssh=COMMAND        ssh command to run when setting up session
                                 (example: "ssh -p 2222")
                                 (default: "ssh")
+        --socks5-proxy=HOST:PORT
+                             use SOCKS5 for SSH and UDP (including the first jump);
+                             resolve destination names at the proxy, no direct fallback
+                             (IPv6 proxy: [ADDRESS]:PORT; no proxy authentication)
 
         --no-ssh-pty         do not allocate a pseudo tty on ssh connection
 
@@ -214,7 +224,7 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 Please report bugs to mosh-devel\@mit.edu.
 Mosh home page: https://mosh.org\n};
 
-my $version_message = '@PACKAGE_STRING@ [build @VERSION@]' . qq{
+my $version_message = 'goblin-mosh @GOBLIN_VERSION@ (@PACKAGE_STRING@) [build @VERSION@]' . qq{
 Copyright 2012 Keith Winstein <mosh-devel\@mit.edu>
 License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.
@@ -258,6 +268,8 @@ GetOptions( 'client=s' => \$client,
 	    'no-mascot' => sub { $mascot = 'none'; },
 	    'no-kitty' => \$no_kitty,
 	    'no-sixel' => \$no_sixel,
+	    'lossy=s' => \$lossy_quality,
+	    'djvu-lossy' => \$djvu_lossy,
 	    'clipboard-fast-threshold=s' => \$clipboard_fast_threshold,
 	    'no-downloads' => \$no_downloads,
 	    'download-directory=s' => \$download_directory,
@@ -267,6 +279,7 @@ GetOptions( 'client=s' => \$client,
 	    'state-sample-log=s' => \$state_sample_log,
 	    'state-sample-min-size=i' => \$state_sample_min_size,
 	    'ssh=s' => sub { @ssh = shellwords($_[1]); },
+	    'socks5-proxy=s' => \$socks5_proxy,
 	    'ssh-pty!' => \$ssh_pty,
 	    'native-scroll' => sub { $term_init = 0; },
 	    'alternate-screen' => sub { $term_init = 1; },
@@ -275,6 +288,7 @@ GetOptions( 'client=s' => \$client,
 	    'help' => \$help,
 	    'version' => \$version,
 	    'fake-proxy!' => \my $fake_proxy,
+	    'proxy-report!' => \$proxy_report,
 	    'bind-server=s' => \$bind_ip,
 	    'experimental-remote-ip=s' => \$use_remote_ip) or die $usage;
 
@@ -285,6 +299,13 @@ if ( defined $help ) {
 if ( defined $version ) {
     print $version_message;
     exit;
+}
+
+if ( defined $socks5_proxy ) {
+  die "$0: --socks5-proxy requires HOST:PORT or [IPv6]:PORT (no URL or credentials).\n"
+    unless $socks5_proxy =~ /\A(?:[A-Za-z0-9_.-]+|\[[A-Fa-f0-9:]+\]):([0-9]{1,5})\z/
+      && $1 > 0 && $1 <= 65535;
+  die "$0: --socks5-proxy cannot be used with --local.\n" if $localhost;
 }
 
 if ( defined $predict ) {
@@ -299,6 +320,8 @@ if ( defined $predict ) {
 
 die "$0: --mascot must be auto, kitty, sixel, ascii, or none.\n"
   unless $mascot =~ /\A(?:auto|kitty|sixel|ascii|none)\z/;
+die "$0: --lossy requires an integer quality from 0 to 100.\n"
+  if defined $lossy_quality && ( $lossy_quality !~ /\A[0-9]{1,3}\z/ || $lossy_quality > 100 );
 
 if ( not grep { $_ eq $use_remote_ip } qw { local remote proxy } ) {
   die "Unknown parameter $use_remote_ip";
@@ -398,7 +421,14 @@ if ( ! defined $fake_proxy ) {
 } else {
   my ( $host, $port ) = @ARGV;
 
-  my @res = resolvename( $host, $port, $family );
+  my ( $connect_host, $connect_port ) = ( $host, $port );
+  if ( defined $socks5_proxy ) {
+    ( $connect_host, $connect_port ) = $socks5_proxy =~ /\A(.+):([0-9]+)\z/;
+    $connect_host =~ s/\A\[(.*)\]\z/$1/;
+  }
+  # The proxy's address family is independent of the tailnet destination's.
+  # In particular, an IPv4-only kernel can carry an IPv6 target via SOCKS5.
+  my @res = resolvename( $connect_host, $connect_port, defined $socks5_proxy ? 'prefer-inet' : $family );
 
   # Now try and connect to something.
   my $err;
@@ -411,15 +441,20 @@ if ( ! defined $fake_proxy ) {
     if ( $sock = IO::Socket->new( Domain => $ai->{family},
 				  Family => $ai->{family},
 				  PeerHost => $addr_string,
-				  PeerPort => $port,
-				  Proto => 'tcp' )) {
-      print STDERR 'MOSH IP ', $addr_string, "\n";
+				  PeerPort => $connect_port,
+				  Proto => 'tcp',
+				  Timeout => 30 )) {
       last;
     } else {
       $err = $@;
     }
   }
   die "$0: Could not connect to ${host}, last tried ${addr_string}: ${err}\n" if !$sock;
+  if ( defined $socks5_proxy ) {
+    socks_connect( $sock, $host, $port );
+    $addr_string = $host;
+  }
+  print STDERR 'MOSH IP ', $addr_string, "\n" if $proxy_report;
 
   # Act like netcat
   binmode($sock);
@@ -431,7 +466,13 @@ if ( ! defined $fake_proxy ) {
     while ( my $n = $from->sysread( my $buf, 4096 ) ) {
       next if ( $n == -1 && $! == EINTR );
       $n >= 0 or last;
-      $to->write( $buf ) or last;
+      my $offset = 0;
+      while ( $offset < length $buf ) {
+        my $written = syswrite( $to, $buf, length( $buf ) - $offset, $offset );
+        next if !defined( $written ) && $! == EINTR;
+        return if !defined( $written ) || !$written;
+        $offset += $written;
+      }
     }
   }
 
@@ -495,11 +536,17 @@ if ( !$localhost ) {
   }
 }
 
+# The local proxy knows the tailnet names. Never resolve the destination in
+# the tablet's kernel DNS, or confuse SSH_CONNECTION's loopback address with
+# the actual peer. Jump destinations still use their SSH-facing address.
+$use_remote_ip = 'proxy' if defined $socks5_proxy && !@jumps;
+
 # Count colors and, in FIPS mode, fail before starting anything remotely if
 # the local client cannot initialize its configured provider.
 my @colorcount_args = $fips_crypto ? ( '--fips-crypto', '-c' ) : ( '-c' );
 unshift @colorcount_args, '--tmux-control' if $tmux_control;
 unshift @colorcount_args, '--udp-relay' if @jumps;
+unshift @colorcount_args, "--socks5-proxy=$socks5_proxy" if defined $socks5_proxy;
 open COLORCOUNT, '-|', $client, @colorcount_args or die "Can't count colors: $!\n";
 my $colors = "";
 {
@@ -507,6 +554,40 @@ my $colors = "";
   $colors = <COLORCOUNT>;
 }
 close COLORCOUNT or die;
+
+# A separately selected older client can still receive WebP. Probe without
+# exposing its unknown-option diagnostics, and advertise only confirmed codecs.
+my $client_palette_djvu = 0;
+my $codec_pid = open( my $codec_output, '-|' );
+die "Can't query client image codecs: $!\n" unless defined $codec_pid;
+if ( !$codec_pid ) {
+  open STDERR, '>', '/dev/null' or die "Can't redirect codec probe: $!\n";
+  exec {$client} $client, '--image-codecs';
+  die "Can't query client image codecs: $!\n";
+}
+{
+  local $/ = undef;
+  my $codecs = <$codec_output> // '';
+  $client_palette_djvu = close( $codec_output ) && $codecs =~ /(?:\A|\s)palette-djvu-v1(?:\s|\z)/;
+}
+die "$0: --djvu-lossy requires a client supporting palette-djvu-v1; update goblin-mosh-client.\n"
+  if $djvu_lossy && !$client_palette_djvu;
+
+# Query the actual selected binary, which may differ from this wrapper's build.
+# Older clients do not implement this query and remain explicitly unversioned.
+my @client_version;
+my $version_pid = open( my $version_output, '-|' );
+die "Can't query client version: $!\n" unless defined $version_pid;
+if ( !$version_pid ) {
+  open STDERR, '>', '/dev/null' or die "Can't redirect version probe: $!\n";
+  exec {$client} $client, '--connection-version';
+  die "Can't query client version: $!\n";
+}
+{
+  local $/ = undef;
+  my $identity = <$version_output> // '';
+  if ( close( $version_output ) ) { @client_version = parse_connection_version( $identity ); }
+}
 
 chomp $colors;
 
@@ -573,6 +654,8 @@ if ( $pid == 0 ) { # child
     }
   }
   my @server = ( 'new' );
+  push @server, "--lossy=$lossy_quality" if defined $lossy_quality;
+  push @server, '--djvu-lossy' if $djvu_lossy;
 
   push @server, '--fips-crypto' if $fips_crypto;
 
@@ -619,21 +702,32 @@ if ( $pid == 0 ) { # child
     exec( server_command_string( $server, @server ) );
     die "Cannot exec $server: $!\n";
   }
-  if ( $use_remote_ip eq 'proxy' ) {
+  if ( $use_remote_ip eq 'proxy' && !defined $socks5_proxy ) {
     # Non-standard shells and broken shrc files cause the ssh
     # proxy to break mysteriously.
     $ENV{ 'SHELL' } = '/bin/sh';
     my $quoted_proxy_command = shell_quote( $0, "--family=$family" );
     push @sshopts, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
+  push @sshopts, '-S', 'none' if defined $socks5_proxy; # after any explicit --ssh -S
   my @exec_argv = ( @ssh, @sshopts, $userhost, '--', $ssh_connection . server_command_string( $server, @server ) );
+  if ( defined $socks5_proxy ) {
+    $ENV{ 'SHELL' } = '/bin/sh';
+    # First occurrence wins in OpenSSH: deliberately replace ProxyCommand/-J
+    # only when the user explicitly selects our proxy, preserving all other
+    # per-host authentication, HostName, host-key and port configuration.
+    splice @exec_argv, 1, 0, '-S', 'none', '-o', 'ControlMaster=no',
+      '-o', 'ProxyCommand=' . socks_proxy_command( scalar @jumps, !@jumps );
+  }
   exec @exec_argv;
   die "Cannot exec ssh: $!\n";
 } else { # parent
   my ( $sship, $port, $key, $server_crypto );
+  my @server_version;
   my $compact_keepalive = 0;
   my $server_tmux_control = 0;
   my $server_sixel_state = 0;
+  my $server_image_encoding = 0;
   my $server_clipboard = 0;
   my $server_downloads = 0;
   my $server_relay_hops = 0;
@@ -652,12 +746,18 @@ if ( $pid == 0 ) { # child
       } else {
 	die "Bad MOSH SSH_CONNECTION string: $_\n";
       }
+    } elsif ( m{^MOSH VERSION } ) {
+      die "Duplicate MOSH VERSION message.\n" if @server_version;
+      @server_version = parse_connection_version( $_ );
     } elsif ( m{^MOSH CAPS } ) {
       if ( m{^MOSH CAPS keepalive-v1\s*$} ) {
 	$compact_keepalive = 1;
       } else {
 	die "Bad MOSH CAPS string: $_\n";
       }
+    } elsif ( m{^MOSH IMAGE } ) {
+      die "Bad MOSH IMAGE string: $_\n" unless m{^MOSH IMAGE (?:webp|palette-djvu-v1)\s*$};
+      $server_image_encoding = 1;
     } elsif ( m{^MOSH GRAPHICS } ) {
       die "Bad MOSH GRAPHICS string: $_\n" unless m{^MOSH GRAPHICS sixel-state-v1\s*$};
       $server_sixel_state = 1;
@@ -722,6 +822,9 @@ if ( $pid == 0 ) { # child
   if ( $fips_crypto and ( not defined $server_crypto or $server_crypto ne 'aes128-gcm-v1' ) ) {
     die "$0: remote server did not confirm the requested FIPS crypto suite.\n";
   }
+  if ( ( defined $lossy_quality || $djvu_lossy ) && !$server_image_encoding ) {
+    die "$0: remote server does not support the requested image encoding options; update goblin-mosh-server.\n";
+  }
   if ( not $fips_crypto and defined $server_crypto ) {
     die "$0: remote server selected a crypto suite that was not requested.\n";
   }
@@ -729,6 +832,14 @@ if ( $pid == 0 ) { # child
   if ( $server_relay_hops != scalar @jumps ) {
     die "$0: destination did not confirm the UDP relay MTU budget; update goblin-mosh-server.\n";
   }
+  if ( @client_version && @server_version && $client_version[0] != $server_version[0] ) {
+    die "$0: Incompatible Goblin Mosh protocols: client $client_version[1] uses $client_version[0]; " .
+      "server $server_version[1] uses $server_version[0].\n";
+  }
+  my $client_release = @client_version ? $client_version[1] : 'unversioned';
+  my $server_release = @server_version ? $server_version[1] : 'unversioned';
+  my $protocol = @client_version && @server_version ? $client_version[0] : 'unversioned peer';
+  print STDERR "[goblin-mosh client $client_release; server $server_release; protocol $protocol]\n";
   if ( @jumps ) {
     # An explicit bind address supersedes the SSH interface on a multihomed
     # destination. Relays resolve no destination names and cannot be retargeted.
@@ -783,14 +894,84 @@ if ( $pid == 0 ) { # child
   push @client_crypto, '--no-kitty' if $no_kitty;
   push @client_crypto, '--no-sixel' if $no_sixel;
   push @client_crypto, '--udp-relay' if @jumps;
+  push @client_crypto, "--socks5-proxy=$socks5_proxy" if defined $socks5_proxy;
   exec {$client} ("$client", "-# @cmdline |", @client_crypto, @client_forwarding, $ip, $port);
 }
 
 sub shell_quote { join ' ', map {(my $a = $_) =~ s/'/'\\''/g; "'$a'"} @_ }
 
+sub parse_connection_version {
+  my ( $line ) = @_;
+  my @fields = $line =~ /\AMOSH VERSION ([1-9][0-9]{0,9}) ([A-Za-z0-9._+-]{1,128}) ([A-Za-z0-9._+ -]{1,128})\s*\z/;
+  die "Invalid MOSH VERSION message.\n" unless @fields && $fields[0] <= 4294967295;
+  return @fields;
+}
+
 sub shell_assign {
   my ( $name, $value ) = @_;
   return $name . "=" . shell_quote( $value );
+}
+
+sub socks_read {
+  my ( $sock, $length ) = @_;
+  my $bytes = '';
+  while ( length( $bytes ) < $length ) {
+    my $count = sysread( $sock, my $part, $length - length( $bytes ) );
+    next if !defined( $count ) && $! == EINTR;
+    die "$0: SOCKS5 proxy closed during handshake.\n" unless defined( $count ) && $count > 0;
+    $bytes .= $part;
+  }
+  return $bytes;
+}
+
+sub socks_write {
+  my ( $sock, $bytes ) = @_;
+  my $offset = 0;
+  while ( $offset < length $bytes ) {
+    my $count = syswrite( $sock, $bytes, length( $bytes ) - $offset, $offset );
+    next if !defined( $count ) && $! == EINTR;
+    die "$0: SOCKS5 handshake write failed.\n" unless defined( $count ) && $count > 0;
+    $offset += $count;
+  }
+}
+
+sub socks_connect {
+  my ( $sock, $host, $port ) = @_;
+  die "$0: invalid SOCKS5 destination.\n" unless defined $host && defined $port
+    && $host =~ /\A[A-Za-z0-9_.:\[\]-]{1,255}\z/ && $port =~ /\A[0-9]{1,5}\z/ && $port > 0 && $port <= 65535;
+  $host =~ s/\A\[(.*)\]\z/$1/;
+  my $ipv4 = eval { Socket::inet_pton( Socket::AF_INET(), $host ) };
+  my $ipv6 = eval { Socket::inet_pton( Socket::AF_INET6(), $host ) };
+  my $address = defined( $ipv4 ) ? "\1$ipv4" : defined( $ipv6 ) ? "\4$ipv6" : pack( 'CC', 3, length $host ) . $host;
+  local $SIG{ALRM} = sub { die "$0: SOCKS5 SSH handshake timed out.\n"; };
+  alarm 30;
+  socks_write( $sock, "\5\1\0" );
+  die "$0: SOCKS5 proxy must support no-authentication mode.\n" unless socks_read( $sock, 2 ) eq "\5\0";
+  socks_write( $sock, "\5\1\0" . $address . pack( 'n', $port ) );
+  my ( $version, $reply, $reserved, $type ) = unpack( 'CCCC', socks_read( $sock, 4 ) );
+  die "$0: SOCKS5 CONNECT failed (reply $reply).\n" unless $version == 5 && $reply == 0 && $reserved == 0;
+  my $length = $type == 1 ? 4 : $type == 4 ? 16 : $type == 3 ? unpack( 'C', socks_read( $sock, 1 ) ) : 0;
+  die "$0: SOCKS5 proxy sent an invalid bound address.\n" unless $length;
+  socks_read( $sock, $length + 2 ); # CONNECT BND.ADDR is not the destination!
+  alarm 0;
+}
+
+sub socks_proxy_command {
+  my ( $hops, $report ) = @_;
+  my $command = shell_quote( $0, "--socks5-proxy=$socks5_proxy", "--family=$family",
+                              '--fake-proxy', $report && !$hops ? '--proxy-report' : '--no-proxy-report', '--', '%h', '%p' );
+  for ( my $hop = 0; $hop < $hops; ++$hop ) {
+    my ( $host, $port ) = parse_jump( $jumps[$hop] );
+    # Each surrounding OpenSSH expands percent tokens once. Inner helpers
+    # must see their own hop's %h/%p, not the final destination's address.
+    $command =~ s/%/%%/g;
+    my @args = ( $jump_ssh[0], '-o', "ProxyCommand=$command", '-S', 'none',
+                 '-o', 'ControlMaster=no', '-o', 'ClearAllForwardings=yes', @jump_ssh[1 .. $#jump_ssh] );
+    push @args, '-p', $port if defined $port;
+    push @args, '-W', '[%h]:%p', $host;
+    $command = shell_quote( @args );
+  }
+  return $command;
 }
 
 sub ssh_configuration {
@@ -824,7 +1005,7 @@ sub start_udp_relay {
     push @args, ( '-J', join( ',', @jumps[0 .. $hop - 1] ) );
     push @args, '-4' if $family eq 'inet';
     push @args, '-6' if $family eq 'inet6';
-  } else {
+  } elsif ( !defined $socks5_proxy ) {
     # Capture the address actually used by SSH, honoring HostName and address
     # family selection. The SSH-facing interface may be private behind NAT.
     my $proxy = shell_quote( $0, "--family=$family" );
@@ -835,11 +1016,14 @@ sub start_udp_relay {
   push @relay, "--port=$jump_port" if defined $jump_port;
   push @relay, '--', $target_ip, $target_port;
   push @args, $host, '--', $jump_server . ' ' . shell_quote( @relay );
+  if ( defined $socks5_proxy ) {
+    splice @args, 1, 0, '-o', 'ProxyCommand=' . socks_proxy_command( $hop, !$hop );
+  }
   my $pid = open( my $relay, '-|' );
   die "$0: relay fork: $!\n" unless defined $pid;
   if ( !$pid ) {
     open STDERR, '>&STDOUT' or die;
-    $ENV{SHELL} = '/bin/sh' if !$hop;
+    $ENV{SHELL} = '/bin/sh' if !$hop || defined $socks5_proxy;
     exec @args;
     die "$0: cannot start jump SSH: $!\n";
   }
@@ -877,9 +1061,15 @@ sub upload_state_dictionary {
     } elsif ( $family eq 'inet6' ) {
       push @upload_ssh, '-6';
     }
-  } elsif ( $use_remote_ip eq 'proxy' ) {
+  } elsif ( $use_remote_ip eq 'proxy' && !defined $socks5_proxy ) {
     my $quoted_proxy_command = shell_quote( $0, "--family=$family" );
     push @upload_ssh, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
+  }
+
+  if ( defined $socks5_proxy ) {
+    push @upload_ssh, '-S', 'none';
+    splice @upload_ssh, 1, 0, '-S', 'none', '-o', 'ControlMaster=no',
+      '-o', 'ProxyCommand=' . socks_proxy_command( scalar @jumps, 0 );
   }
 
   my $script = 'tmp=$(mktemp "${TMPDIR:-/tmp}/goblin-mosh-zstd-dict.XXXXXX") || exit 1; '
@@ -890,7 +1080,7 @@ sub upload_state_dictionary {
   my $remote_path;
   {
     local $ENV{ 'SHELL' } = $ENV{ 'SHELL' };
-    $ENV{ 'SHELL' } = '/bin/sh' if $use_remote_ip eq 'proxy';
+    $ENV{ 'SHELL' } = '/bin/sh' if $use_remote_ip eq 'proxy' || defined $socks5_proxy;
 
     my $errfh = gensym;
     my $pid = open3( my $in, my $out, $errfh, @upload_ssh, $userhost, '--', 'sh -c ' . shell_quote( $script ) );
@@ -927,6 +1117,7 @@ sub server_command_string {
 sub server_environment_prefix {
   my @assignments;
   my @client_capabilities = ( "keepalive-v1", "directory-v1", "directory-v2", "file-sync-v1", "link-budget-v1", "sixel-state-v1", "osc5522-v1" );
+  push @client_capabilities, "palette-djvu-v1" if $client_palette_djvu;
   push @client_capabilities, "goblin-download-v2" unless $no_downloads;
   push @client_capabilities, "fips-aes128-gcm-v1" if $fips_crypto;
   push @client_capabilities, "tmux-control-v1" if $tmux_control;

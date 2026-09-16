@@ -119,6 +119,8 @@ void Connection::hop_port( void )
 {
   assert( !server );
 
+  if ( socks5 ) { socks5->reconnect( timestamp() ); return; }
+
   setup();
   assert( remote_addr_len != 0 );
   socks.push_back( Socket( remote_addr.sa.sa_family ) );
@@ -187,6 +189,7 @@ void Connection::setup( void )
 
 const std::vector<int> Connection::fds( void ) const
 {
+  if ( socks5 ) { return socks5->fds(); }
   std::vector<int> ret;
 
   for ( std::deque<Socket>::const_iterator it = socks.begin(); it != socks.end(); it++ ) {
@@ -351,7 +354,8 @@ Connection::Connection( const char* key_str,
                         const char* ip,
                         const char* port,
                         bool s_compact_keepalive,
-                        Crypto::Mode s_crypto_mode ) /* client */
+                        Crypto::Mode s_crypto_mode,
+                        const std::string& proxy ) /* client */
   : socks(), has_remote_addr( false ), remote_addr(), remote_addr_len( 0 ), server( false ),
     compact_keepalive( s_compact_keepalive ), crypto_mode( s_crypto_mode ), MTU( DEFAULT_SEND_MTU ), key( key_str ),
     session( key, s_crypto_mode, Crypto::Endpoint::Client ),
@@ -362,6 +366,15 @@ Connection::Connection( const char* key_str,
     SRTT( 1000 ), RTTVAR( 500 ), send_error()
 {
   setup();
+
+  if ( !proxy.empty() ) {
+    socks5.reset( new Socks5UDP( proxy, ip, port ) );
+    has_remote_addr = true;
+    // A domain may resolve to IPv6 at the proxy. Budget the larger header;
+    // the local SOCKS framing is removed before entering the tailnet.
+    set_MTU( AF_INET6 );
+    return;
+  }
 
   /* associate socket with remote host and port */
   struct addrinfo hints;
@@ -389,7 +402,7 @@ Connection::~Connection()
     for ( unsigned i = relays.size(); i; --i ) {
       for ( unsigned retry = 0; retry < 3; ++retry ) {
         const auto packet = relays.close_packet( i - 1 );
-        (void)sendto( sock(), packet.data(), packet.size(), MSG_DONTWAIT, &remote_addr.sa, remote_addr_len );
+        (void)send_datagram( packet );
       }
     }
   } catch ( ... ) {} // never throw while tearing down a session
@@ -421,17 +434,16 @@ void Connection::send( const std::string& s )
 
   std::string p = relays.seal( session.encrypt( px.toMessage() ) );
 
-  ssize_t bytes_sent = sendto( sock(), p.data(), p.size(), MSG_DONTWAIT, &remote_addr.sa, remote_addr_len );
+  ssize_t bytes_sent = send_datagram( p );
   if ( bytes_sent == static_cast<ssize_t>( p.size() ) ) {
     link.sent_packet( px.seq, p.size() + ( server ? Relay::overhead( crypto_mode, relay_hops ) : 0 )
-                       + ( relay_hops || remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
+                       + ( socks5 || relay_hops || remote_addr.sa.sa_family == AF_INET6 ? IPV6_HEADER_LEN : IPV4_HEADER_LEN ),
                       timestamp(), sending_feedback || s.empty() );
   }
 
   if ( bytes_sent != static_cast<ssize_t>( p.size() ) ) {
     /* Make sendto() failure available to the frontend. */
-    send_error = "sendto: ";
-    send_error += strerror( errno );
+    send_error = socks5 && !socks5->ready() ? "SOCKS5: waiting for UDP association" : std::string( "sendto: " ) + strerror( errno );
 
     if ( errno == EMSGSIZE ) {
       MTU = DEFAULT_SEND_MTU; /* payload MTU of last resort */
@@ -459,16 +471,42 @@ void Connection::send( const std::string& s )
 
 int Connection::keepalive_wait_time( void ) const
 {
+  const int proxy_wait = socks5 ? socks5->wait_time( timestamp() ) : INT_MAX;
+  // An overdue keepalive must not spin the event loop while the proxy is
+  // backing off. A new association explicitly schedules a fresh ping.
+  if ( socks5 && !socks5->ready() ) { return proxy_wait; }
   if ( !compact_keepalive || server || !has_remote_addr ) {
-    return INT_MAX;
+    return proxy_wait;
   }
 
   const uint64_t now = timestamp();
-  return next_keepalive > now ? static_cast<int>( next_keepalive - now ) : 0;
+  return std::min( proxy_wait, next_keepalive > now ? static_cast<int>( next_keepalive - now ) : 0 );
+}
+
+ssize_t Connection::send_datagram( const std::string& packet )
+{
+  if ( socks5 ) { return socks5->send( packet ); }
+  return sendto( sock(), packet.data(), packet.size(), MSG_DONTWAIT, &remote_addr.sa, remote_addr_len );
+}
+
+void Connection::service_proxy()
+{
+  if ( !socks5 ) { return; }
+  socks5->tick( timestamp() );
+  if ( !socks5->error().empty() ) { send_error = socks5->error(); }
+  if ( socks5_epoch != socks5->epoch() ) {
+    socks5_epoch = socks5->epoch();
+    // Promptly teach the server the new source port without resetting its
+    // screen state, keys, nonce counters or replay protection.
+    next_keepalive = timestamp();
+    keepalive_outstanding = false;
+    keepalive_interval = KEEPALIVE_INTERVAL_MIN;
+  }
 }
 
 void Connection::tick( void )
 {
+  service_proxy();
   // A new wrapper can launch an old --client binary. Do not send an
   // extension packet until the binary itself demonstrates support, and
   // restore legacy pacing if it never confirms the advertised capability.
@@ -482,8 +520,8 @@ void Connection::tick( void )
     send( report );
     sending_feedback = false;
   }
-  const int keepalive_wait = keepalive_wait_time();
-  if ( compact_keepalive && !server && has_remote_addr && keepalive_wait == 0 ) {
+  if ( compact_keepalive && !server && has_remote_addr && timestamp() >= next_keepalive
+       && ( !socks5 || socks5->ready() ) ) {
     if ( keepalive_outstanding ) {
       hop_port();
     }
@@ -496,6 +534,7 @@ void Connection::tick( void )
 
 std::string Connection::recv( void )
 {
+  if ( socks5 ) { service_proxy(); return recv_one( -1 ); }
   assert( !socks.empty() );
   for ( std::deque<Socket>::const_iterator it = socks.begin(); it != socks.end(); it++ ) {
     std::string payload;
@@ -519,8 +558,8 @@ std::string Connection::recv( void )
 std::string Connection::recv_one( int sock_to_recv )
 {
   /* receive source address, ECN, and payload in msghdr structure */
-  Addr packet_remote_addr;
-  struct msghdr header;
+  Addr packet_remote_addr {};
+  struct msghdr header {};
   struct iovec msg_iovec;
 
   char msg_payload[Session::RECEIVE_MTU];
@@ -543,7 +582,16 @@ std::string Connection::recv_one( int sock_to_recv )
   /* receive flags */
   header.msg_flags = 0;
 
-  ssize_t received_len = recvmsg( sock_to_recv, &header, MSG_DONTWAIT );
+  std::string ciphertext;
+  ssize_t received_len;
+  if ( socks5 ) {
+    ciphertext = socks5->receive();
+    received_len = ciphertext.size();
+    header.msg_controllen = 0; // local proxy ECN is not end-to-end ECN
+    packet_remote_addr.sa.sa_family = AF_INET6; // conservative accounting
+  } else {
+    received_len = recvmsg( sock_to_recv, &header, MSG_DONTWAIT );
+  }
 
   if ( received_len < 0 ) {
     throw NetworkException( "recvmsg", errno );
@@ -570,7 +618,8 @@ std::string Connection::recv_one( int sock_to_recv )
     congestion_experienced = ( *ecn_octet_p & 0x03 ) == 0x03;
   }
 
-  Packet p( session.decrypt( relays.open( std::string( msg_payload, received_len ) ) ) );
+  if ( !socks5 ) { ciphertext.assign( msg_payload, received_len ); }
+  Packet p( session.decrypt( relays.open( ciphertext ) ) );
 
   dos_assert( p.direction == ( server ? TO_SERVER : TO_CLIENT ) ); /* prevent malicious playback to sender */
   if ( link_offered && !link_confirmed && p.payload.size() == 32

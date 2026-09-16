@@ -33,10 +33,18 @@ static const size_t KITTY_ENCODED_QUOTA = 12 * 1024 * 1024;
 static const uint32_t KITTY_FORMAT_RGB = 24;
 static const uint32_t KITTY_FORMAT_RGBA = 32;
 static const uint32_t KITTY_FORMAT_PNG = 100;
-/* Canonical in-memory and state-sync representation.  This value is never
-   emitted to the user's terminal; the public Kitty protocol only defines
-   RGB, RGBA, and PNG. */
+/* Internal codecs, never emitted to the terminal. The public Kitty protocol
+   only defines RGB, RGBA, and PNG. */
 static const uint32_t KITTY_FORMAT_WEBP = 0x57454250U;
+static const uint32_t KITTY_FORMAT_DJVU = 0x444A5655U;
+static const size_t GRAPHICS_MAX_PALETTE = 16;
+
+struct ImageEncoding
+{
+  int quality = -1; // -1: lossless WebP; 0..100: lossy WebP
+  bool palette_djvu = false; // enabled only after peer capability negotiation
+  bool djvu_lossy = false; // permit cjb2 symbol substitution for bilevel images
+};
 
 enum KittyAction
 {
@@ -86,8 +94,7 @@ struct KittyCommand
   KittyCommand();
 };
 
-// The stored payload is WebP in either case. Origin is needed because a
-// sixel image must prefer native sixel output, even on dual-capable clients.
+// A sixel image must prefer native sixel output, even on dual-capable clients.
 enum class ImageOrigin { Kitty, Sixel };
 
 struct KittyImage
@@ -99,6 +106,7 @@ struct KittyImage
   uint32_t height;
   ImageOrigin origin;
   std::shared_ptr<std::string> data;
+  std::string palette; // DjVu: 1..16 exact RGBA entries, including alpha
   uint64_t serial;
 
   KittyImage();
@@ -146,6 +154,9 @@ bool kitty_normalize_webp( uint32_t format,
                            std::string& error );
 bool kitty_webp_dimensions( const std::string& webp, uint32_t& width, uint32_t& height );
 bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& width, uint32_t& height );
+bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, const std::string& input,
+                            KittyImage& image, const ImageEncoding& encoding, std::string& error );
+bool kitty_image_to_rgba( const KittyImage& image, std::string& rgba );
 void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current,
                          bool convert_sixel = false );
 

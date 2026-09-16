@@ -94,7 +94,7 @@ def children(pid):
     return {int(child) for child, parent in map(str.split, output.splitlines()) if int(parent) == pid}
 
 
-def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, confirm=False, udp_hops=0):
+def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, confirm=False, udp_hops=0, socks5=False):
     build = Path.cwd()
     client = os.environ.get("GOBLIN_TEST_CLIENT", str((build / "../frontend/goblin-mosh-client").resolve()))
     server = os.environ.get("GOBLIN_TEST_SERVER", str((build / "../frontend/goblin-mosh-server").resolve()))
@@ -164,13 +164,23 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 jump_keys.insert(0, banner[6].decode())
             env["MOSH_RELAY_KEYS"] = ",".join(jump_keys)
         relay = Relay(port, fast=speed)
+        proxy = None
+        proxy_args = []
+        if socks5:
+            import runpy
+            Proxy = runpy.run_path(str(Path(__file__).with_name("socks5-integration.py")))["Proxy"]
+            # Relay supplies the established one-in-seven loss/reordering
+            # workload. Malformed-packet flooding is tested independently.
+            proxy = Proxy(restart=True, loss=False, noisy=False)
+            proxy_args = ["--socks5-proxy=" + proxy.endpoint]
         env.update(MOSH_KEY=match[2].decode(), MOSH_DIRECTORY="2", MOSH_COMPACT_KEEPALIVE="1",
                    MOSH_FILES="1" if file_sync else "0",
                    MOSH_LINK_BUDGET="1" if adaptive else "0",
                    MOSH_MASCOT="none", MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 800, 480))
-        proc = subprocess.Popen([client] + (["--udp-relay"] if udp_hops else []) + ["127.0.0.1", str(relay.socket.getsockname()[1])],
+        proc = subprocess.Popen([client] + (["--udp-relay"] if udp_hops else []) + proxy_args
+                                + ["only-in-tailnet.invalid" if socks5 else "127.0.0.1", str(relay.socket.getsockname()[1])],
                                 cwd=local, env=env, stdin=slave, stdout=slave, stderr=slave,
                                 start_new_session=True,
                                 preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
@@ -374,7 +384,16 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
             until(b"Loading", start)
             collect(2)
             pulses = re.findall(rb"([A-Z])\1{15}", output[start:])
-            assert len(set(pulses)) >= 3, "remote screen froze under popup"
+            if socks5:
+                # This added reconnect + adaptive-pacing case tests liveness,
+                # not a guaranteed frame rate. Two real updates in the first
+                # two seconds are not a frozen screen. Still require three
+                # distinct updates within a bounded five-second observation.
+                deadline = time.monotonic() + 3
+                while len(set(pulses)) < 3 and time.monotonic() < deadline:
+                    collect(0.1)
+                    pulses = re.findall(rb"([A-Z])\1{15}", output[start:])
+            assert len(set(pulses)) >= 3, ("remote screen froze under popup", pulses, output[start:][-4000:])
             assert helpers == children(server_pid) - session_children, "stalled query spawned more workers"
             send_through(b"\x1e0", b"")
             start = len(output)
@@ -425,6 +444,9 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=5)
+            if proxy:
+                proxy.close()
+                assert proxy.associations >= 2, "session did not exercise SOCKS5 reconnection"
             relay.close()
             for jump in jump_processes:
                 if jump.poll() is None:
@@ -447,6 +469,8 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["--udp-relay"]:
         integration("\x02", adaptive=True, udp_hops=1)
         integration(file_sync=True, adaptive=True, udp_hops=4)
+    elif sys.argv[1:] == ["--socks5"]:
+        integration(adaptive=True, udp_hops=1, socks5=True)
     elif sys.argv[1:] in (["--file-speed"], ["--file-speed-confirm"]):
         integration(file_sync=True, adaptive=True, speed=True, confirm=sys.argv[1].endswith("-confirm"))
     else:

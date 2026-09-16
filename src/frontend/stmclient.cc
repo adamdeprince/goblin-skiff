@@ -292,7 +292,7 @@ void STMClient::main_init( void )
   Network::UserStream blank;
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
   network = NetworkPointer(
-    new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive, crypto_mode ) );
+    new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive, crypto_mode, socks5_proxy ) );
   if ( !relay_keys.empty() ) { network->set_relay_keys( relay_keys ); relay_keys.clear(); }
   network->enable_link_budget( compact_keepalive && getenv( "MOSH_LINK_BUDGET" ) && !strcmp( getenv( "MOSH_LINK_BUDGET" ), "1" ) );
 
@@ -938,7 +938,11 @@ bool STMClient::main( void )
       }
 
       if ( network_ready_to_read ) {
-        process_network_input();
+        try { process_network_input(); }
+        catch ( const Network::NetworkException& e ) {
+          // Proxy control readiness need not produce an application packet.
+          if ( e.the_errno != EAGAIN && e.the_errno != EWOULDBLOCK ) { throw; }
+        }
       }
 
       for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {

@@ -47,7 +47,7 @@ void place( Framebuffer& fb, const Bitmap& bitmap, const ClientGeometry* geometr
   }
   KittyImage image;
   std::string error;
-  if ( !kitty_normalize_webp( KITTY_FORMAT_RGBA, width, height, pixels, *image.data, image.width, image.height, error ) ) {
+  if ( !kitty_normalize_image( KITTY_FORMAT_RGBA, width, height, pixels, image, fb.image_encoding, error ) ) {
     return;
   }
   image.origin = ImageOrigin::Sixel;
@@ -125,7 +125,9 @@ void append_native_frame( std::string& output, const Framebuffer& fb, const Clie
     const auto* image = fb.find_kitty_image( p.image_id );
     if ( !p.columns || !p.rows || !p.src_w || !p.src_h || p.row < 0 || p.col < 0 ) { continue; }
     auto& source = decoded[p.image_id];
-    if ( source.rgba.empty() && !kitty_webp_to_rgba( *image->data, source.rgba, source.width, source.height ) ) { continue; }
+    if ( source.rgba.empty() && !kitty_image_to_rgba( *image, source.rgba ) ) { continue; }
+    source.width = image->width;
+    source.height = image->height;
     if ( uint64_t( p.src_x ) + p.src_w > source.width || uint64_t( p.src_y ) + p.src_h > source.height ) { continue; }
     const unsigned cw = geometry.has_cell_size() ? geometry.cell_width_px : p.src_w / p.columns;
     const unsigned ch = geometry.has_cell_size() ? geometry.cell_height_px : p.src_h / p.rows;

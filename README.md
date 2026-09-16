@@ -41,6 +41,17 @@ forwards (`-R`), local SOCKS5 dynamic forwards (`-D`), SSH agent forwarding
 Goblin Mosh jump hosts, including routes discovered from SSH `ProxyJump`.
 It does not add arbitrary UDP port forwarding; `-L/-R/-D` remain TCP streams.
 
+`--socks5-proxy=127.0.0.1:1055` carries SSH setup and the session UDP through
+an existing userspace Tailscale/SOCKS5 proxy, including first-hop jump access
+and proxy-side destination DNS. No TUN device or kernel changes are needed.
+See [userspace networking](USERSPACE_NETWORKING.md) for setup and limitations.
+
+The first Goblin compatibility baseline is **1.4.0-goblin20260915.1**,
+tracked in `GOBLIN_VERSION`. Connections identify both endpoint releases
+and builds; compatible releases share Goblin protocol 1 and negotiate
+optional features independently. See [compatibility policy](COMPATIBILITY.md)
+and [release changes](CHANGELOG.md).
+
 Other features
 --------------
 
@@ -124,7 +135,7 @@ Usage
   remote `TERM` value or send extra capability packets over the link.
 
   Remote sixel graphics are negotiated with `sixel-state-v1` and retained
-  in terminal image state as lossless WebP. A sixel-capable local terminal
+  in terminal image state using WebP or palette/DjVu. A sixel-capable local terminal
   receives sixel, even if it also supports Kitty. A Kitty-only local terminal
   receives client-side Kitty conversion; neither protocol is emitted to a
   client supporting neither. Capability discovery works independently of the
@@ -393,14 +404,37 @@ Usage
     $ goblin-mosh-compile-dictionary --input=alpine.samples.zst --output=alpine.dict
     $ goblin-mosh --state-zstd-dict=alpine.dict host
 
-  Static Kitty graphics sent as RGB, RGBA, or PNG are normalized once to
-  lossless WebP and synchronized as image and placement state.  Placement-only
-  changes do not resend pixels.  The client decodes WebP and emits standard
+  Static Kitty graphics sent as RGB, RGBA, or PNG are normalized once and
+  synchronized as image and placement state. Images with at most 16 distinct
+  RGBA colors use an exact palette plus a DjVu image encoded by DjVuLibre's
+  `cjb2`; other images use lossless WebP by default. The palette includes alpha.
+  DjVu carries palette-index bitplanes and is enabled only for peers advertising
+  `palette-djvu-v1`; older peers receive WebP. If cjb2 fails or exceeds its
+  five-second limit, the server falls back to lossless WebP for that image.
+  Placement-only changes do not resend pixels. The client decodes the image and emits standard
   Kitty RGBA commands to the local terminal.  The wrapper also exposes the
   local terminal type to the remote login session, so a client running with
   `TERM=xterm-ghostty` advertises Ghostty's Kitty graphics support to remote
   applications.  The corresponding terminfo entry must be installed on the
   remote host.
+
+  Use `--lossy=QUALITY` to encode WebP images with a quality from 0 to 100;
+  higher values preserve more detail and generally use more bandwidth. Even
+  100 uses lossy WebP. Omitting the flag keeps WebP lossless.
+
+    $ goblin-mosh --lossy=75 host
+
+  Separately, `--djvu-lossy` permits cjb2's `-lossy` mode for two-color images.
+  This can remove small marks and substitute similar shapes, including text
+  characters. It is off by default and is never enabled by `--lossy`. Images
+  with three to sixteen colors remain lossless so that index bitplanes cannot
+  invent colors. The flags may be used independently or together:
+
+    $ goblin-mosh --lossy=75 --djvu-lossy host
+
+  Both flags are also accepted by `goblin-mosh-server new`. The server needs
+  the `cjb2` executable; both sides need the DjVuLibre library. No special
+  terminal support for WebP or DjVu is needed.
 
   Incoming Kitty uploads support inline data, regular files, temporary files
   and POSIX shared memory on the server. References are resolved there, not
@@ -514,7 +548,8 @@ Debian, Windows Subsystem for Linux:
 ```
 $ sudo apt install -y build-essential protobuf-compiler \
     libprotobuf-dev pkg-config libutempter-dev zlib1g-dev libncurses5-dev \
-    libssl-dev libpng-dev libwebp-dev libzstd-dev bash-completion tmux less
+    libssl-dev libpng-dev libwebp-dev libzstd-dev libdjvulibre-dev djvulibre-bin \
+    bash-completion tmux less
 ```
 
 Fedora, RHEL:
@@ -523,13 +558,13 @@ Fedora, RHEL:
 $ sudo dnf group install development-tools
 $ sudo dnf install automake protobuf-compiler protobuf-devel libutempter-devel \
     zlib-ng-compat-devel ncurses-devel openssl-devel libpng-devel libwebp-devel \
-    libzstd-devel bash-completion tmux less perl-diagnostics
+    libzstd-devel djvulibre-devel djvulibre bash-completion tmux less perl-diagnostics
 ```
 
 MacOS:
 
 ```
-$ brew install protobuf automake libpng webp zstd
+$ brew install protobuf automake libpng webp zstd djvulibre
 ```
 
 Once you have forked the repository, run the following to build and test Mosh:

@@ -365,3 +365,13 @@ compare an older installed version that still has the copy confirmation.
 2.4 kbit/s, and continuous foreground traffic with random loss/reordering
 on an unconstrained path. Its simulated throughput is not an end-to-end
 file speed claim.
+
+## Connection version compatibility
+
+`session-version` exercises release/build identity over encrypted loopback
+traffic, compatible mixed releases, legacy peers, lost startup metadata,
+removal of version overhead after acknowledgment, and incompatible protocol
+rejection before state application. `udp-jump-wrapper.test` checks setup
+reporting, the selected client's version, malformed and duplicate metadata,
+and rejection before starting jump relays. See `COMPATIBILITY.md` for the
+baseline and the release compatibility policy.

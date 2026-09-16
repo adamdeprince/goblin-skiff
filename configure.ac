@@ -3,6 +3,8 @@
 
 AC_PREREQ([2.61])
 AC_INIT([mosh], [1.4.0], [mosh-devel@mit.edu])
+AC_SUBST([GOBLIN_VERSION], [m4_normalize(m4_include([GOBLIN_VERSION]))])
+AC_DEFINE_UNQUOTED([GOBLIN_VERSION], ["$GOBLIN_VERSION"], [Goblin Mosh release version.])
 AM_INIT_AUTOMAKE([foreign std-options -Wall -Werror -Wno-portability])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_CONFIG_SRCDIR([src/frontend/mosh-client.cc])
@@ -253,14 +255,21 @@ AC_CHECK_LIB([z], [compress],
    LIBS="$ZLIB_LIBS $LIBS"],
   [AC_MSG_ERROR([Unable to find zlib.])])
 
-# Kitty graphics are normalized to lossless WebP in terminal state.  PNG is
+# Kitty graphics use WebP or lossless palette/DjVu in terminal state. PNG is
 # required to accept the compact image format mandated by the Kitty protocol.
 PKG_CHECK_MODULES([WEBP], [libwebp], [],
   [AC_MSG_ERROR([Unable to find libwebp, required for Kitty graphics state.])])
 PKG_CHECK_MODULES([PNG], [libpng], [],
   [AC_MSG_ERROR([Unable to find libpng, required for Kitty PNG input.])])
-CPPFLAGS="$CPPFLAGS $WEBP_CFLAGS $PNG_CFLAGS"
-LIBS="$WEBP_LIBS $PNG_LIBS $LIBS"
+PKG_CHECK_MODULES([DJVU], [ddjvuapi >= 3.5.28], [],
+  [AC_MSG_ERROR([Unable to find DjVuLibre, required for palette image transport.])])
+# DjVuLibre exposes a stable decoding API; its JB2 encoder is the cjb2 tool.
+AC_PATH_PROG([CJB2], [cjb2], [])
+AS_IF([test x"$CJB2" = x],
+  [AC_MSG_ERROR([Unable to find cjb2. Install the DjVuLibre command-line tools.])])
+AC_DEFINE_UNQUOTED([CJB2_PATH], ["$CJB2"], [Path to the DjVuLibre lossless encoder.])
+CPPFLAGS="$CPPFLAGS $WEBP_CFLAGS $PNG_CFLAGS $DJVU_CFLAGS"
+LIBS="$WEBP_LIBS $PNG_LIBS $DJVU_LIBS $LIBS"
 
 AC_ARG_WITH([zstd],
   [AS_HELP_STRING([--with-zstd], [Enable zstd compression for moshcp and transport state @<:@check@:>@])],
@@ -776,4 +785,5 @@ AC_MSG_NOTICE([FEC RFC6330:         $have_libraptorq])
 AC_MSG_NOTICE([moshcp zstd:         $have_zstd])
 AC_MSG_NOTICE([File-menu librsync:  $have_file_sync])
 AC_MSG_NOTICE([Kitty WebP state:    yes])
+AC_MSG_NOTICE([Palette DjVu state: yes (cjb2)])
 AC_MSG_NOTICE([ =============================])
