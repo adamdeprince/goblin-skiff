@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 %global debug_package %{nil}
 
 Name:           goblin-skiff

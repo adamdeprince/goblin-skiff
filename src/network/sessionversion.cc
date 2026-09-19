@@ -1,3 +1,4 @@
+// Modified for Goblin Skiff on 2026-09-19.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "src/include/config.h"
 #include "src/include/version.h"

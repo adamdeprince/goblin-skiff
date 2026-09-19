@@ -1,4 +1,5 @@
 #!/usr/bin/make -f
+# Modified for Goblin Skiff on 2026-09-19.
 # -*- makefile -*-
 # Sample debian/rules that uses debhelper.
 # This file was originally written by Joey Hess and Craig Small.

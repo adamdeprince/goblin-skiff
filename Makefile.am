@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 # Work around inconsistency in AX_CODE_COVERAGE defining
 # AM_DISTCHECK_CONFIGURE_FLAGS only in some branches
 if !CODE_COVERAGE_ENABLED

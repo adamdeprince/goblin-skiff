@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 dist_man_MANS =
 
 dist_man_MANS += goblin-skiffcp.1 goblin-skiff-compile-dictionary.1

@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 """Wrapper routing contract with a fake SSH transport; never contacts a host."""
 import base64
 import hashlib

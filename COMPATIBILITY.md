@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin Skiff version compatibility
 
 `1.4.0-goblin20260915.1` is the first compatibility baseline. Its Goblin

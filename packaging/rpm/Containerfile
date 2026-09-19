@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 ARG BASE_IMAGE=registry.fedoraproject.org/fedora:44
 FROM ${BASE_IMAGE}
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8

@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 """Inline download protocol over real PTYs, encrypted UDP loss, and a stopped disk worker."""
 import base64
 import errno

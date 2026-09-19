@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin Skiff / upstream Mosh IP-volume benchmark
 
 This harness compares the downlink IP volume of Goblin Skiff and upstream Mosh installations while

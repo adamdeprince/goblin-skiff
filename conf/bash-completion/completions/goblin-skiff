@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 # Bash completions for goblin-skiff, the mobile shell.       -*- shell-script -*-
 
 __goblin_skiff_init_completion()

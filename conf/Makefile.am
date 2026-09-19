@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 completionsdir = @completions@
 dist_completions_DATA =
 nobase_dist_sysconf_DATA =

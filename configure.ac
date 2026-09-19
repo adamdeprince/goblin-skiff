@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 

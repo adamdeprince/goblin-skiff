@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Homebrew release packaging
 
 The public tap is hosted directly at

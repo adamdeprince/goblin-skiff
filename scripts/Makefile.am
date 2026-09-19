@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 EXTRA_DIST = wrap-compiler-for-flag-check mosh.pl
 if BUILD_CLIENT
   bin_SCRIPTS = goblin-skiff

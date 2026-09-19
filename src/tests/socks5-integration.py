@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 """Loopback-only SOCKS5 fixture. No TUN, tailnet credentials or system DNS changes."""
 import contextlib
 import os

@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin inline downloads, version 1
 
 Status: implemented in the development tree. Both endpoints must negotiate

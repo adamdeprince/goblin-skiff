@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 <installer-script minSpecVersion="1.000000" authoringTool="com.apple.PackageMaker" authoringToolVersion="3.0.6" authoringToolBuild="201">
     <title>@PACKAGE_VERSION@</title>
     <options customize="never" allow-external-scripts="no"/>

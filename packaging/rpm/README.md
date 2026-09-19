@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # RPM package builds
 
 Build separately in official Fedora 44, Rocky Linux 9 and Rocky Linux 10

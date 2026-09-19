@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 Name:		goblin-skiff
 Version:	1.2.5
 Release:	1%{?dist}

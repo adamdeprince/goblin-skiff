@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Licenses and corresponding source
 
 Goblin Skiff is derived from Mosh and remains GPL version 3 or later. See

@@ -1,6 +1,7 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Goblin Skiff (derived from Mosh)
 Source: https://github.com/adamdeprince/goblin-skiff/tree/low-bandwidth-mosh
+Comment: Modified for Goblin Skiff on 2026-09-19.
 
 Files: *
 Copyright: 2012 Keith Winstein <mosh-devel@mit.edu>

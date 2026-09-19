@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 [![ci](https://github.com/adamdeprince/goblin-skiff/actions/workflows/ci.yml/badge.svg)](https://github.com/adamdeprince/goblin-skiff/actions/workflows/ci.yml)
 
 Goblin Skiff

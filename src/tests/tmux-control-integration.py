@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 """Exercise tmux passthrough through two real goblin-skiff endpoints and PTYs."""
 import errno
 import fcntl

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Modified for Goblin Skiff on 2026-09-19.
 # Distributed under the GNU GPL, version 3 or later.
 # Check the actual executable, not just configure flags or shared-library lists:
 # libRaptorQ is header-only and could otherwise be compiled into an artifact.

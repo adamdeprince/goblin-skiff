@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin Skiff changes
 
 ## 1.4.0-goblin20260915.1 — 2026-09-15

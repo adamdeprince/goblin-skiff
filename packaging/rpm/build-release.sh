@@ -1,4 +1,5 @@
 #!/bin/sh
+# Modified for Goblin Skiff on 2026-09-19.
 # Run only in the disposable packaging container; /out is its artifact mount.
 set -eu
 test "$#" -eq 1

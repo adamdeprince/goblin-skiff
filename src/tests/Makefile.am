@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 EXTRA_DIST = \
 	hold-stdin print-exitstatus \
 	e2e-test e2e-test-server \

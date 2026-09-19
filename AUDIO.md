@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Session audio
 
 Status: design requirements, not an implemented audio bridge. The current control

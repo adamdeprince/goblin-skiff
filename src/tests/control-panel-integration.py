@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 """Real PTYs + encrypted UDP, with loss/reordering and a stalled NAS surrogate."""
 import errno
 import fcntl

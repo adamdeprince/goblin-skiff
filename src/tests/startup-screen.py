@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 """Real PTY checks for inline startup output and local graphics overrides."""
 import errno
 import fcntl

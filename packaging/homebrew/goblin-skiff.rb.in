@@ -1,3 +1,4 @@
+# Modified for Goblin Skiff on 2026-09-19.
 class GoblinSkiff < Formula
   desc "Fork of Mosh optimized for bandwidth-constrained links"
   homepage "https://skiff.goblinreactor.com/"

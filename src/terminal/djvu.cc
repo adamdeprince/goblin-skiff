@@ -1,3 +1,4 @@
+// Modified for Goblin Skiff on 2026-09-19.
 /* Distributed under the GNU GPL, version 3 or later. */
 #include "src/include/config.h"
 #include "djvu.h"

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Modified for Goblin Skiff on 2026-09-19.
 
 #
 # This script is known to work on:

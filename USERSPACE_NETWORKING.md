@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Userspace Tailscale and SOCKS5
 
 Goblin Skiff can use a SOCKS5 proxy for both SSH setup and the encrypted UDP

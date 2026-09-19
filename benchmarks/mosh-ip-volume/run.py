@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Goblin Skiff on 2026-09-19.
 
 """Compare Mosh variants by IP packet volume over deterministic terminal workloads."""
 

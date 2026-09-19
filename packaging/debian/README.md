@@ -1,3 +1,4 @@
+<!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Debian and Ubuntu package builds
 
 The package is `goblin-skiff`; its commands are installed in `/usr/bin` and

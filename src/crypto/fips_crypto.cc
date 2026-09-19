@@ -1,4 +1,5 @@
 /*
+    Modified for Goblin Skiff on 2026-09-19.
     Mosh: the mobile shell
 
     This program is free software: you can redistribute it and/or modify

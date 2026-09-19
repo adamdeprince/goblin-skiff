@@ -1,4 +1,5 @@
 #!/usr/bin/env perl
+# Modified for Goblin Skiff on 2026-09-19.
 
 #   Mosh: the mobile shell
 #   Copyright 2012 Keith Winstein
