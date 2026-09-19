@@ -1,4 +1,4 @@
-Source: goblin-mosh
+Source: goblin-skiff
 Section: net
 Priority: optional
 Maintainer: Adam DePrince <adam.deprince@gmail.com>
@@ -9,17 +9,15 @@ Homepage: https://mosh.goblinreactor.com
 Vcs-Git: https://github.com/adamdeprince/mosh.git -b low-bandwidth-mosh
 Vcs-Browser: https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh
 
-Package: goblin-mosh
+Package: goblin-skiff
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, openssh-client, djvulibre-bin
 Recommends: libio-socket-ip-perl
-Conflicts: adam-mosh
-Replaces: adam-mosh
-Description: Mosh terminal and file transfers optimized for low-bandwidth links
- Goblin Mosh extends Mosh with zstd-22 compression, adaptive per-direction
+Description: Remote terminal optimized for bandwidth-constrained links
+ Goblin Skiff is a fork of Mosh, optimized for bandwidth-constrained links.
+ It adds zstd-22 compression, adaptive per-direction
  pacing, idle keepalive backoff, terminal graphics, and a two-pane file
  transfer menu using librsync and forward error correction.
  .
- Includes the client, server, goblin-moshcp, dictionary compiler, manual
- pages, and shell completion. The goblin-mosh command coexists with the
- distribution's mosh package; it does not replace /usr/bin/mosh.
+ Includes the client, server, goblin-skiffcp, dictionary compiler, manual
+ pages, and shell completion.

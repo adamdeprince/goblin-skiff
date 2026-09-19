@@ -1,5 +1,5 @@
-class GoblinMosh < Formula
-  desc "Mobile shell and file transfers optimized for low-bandwidth links"
+class GoblinSkiff < Formula
+  desc "Fork of Mosh optimized for bandwidth-constrained links"
   homepage "https://mosh.goblinreactor.com/"
   url "https://brew.goblinreactor.com/sources/goblin-mosh-1.4.0-goblin20260911.2.tar.gz"
   version "1.4.0-goblin20260911.2"
@@ -39,14 +39,14 @@ class GoblinMosh < Formula
            "--with-zstd", "--with-librsync", "--with-fips-crypto",
            "--without-libraptorq", "--enable-compile-warnings=yes"
     system "make"
-    system "sh", "packaging/check-prebuilt-fec.sh", "./src/moshcp/goblin-moshcp"
+    system "sh", "packaging/check-prebuilt-fec.sh", "./src/moshcp/goblin-skiffcp"
     # Keep Unix socket paths short on macOS and never share a live session's
     # runtime directory. Tests use local Unix sockets and loopback UDP.
     Dir.mktmpdir("goblin-check-", "/tmp") do |runtime|
       ENV["XDG_RUNTIME_DIR"] = runtime
       tests = %w[
         ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs
-        bulk-datagram moshcp-protocol bulk-loss-sim transport-compression session-version
+        bulk-datagram skiffcp-protocol bulk-loss-sim transport-compression session-version
         state-samples osc52-parse kitty-graphics terminal-geometry
         terminal-display tmux-control control-panel mascot file-transfer
         link-budget sixel-state terminal-extensions download download-forward
@@ -55,7 +55,7 @@ class GoblinMosh < Formula
       system "make", "check", "TESTS=#{tests.join(" ")}"
     end
     system "make", "install"
-    bash_completion.install "conf/bash-completion/completions/goblin-mosh"
+    bash_completion.install "conf/bash-completion/completions/goblin-skiff"
     doc.install "README.md", "GOBLIN_DOWNLOAD_PROTOCOL.md", "SIXEL_STATE.md",
                 "AUDIO.md", "UDP_RELAY.md", "debian/copyright"
     (pkgshare/"tests").install "src/tests/control-panel-integration.py"
@@ -65,10 +65,10 @@ class GoblinMosh < Formula
 
   def caveats
     <<~EOS
-      Install goblin-mosh on both endpoints, then run:
-        goblin-mosh user@server
+      Install goblin-skiff on both endpoints, then run:
+        goblin-skiff user@server
       For UDP jump relays, install this release on each jump host too:
-        goblin-mosh -J user@jump user@server
+        goblin-skiff -J user@jump user@server
       Open the file/control menu with Ctrl-^ (usually Ctrl-Shift-6), then 0.
       This package does not replace stock mosh or a manual /usr/local install.
       Existing sessions keep running; open a new session after an upgrade.
@@ -78,12 +78,12 @@ class GoblinMosh < Formula
   end
 
   test do
-    system "sh", pkgshare/"tests/check-prebuilt-fec.sh", bin/"goblin-moshcp"
-    assert_match "goblin-mosh-client", shell_output("#{bin}/goblin-mosh-client --version 2>&1")
-    assert_match "goblin-mosh-server", shell_output("#{bin}/goblin-mosh-server --version 2>&1")
-    assert_path_exists man1/"goblin-mosh.1"
-    ENV["GOBLIN_TEST_CLIENT"] = bin/"goblin-mosh-client"
-    ENV["GOBLIN_TEST_SERVER"] = bin/"goblin-mosh-server"
+    system "sh", pkgshare/"tests/check-prebuilt-fec.sh", bin/"goblin-skiffcp"
+    assert_match "goblin-skiff-client", shell_output("#{bin}/goblin-skiff-client --version 2>&1")
+    assert_match "goblin-skiff-server", shell_output("#{bin}/goblin-skiff-server --version 2>&1")
+    assert_path_exists man1/"goblin-skiff.1"
+    ENV["GOBLIN_TEST_CLIENT"] = bin/"goblin-skiff-client"
+    ENV["GOBLIN_TEST_SERVER"] = bin/"goblin-skiff-server"
     system formula_opt_bin("python@3.14")/"python3.14",
            pkgshare/"tests/control-panel-integration.py", "--files"
     # Four independently authenticated hops add substantial overhead at the

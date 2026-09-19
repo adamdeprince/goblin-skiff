@@ -12,6 +12,6 @@ RUN if test -f /etc/rocky-release; then \
         glibc-langpack-en openssh-clients perl-IO-Socket-IP procps-ng \
         ca-certificates /usr/bin/curl gnupg2 file
 COPY snapshot.tar.gz /tmp/goblin-snapshot.tar.gz
-COPY goblin-mosh.spec /tmp/goblin-mosh.spec
+COPY goblin-skiff.spec /tmp/goblin-skiff.spec
 COPY build-release.sh /usr/local/bin/goblin-package-build
 ENTRYPOINT ["/bin/sh", "/usr/local/bin/goblin-package-build"]

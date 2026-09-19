@@ -1,6 +1,6 @@
 <pkgref spec="1.12" uuid="38E2F0D0-8573-4E7B-8A50-A86056DD0EE8">
     <config>
-        <identifier>edu.mit.mosh.mosh.pkg</identifier>
+        <identifier>com.goblinreactor.goblin_skiff.pkg</identifier>
         <version>$PACKAGE_VERSION</version>
         <description></description>
         <post-install type="none"/>

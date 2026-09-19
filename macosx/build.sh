@@ -67,8 +67,8 @@ for triple in $ARCH_TRIPLES; do
 	    make install -j8 V=1 &&
 	    rm -f "${prefix}/etc"
     then
-	# mosh-client built with Xcode 3.1.2 bus-errors if the binary is stripped.
-	# strip "${prefix}/local/bin/mosh-client" "${prefix}/local/bin/mosh-server"
+	# goblin-skiff-client built with Xcode 3.1.2 bus-errors if the binary is stripped.
+	# strip "${prefix}/local/bin/goblin-skiff-client" "${prefix}/local/bin/goblin-skiff-server"
 	BUILT_ARCHS="$BUILT_ARCHS $arch"
     fi
 done
@@ -90,7 +90,7 @@ done
 
 # Build fat binaries
 # XXX will break with spaces in pathname
-for prog in local/bin/mosh-client local/bin/mosh-server; do
+for prog in local/bin/goblin-skiff-client local/bin/goblin-skiff-server local/bin/goblin-skiffcp local/bin/goblin-skiff-compile-dictionary; do
     archprogs=()
     for arch in $BUILT_ARCHS; do
 	archprogs+=("${PREFIX}_${arch}/$prog")
@@ -98,13 +98,13 @@ for prog in local/bin/mosh-client local/bin/mosh-server; do
     lipo -create "${archprogs[@]}" -output "${PREFIX}/$prog"
 done
 
-perl -wlpi -e 's{#!/usr/bin/env perl}{#!/usr/bin/perl}' "$PREFIX/local/bin/mosh"
+perl -wlpi -e 's{#!/usr/bin/env perl}{#!/usr/bin/perl}' "$PREFIX/local/bin/goblin-skiff"
 
 popd > /dev/null
 
 PACKAGE_VERSION=$(cat ../VERSION.stamp)
 
-OUTFILE="$PACKAGE_VERSION.pkg"
+OUTFILE="goblin-skiff-$PACKAGE_VERSION.pkg"
 
 rm -f "$OUTFILE"
 
@@ -114,7 +114,7 @@ if which -s pkgbuild; then
     # * essentially take the Distribution file that PackageMaker generated and
     #   use it as the --distribution input file for productbuild
     echo "Preprocessing package description..."
-    PKGID=edu.mit.mosh.mosh.pkg
+    PKGID=com.goblinreactor.goblin_skiff.pkg
     for file in Distribution; do
 	sed -e "s/@PACKAGE_VERSION@/${PACKAGE_VERSION}/g" ${file}.in > ${file}
     done
@@ -131,8 +131,8 @@ if which -s pkgbuild; then
     rm -rf $PKGID
 else
     echo "Preprocessing package description..."
-    INDIR=mosh-package.pmdoc.in
-    OUTDIR=mosh-package.pmdoc
+    INDIR=goblin-skiff-package.pmdoc.in
+    OUTDIR=goblin-skiff-package.pmdoc
     mkdir -p "$OUTDIR"
     pushd "$INDIR" > /dev/null
     for file in *
@@ -141,7 +141,7 @@ else
     done
     popd > /dev/null
     echo "Running PackageMaker..."
-    env PATH="/Applications/PackageMaker.app/Contents/MacOS:/Developer/Applications/Utilities/PackageMaker.app/Contents/MacOS:$PATH" PackageMaker -d mosh-package.pmdoc -o "$OUTFILE" -i edu.mit.mosh.mosh.pkg
+    env PATH="/Applications/PackageMaker.app/Contents/MacOS:/Developer/Applications/Utilities/PackageMaker.app/Contents/MacOS:$PATH" PackageMaker -d goblin-skiff-package.pmdoc -o "$OUTFILE" -i com.goblinreactor.goblin_skiff.pkg
     echo "Cleaning up..."
     rm -rf "$OUTDIR"
 fi

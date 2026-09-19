@@ -9,7 +9,7 @@
         <line choice="choice0"/>
     </choices-outline>
     <choice id="choice0" title="Default" customLocation="/usr">
-        <pkg-ref id="edu.mit.mosh.mosh.pkg"/>
+        <pkg-ref id="com.goblinreactor.goblin_skiff.pkg"/>
     </choice>
-    <pkg-ref id="edu.mit.mosh.mosh.pkg" installKBytes="2204" version="@PACKAGE_VERSION@" auth="Root">#edu.mit.mosh.mosh.pkg</pkg-ref>
+    <pkg-ref id="com.goblinreactor.goblin_skiff.pkg" installKBytes="2204" version="@PACKAGE_VERSION@" auth="Root">#com.goblinreactor.goblin_skiff.pkg</pkg-ref>
 </installer-script>

@@ -1,4 +1,4 @@
-Name:		mosh
+Name:		goblin-skiff
 Version:	1.2.5
 Release:	1%{?dist}
 Summary:	Mobile shell that supports roaming and intelligent local echo
@@ -6,7 +6,7 @@ Summary:	Mobile shell that supports roaming and intelligent local echo
 License:	GPLv3+
 Group:		Applications/Internet
 URL:		https://mosh.org/
-Source0:	https://github.com/downloads/keithw/mosh/mosh-%{version}.tar.gz
+Source0:	https://github.com/downloads/keithw/mosh/goblin-skiff-%{version}.tar.gz
 
 BuildRequires:	protobuf-compiler
 BuildRequires:	protobuf-devel
@@ -19,7 +19,8 @@ Requires:	openssl
 Requires:	perl-IO-Socket-IP
 
 %description
-Mosh is a remote terminal application that supports:
+Goblin Skiff is a fork of Mosh, optimized for bandwidth-constrained links.
+It supports:
   - intermittent network connectivity,
   - roaming to different IP address without dropping the connection, and
   - intelligent local echo and line editing to reduce the effects
@@ -43,12 +44,17 @@ make install DESTDIR=$RPM_BUILD_ROOT
 
 %files
 %doc README.md COPYING ChangeLog
-%{_bindir}/mosh
-%{_bindir}/mosh-client
-%{_bindir}/mosh-server
-%{_mandir}/man1/mosh.1.gz
-%{_mandir}/man1/mosh-client.1.gz
-%{_mandir}/man1/mosh-server.1.gz
+%{_bindir}/goblin-skiff
+%{_bindir}/goblin-skiff-client
+%{_bindir}/goblin-skiff-server
+%{_bindir}/goblin-skiffcp
+%{_bindir}/goblin-skiff-compile-dictionary
+%{_mandir}/man1/goblin-skiff.1.gz
+%{_mandir}/man1/goblin-skiff-client.1.gz
+%{_mandir}/man1/goblin-skiff-server.1.gz
+%{_mandir}/man1/goblin-skiffcp.1.gz
+%{_mandir}/man1/goblin-skiff-compile-dictionary.1.gz
+%{_docdir}/%{name}/
 
 
 %changelog

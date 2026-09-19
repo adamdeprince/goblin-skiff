@@ -7,4 +7,4 @@ test -f "$goblin_archive"
 goblin_scriptdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 goblin_hash=$(shasum -a 256 "$goblin_archive" | awk '{print $1}')
 test "${#goblin_hash}" -eq 64
-sed "s/@SOURCE_SHA256@/$goblin_hash/" "$goblin_scriptdir/goblin-mosh.rb.in"
+sed "s/@SOURCE_SHA256@/$goblin_hash/" "$goblin_scriptdir/goblin-skiff.rb.in"

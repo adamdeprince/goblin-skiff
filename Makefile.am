@@ -19,8 +19,8 @@ EXTRA_DIST += build-package.sh build-source-package.sh
 EXTRA_DIST += packaging/check-prebuilt-fec.sh
 EXTRA_DIST += debian/control debian/rules debian/changelog debian/copyright debian/docs debian/source/format
 EXTRA_DIST += packaging/debian/Containerfile packaging/debian/build-release.sh packaging/debian/README.md
-EXTRA_DIST += packaging/rpm/Containerfile packaging/rpm/build-release.sh packaging/rpm/goblin-mosh.spec packaging/rpm/README.md
-EXTRA_DIST += packaging/homebrew/goblin-mosh.rb.in packaging/homebrew/render-formula.sh packaging/homebrew/README.md
+EXTRA_DIST += packaging/rpm/Containerfile packaging/rpm/build-release.sh packaging/rpm/goblin-skiff.spec packaging/rpm/README.md
+EXTRA_DIST += packaging/homebrew/goblin-skiff.rb.in packaging/homebrew/render-formula.sh packaging/homebrew/README.md
 dist_doc_DATA = COPYING THIRD_PARTY.md COMPATIBILITY.md CHANGELOG.md GOBLIN_VERSION USERSPACE_NETWORKING.md
 BUILT_SOURCES = VERSION.stamp
 AM_DISTCHECK_CONFIGURE_FLAGS += --enable-compile-warnings=distcheck --enable-examples --enable-syslog

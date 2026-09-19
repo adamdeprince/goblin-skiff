@@ -2,15 +2,15 @@
   <f n="prefix" o="root" g="wheel" p="16877" pt="prefix" m="false" t="file">
     <f n="local" o="root" g="wheel" p="16877">
       <f n="bin" o="root" g="wheel" p="16877">
-        <f n="mosh" o="root" g="wheel" p="33261">
+        <f n="goblin-skiff" o="root" g="wheel" p="33261">
           <mod>group</mod>
           <mod>owner</mod>
         </f>
-        <f n="mosh-client" o="root" g="wheel" p="33261">
+        <f n="goblin-skiff-client" o="root" g="wheel" p="33261">
           <mod>group</mod>
           <mod>owner</mod>
         </f>
-        <f n="mosh-server" o="root" g="wheel" p="33261">
+        <f n="goblin-skiff-server" o="root" g="wheel" p="33261">
           <mod>group</mod>
           <mod>owner</mod>
         </f>
@@ -20,15 +20,15 @@
       <f n="share" o="root" g="wheel" p="16877">
         <f n="man" o="root" g="wheel" p="16877">
           <f n="man1" o="root" g="wheel" p="16877">
-            <f n="mosh-client.1" o="root" g="wheel" p="33188">
+            <f n="goblin-skiff-client.1" o="root" g="wheel" p="33188">
               <mod>group</mod>
               <mod>owner</mod>
             </f>
-            <f n="mosh-server.1" o="root" g="wheel" p="33188">
+            <f n="goblin-skiff-server.1" o="root" g="wheel" p="33188">
               <mod>group</mod>
               <mod>owner</mod>
             </f>
-            <f n="mosh.1" o="root" g="wheel" p="33188">
+            <f n="goblin-skiff.1" o="root" g="wheel" p="33188">
               <mod>group</mod>
               <mod>owner</mod>
             </f>

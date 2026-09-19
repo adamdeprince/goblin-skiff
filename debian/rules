@@ -22,7 +22,7 @@ override_dh_auto_configure:
 		--disable-silent-rules \
 		--enable-ufw \
 		--enable-completion \
-		--docdir=/usr/share/doc/goblin-mosh \
+		--docdir=/usr/share/doc/goblin-skiff \
 		--with-zstd \
 		--with-librsync \
 		--with-fips-crypto \
@@ -32,18 +32,18 @@ override_dh_auto_configure:
 # A package must pass this policy gate even with DEB_BUILD_OPTIONS=nocheck.
 override_dh_auto_build:
 	dh_auto_build
-	sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-moshcp
+	sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-skiffcp
 
 # Exercise the core protocol, rendering, compression, pacing and file worker
 # tests for every release build. Installed-APT integration tests run separately.
 override_dh_auto_test:
 	mkdir -p debian/test-runtime
 	chmod 700 debian/test-runtime
-	XDG_RUNTIME_DIR=$(CURDIR)/debian/test-runtime dh_auto_test -- TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression session-version state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward udp-relay udp-jump-wrapper.test'
+	XDG_RUNTIME_DIR=$(CURDIR)/debian/test-runtime dh_auto_test -- TESTS='ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram skiffcp-protocol bulk-loss-sim transport-compression session-version state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control control-panel mascot file-transfer link-budget sixel-state terminal-extensions download download-forward udp-relay udp-jump-wrapper.test'
 
 override_dh_strip:
 	dh_strip --no-automatic-dbgsym
 
 override_dh_perl:
-	# mosh only uses Perl modules in perl-base.
+	# Goblin Skiff only uses Perl modules in perl-base.
 	dh_perl -d

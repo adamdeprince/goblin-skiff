@@ -1,8 +1,8 @@
 <pkmkdoc spec="1.12">
     <properties>
-        <title>Mosh $PACKAGE_VERSION</title>
-        <build>Mosh.pkg</build>
-        <organization>edu.mit.mosh</organization>
+        <title>Goblin Skiff $PACKAGE_VERSION</title>
+        <build>goblin-skiff.pkg</build>
+        <organization>com.goblinreactor.goblin_skiff</organization>
         <userSees ui="easy"/>
         <min-target os="3"/>
         <domain anywhere="true"/>
@@ -11,11 +11,11 @@
         <versions min-spec="1.000000"/>
         <scripts></scripts>
     </distribution>
-    <description>Mosh is a remote terminal application that supports intermittent connectivity, allows roaming, and provides speculative local echo and line editing of user keystrokes.</description>
+    <description>Goblin Skiff is a fork of Mosh, optimized for bandwidth-constrained links. It is a remote terminal application that supports intermittent connectivity, allows roaming, and provides speculative local echo and line editing of user keystrokes.</description>
     <contents>
         <choice title="Default" id="choice0" starts_selected="true" starts_enabled="true" starts_hidden="false">
             <customLoc>/</customLoc>
-            <pkgref id="edu.mit.mosh.mosh.pkg"/>
+            <pkgref id="com.goblinreactor.goblin_skiff.pkg"/>
         </choice>
     </contents>
     <resources bg-scale="none" bg-align="topleft">
