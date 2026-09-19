@@ -5,7 +5,7 @@ Version:        1.4.0
 Release:        20260911.2%{?dist}
 Summary:        Mobile shell optimized for low-bandwidth links
 License:        GPL-3.0-or-later AND ISC
-URL:            https://mosh.goblinreactor.com/
+URL:            https://skiff.goblinreactor.com/
 Source0:        goblin-skiff-1.4.0-goblin20260911.2.tar.gz
 
 # Preserve the source-file OpenSSL linking exceptions and all upstream notices.

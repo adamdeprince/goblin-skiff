@@ -221,8 +221,8 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
         --help               this message
         --version            version and copyright information
 
-Please report bugs to mosh-devel\@mit.edu.
-Mosh home page: https://mosh.org\n};
+Please report bugs to https://github.com/adamdeprince/goblin-skiff/issues.
+Goblin Skiff home page: https://skiff.goblinreactor.com\n};
 
 my $version_message = 'goblin-skiff @GOBLIN_VERSION@ (@PACKAGE_STRING@) [build @VERSION@]' . qq{
 Copyright 2012 Keith Winstein <mosh-devel\@mit.edu>

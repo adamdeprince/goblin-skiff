@@ -4,8 +4,8 @@ on:
   push:
     tags:
       # This syntax is globs, not regex, so it's matching any tag that
-      # contains the prefix "mosh-" and the 3 version elements.
-      - "mosh-*.*.*"
+      # contains the prefix "goblin-skiff-" and the 3 version elements.
+      - "goblin-skiff-*.*.*"
 
 jobs:
   macports-cache:
@@ -53,7 +53,7 @@ jobs:
     - name: "ensure version bumped"
       run: |
         expected_tag=$(echo ${{ github.ref }} | cut -d'/' -f3)
-        have_tag="mosh-$(sed -n 's/AC_INIT(\[[^]]*\], \[\([^]]*\)\].*/\1/p' <configure.ac)"
+        have_tag="goblin-skiff-$(sed -n 's/AC_INIT(\[[^]]*\], \[\([^]]*\)\].*/\1/p' <configure.ac)"
         echo "Expected tag <$expected_tag>, got <$have_tag>"
         if [[ "$expected_tag" != "$have_tag" ]]; then exit 1; fi
 
@@ -129,6 +129,6 @@ jobs:
         prerelease: ${{ contains(github.ref, 'rc') }}
         generate_release_notes: True
         files: |
-          mosh-*.tar.gz
+          goblin-skiff-*.tar.gz
           macosx/*.pkg
           macosx/*-osx-build-report.tbz

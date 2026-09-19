@@ -5,9 +5,9 @@ Maintainer: Adam DePrince <adam.deprince@gmail.com>
 Build-Depends: debhelper-compat (= 13), protobuf-compiler, libprotobuf-dev, pkg-config, libutempter-dev, zlib1g-dev, libncurses-dev, libssl-dev (>= 3.0), librsync-dev (>= 2.3), libzstd-dev, libwebp-dev, libpng-dev, libdjvulibre-dev (>= 3.5.28), djvulibre-bin, bash-completion, locales <!nocheck>, python3 <!nocheck>
 Rules-Requires-Root: no
 Standards-Version: 4.6.1
-Homepage: https://mosh.goblinreactor.com
-Vcs-Git: https://github.com/adamdeprince/mosh.git -b low-bandwidth-mosh
-Vcs-Browser: https://github.com/adamdeprince/mosh/tree/low-bandwidth-mosh
+Homepage: https://skiff.goblinreactor.com
+Vcs-Git: https://github.com/adamdeprince/goblin-skiff.git -b low-bandwidth-mosh
+Vcs-Browser: https://github.com/adamdeprince/goblin-skiff/tree/low-bandwidth-mosh
 
 Package: goblin-skiff
 Architecture: any

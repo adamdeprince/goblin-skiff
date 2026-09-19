@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.61])
-AC_INIT([goblin-skiff], [1.4.0], [mosh-devel@mit.edu])
+AC_INIT([goblin-skiff], [1.4.0], [https://github.com/adamdeprince/goblin-skiff/issues], [], [https://skiff.goblinreactor.com])
 AC_SUBST([GOBLIN_VERSION], [m4_normalize(m4_include([GOBLIN_VERSION]))])
 AC_DEFINE_UNQUOTED([GOBLIN_VERSION], ["$GOBLIN_VERSION"], [Goblin Skiff release version.])
 AM_INIT_AUTOMAKE([foreign std-options -Wall -Werror -Wno-portability])

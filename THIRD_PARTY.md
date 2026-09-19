@@ -5,7 +5,7 @@ Goblin Skiff is derived from Mosh and remains GPL version 3 or later. See
 notices and linking exceptions must be retained. This is not an Apache-2.0-only
 distribution.
 
-Project source: <https://github.com/adamdeprince/mosh>
+Project source: <https://github.com/adamdeprince/goblin-skiff>
 
 ## FEC distribution policy
 

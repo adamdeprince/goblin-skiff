@@ -24,7 +24,7 @@ SERVER = os.environ.get("GOBLIN_MOSH_TEST_SERVER", str((BUILD / "../frontend/gob
 WRAPPER = os.environ.get("GOBLIN_MOSH_TEST_WRAPPER", str((BUILD / "../../scripts/goblin-skiff").resolve()))
 KITTY_QUERY = b"\x1b_Gi=4294967294,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
 READY = b"remote-startup-ready"
-SOURCE_NOTICE = b"[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/mosh]\r\n"
+SOURCE_NOTICE = b"[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/goblin-skiff]\r\n"
 PANEL_NOTICE = b"Control panel: Ctrl-^ then 0 (Kitty: Ctrl-6, release, then 0).\r\n"
 
 

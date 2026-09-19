@@ -1,4 +1,4 @@
-[![ci](https://github.com/mobile-shell/mosh/actions/workflows/ci.yml/badge.svg)](https://github.com/mobile-shell/mosh/actions/workflows/ci.yml)
+[![ci](https://github.com/adamdeprince/goblin-skiff/actions/workflows/ci.yml/badge.svg)](https://github.com/adamdeprince/goblin-skiff/actions/workflows/ci.yml)
 
 Goblin Skiff
 ============
@@ -563,9 +563,11 @@ MacOS:
 $ brew install protobuf automake libpng webp zstd djvulibre
 ```
 
-Once you have forked the repository, run the following to build and test Skiff:
+Clone the source and build and test Skiff:
 
 ```
+$ git clone --branch low-bandwidth-mosh https://github.com/adamdeprince/goblin-skiff.git
+$ cd goblin-skiff
 $ ./autogen.sh
 $ ./configure
 $ make

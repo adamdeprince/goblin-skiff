@@ -5,8 +5,8 @@ Summary:	Mobile shell that supports roaming and intelligent local echo
 
 License:	GPLv3+
 Group:		Applications/Internet
-URL:		https://mosh.org/
-Source0:	https://github.com/downloads/keithw/mosh/goblin-skiff-%{version}.tar.gz
+URL:		https://skiff.goblinreactor.com/
+Source0:	https://github.com/adamdeprince/goblin-skiff/releases/download/goblin-skiff-%{version}/goblin-skiff-%{version}.tar.gz
 
 BuildRequires:	protobuf-compiler
 BuildRequires:	protobuf-devel

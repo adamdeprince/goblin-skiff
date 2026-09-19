@@ -316,7 +316,7 @@ void STMClient::main_init( void )
   // Local, once per client process: never sent to the remote PTY or repeated
   // after a network reconnect/SIGCONT. The project page links release sources
   // and license information; packages still need the actual license files.
-  swrite( STDOUT_FILENO, "[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/mosh]\r\n" );
+  swrite( STDOUT_FILENO, "[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/goblin-skiff]\r\n" );
   std::string panel_notice;
   if ( tmux_control ) {
     panel_notice = "Control panel shortcuts are unavailable in tmux control mode.";
