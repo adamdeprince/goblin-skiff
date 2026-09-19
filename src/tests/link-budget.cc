@@ -1,4 +1,6 @@
-/* Distributed under the GNU GPL, version 3 or later. */
+/*
+    Modified for Goblin Skiff on 2026-09-19.
+ Distributed under the GNU GPL, version 3 or later. */
 #include "src/network/linkbudget.h"
 #include <iostream>
 #include <queue>
@@ -120,6 +122,27 @@ static void lossy_foreground()
 int main()
 {
   try {
+    // Radio airtime is per packet, including tiny ACKs/reports. Feedback
+    // loss, foreground priority and the idle reset must not remove this cap.
+    Network::LinkBudget radio, peer;
+    radio.enable( true ); radio.enable_radio(); peer.enable( true ); peer.enable_radio();
+    uint64_t last = 0, sequence = 0;
+    for ( uint64_t now = 1000; now < 61000; ++now ) {
+      radio.tick( now, 12000 );
+      if ( !radio.wait_time( now, true ) ) {
+        require( !last || now - last >= 1500, "foreground radio packets exceeded airtime budget" );
+        last = now;
+        ++sequence;
+        radio.sent_packet( sequence, sequence % 2 ? 192 : 40, now );
+        if ( sequence % 5 ) { peer.received_packet( sequence, 192, now, 12000 ); }
+      }
+      if ( !peer.feedback_wait( now ) ) { radio.receive_feedback( peer.feedback( now ), now, 12000 ); }
+      require( radio.budget() <= 128, "radio delivery feedback removed ceiling" );
+    }
+    require( sequence >= 15, "radio pacing stopped making progress under loss" );
+    require( !radio.wait_time( 100000, true ) && radio.budget() == 128, "idle reset removed radio ceiling" );
+    radio.sent_packet( ++sequence, 40, 100000, true );
+    require( radio.wait_time( 100001, true ) >= 1499, "small radio feedback bypassed airtime pacing" );
     Network::LinkBudget sender, receiver;
     require( sender.wait_time( 1 ) == 0 && sender.feedback_wait( 1 ) == INT_MAX, "old peers retain legacy wire behavior" );
     sender.enable( true ); receiver.enable( true );

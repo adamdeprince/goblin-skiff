@@ -27,6 +27,8 @@ MOSH_KEY=KEY
 [\-L \fISPEC\fP]
 [\-D \fISPEC\fP]
 [\-\-fips\-crypto]
+[\-\-connect\-timeout=\fISECONDS\fP]
+[\-\-radio]
 [\-\-stream-delay=\fIMS\fP]
 [\-\-stream-bandwidth=\fIBPS\fP]
 [\-\-state-zstd-dict=\fIFILE\fP]
@@ -36,6 +38,15 @@ IP PORT
 .B goblin-skiff-client
 \-c
 .SH DESCRIPTION
+.B \-\-radio
+selects the goTenna profile used by goblin-radio-mosh: 128-byte encrypted
+UDP datagrams, at most one packet per 1.5 seconds in each direction,
+and retransmission waits adapted to long radio round trips. The bootstrap
+must negotiate keepalive-v1, link-budget-v1, and radio-v1 with the server
+and confirm MOSH RADIO single-frame-v1 before using this option.
+UDP jump relays are not supported in this mode. Native radio mesh hops
+are handled by the radio driver.
+.PP
 .B \-\-image\-codecs
 prints supported image transport codecs and exits. The wrapper uses this
 query to negotiate palette/DjVu support with the server.
@@ -70,6 +81,12 @@ information.  If standard error is not redirected from the terminal,
 the display will be corrupted and quickly become unusable.
 
 .SH OPTIONS
+.TP
+.B \-\-connect\-timeout=\fISECONDS\fP
+Wait this many seconds for the initial UDP connection. The default is 120
+seconds; valid values are 1 through 3600. This does not change the lifetime
+of an established session. The setup wrapper accepts the same option and
+also applies it to its proxy setup operations.
 .TP
 .B \-\-connection\-version
 Print a machine-readable MOSH VERSION line containing the Goblin compatibility

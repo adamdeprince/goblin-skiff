@@ -18,7 +18,7 @@ _goblin_skiff () {
 
     local simple_flags="-a -b -4 -6 -p -J"
     local flags="--client= --server= --predict= --family= --port=
-    --bind-server= --ssh= --fips-crypto --tmux-control --native-scroll --alternate-screen
+    --connect-timeout= --bind-server= --ssh= --fips-crypto --tmux-control --native-scroll --alternate-screen
     --jump= --jump-server= --jump-port= --jump-idle-timeout=
     --mascot= --no-mascot --no-kitty --no-sixel
     --lossy= --djvu-lossy

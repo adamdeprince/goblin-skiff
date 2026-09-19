@@ -44,6 +44,11 @@ forwards (`-R`), local SOCKS5 dynamic forwards (`-D`), SSH agent forwarding
 Goblin Skiff jump hosts, including routes discovered from SSH `ProxyJump`.
 It does not add arbitrary UDP port forwarding; `-L/-R/-D` remain TCP streams.
 
+`--connect-timeout=SECONDS` controls initial UDP startup and proxy setup
+(default **120 seconds**, range 1–3600). For a slow radio link, for example,
+use `goblin-skiff --connect-timeout=300 user@host`. The client accepts the same
+option for UDP startup. Established sessions keep their existing timeout rules.
+
 `--socks5-proxy=127.0.0.1:1055` carries SSH setup and the session UDP through
 an existing userspace Tailscale/SOCKS5 proxy, including first-hop jump access
 and proxy-side destination DNS. No TUN device or kernel changes are needed.
@@ -606,6 +611,19 @@ Upstream Mosh resources
   * `#mosh` channel on [Libera Chat](https://libera.chat/)
 
     https://web.libera.chat/#mosh
+
+
+Goblin radio integration
+-----------------------
+
+The radio integration from `goblin-modem` negotiates `radio-v1` and invokes
+`goblin-skiff-client --radio` automatically. The goTenna profile uses 128-byte
+encrypted datagrams, packet airtime pacing including ACKs/keepalives, and
+6–60-second adaptive retransmission waits (18 seconds initially). It keeps
+pacing active while slow capability feedback is in flight. The server confirms
+`MOSH RADIO single-frame-v1`; ordinary sessions keep their existing behavior.
+This integration supports the native mesh/SOCKS path, without Skiff UDP jump
+relays. See goblin-modem's `RADIO.md` for the GUI workflow and hardware results.
 
 License and authorship
 ----------------------

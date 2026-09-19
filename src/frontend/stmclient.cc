@@ -296,6 +296,12 @@ void STMClient::main_init( void )
     new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive, crypto_mode, socks5_proxy ) );
   if ( !relay_keys.empty() ) { network->set_relay_keys( relay_keys ); relay_keys.clear(); }
   network->enable_link_budget( compact_keepalive && getenv( "GOBLIN_SKIFF_LINK_BUDGET" ) && !strcmp( getenv( "GOBLIN_SKIFF_LINK_BUDGET" ), "1" ) );
+  if ( radio_mode && !network->link_budget().active() ) {
+    throw std::runtime_error( "--radio requires negotiated compact keepalives and link pacing" );
+  }
+  if ( radio_mode ) {
+    network->enable_radio_mode();
+  }
 
   if ( !state_sample_log.empty() ) {
     network->set_state_sample_log( state_sample_log, state_sample_min_size );
@@ -1007,7 +1013,7 @@ bool STMClient::main( void )
       /* write diagnostic message if can't reach server */
       if ( still_connecting() && ( !network->shutdown_in_progress() )
            && ( timestamp() - network->get_latest_remote_state().timestamp > 250 ) ) {
-        if ( timestamp() - network->get_latest_remote_state().timestamp > 15000 ) {
+        if ( timestamp() - network->get_latest_remote_state().timestamp > uint64_t( connect_timeout_seconds ) * 1000 ) {
           if ( !network->shutdown_in_progress() ) {
             overlays.get_notification_engine().set_notification_string(
               std::wstring( L"Timed out waiting for server..." ), true );

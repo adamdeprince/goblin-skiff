@@ -201,3 +201,6 @@ clean-local-check:
 	-for i in $(displaytests); do rm -rf $$i.d/; done
 
 CLEANFILES = base64_vector.cc
+
+TESTS += connect-timeout.test
+EXTRA_DIST += connect-timeout.test connect-timeout.py

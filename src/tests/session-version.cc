@@ -1,3 +1,4 @@
+// Modified for Goblin Skiff on 2026-09-19.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "src/include/config.h"
 #include "src/network/networktransport-impl.h"
@@ -149,12 +150,37 @@ void session( bool legacy )
   require( client.get_remote_state_num() == 2 && client.get_latest_remote_state().state.value == "later",
            "incompatible state was applied" );
 }
+
+void radio_settings()
+{
+  Network::Connection connection( "127.0.0.1", "0", true );
+  require( connection.get_MTU() > 128 && connection.timeout() == 1000, "normal defaults changed" );
+  connection.enable_link_budget( true ); connection.enable_radio_mode();
+  bool refused_relay = false;
+  try { connection.set_relay_hops( 4 ); } catch ( const std::invalid_argument& ) { refused_relay = true; }
+  require( refused_relay, "UDP jump overhead must not exhaust the radio MTU" );
+  require( connection.get_MTU() == 128, "radio datagram requires link fragmentation" );
+  require( connection.timeout() == 18000 && connection.active_retry_timeout() > connection.timeout(),
+           "radio retry expires before a response can arrive" );
+  TransportBuffers::Instruction inst;
+  inst.set_diff( std::string( 2000, 'x' ) );
+  Network::SessionVersion::local().advertise( inst );
+  Network::Fragmenter fragmenter;
+  Network::FragmentAssembly assembly;
+  bool complete = false;
+  for ( auto f : fragmenter.make_fragments( inst, connection.get_MTU() - connection.packet_overhead() ) ) {
+    require( f.tostring().size() + connection.packet_overhead() <= 128, "encrypted radio datagram exceeds budget" );
+    complete = assembly.add_fragment( f );
+  }
+  require( complete && assembly.get_assembly().diff() == inst.diff(), "small radio fragments lost state" );
+}
 }
 
 int main()
 {
   try {
     metadata();
+    radio_settings();
     session( false );
     session( true );
   } catch ( const std::exception& error ) {

@@ -82,6 +82,7 @@ my $port_request = undef;
 
 my @ssh = ('ssh');
 my $socks5_proxy;
+my $connect_timeout = 120;
 my $proxy_report = 1; # internal ProxyCommand: report the destination, not the proxy
 my $jump = undef;
 my @jumps;
@@ -184,6 +185,9 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
                             local destination (default: ~/Downloads)
         --stream-delay=MS   coalesce forwarded stream bytes before sending
                                 (default: 75)
+        --connect-timeout=SECONDS
+                                initial UDP connection and proxy setup timeout
+                                (1..3600 seconds; default: 120)
         --stream-bandwidth=BPS
                             cap forwarded stream payload bytes per second
                                 (default: adaptive; 2048 with older peers)
@@ -276,6 +280,7 @@ GetOptions( 'client=s' => \$client,
 	    'download-directory=s' => \$download_directory,
 	    'stream-delay=i' => \$stream_delay,
 	    'stream-bandwidth=i' => \$stream_bandwidth,
+            'connect-timeout=s' => \$connect_timeout,
 	    'state-zstd-dict=s' => \$state_zstd_dict,
 	    'state-sample-log=s' => \$state_sample_log,
 	    'state-sample-min-size=i' => \$state_sample_min_size,
@@ -345,6 +350,9 @@ if ( $overwrite ) {
 if ( defined $stream_delay and $stream_delay < 0 ) {
   die "$0: --stream-delay must be non-negative.\n";
 }
+
+die "$0: --connect-timeout must be 1..3600 seconds.\n"
+  unless $connect_timeout =~ /\A[0-9]+\z/ && $connect_timeout >= 1 && $connect_timeout <= 3600;
 
 if ( defined $stream_bandwidth and $stream_bandwidth <= 0 ) {
   die "$0: --stream-bandwidth must be greater than zero.\n";
@@ -444,7 +452,7 @@ if ( ! defined $fake_proxy ) {
 				  PeerHost => $addr_string,
 				  PeerPort => $connect_port,
 				  Proto => 'tcp',
-				  Timeout => 30 )) {
+				  Timeout => $connect_timeout )) {
       last;
     } else {
       $err = $@;
@@ -707,7 +715,7 @@ if ( $pid == 0 ) { # child
     # Non-standard shells and broken shrc files cause the ssh
     # proxy to break mysteriously.
     $ENV{ 'SHELL' } = '/bin/sh';
-    my $quoted_proxy_command = shell_quote( $0, "--family=$family" );
+    my $quoted_proxy_command = shell_quote( $0, "--family=$family", "--connect-timeout=$connect_timeout" );
     push @sshopts, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
   push @sshopts, '-S', 'none' if defined $socks5_proxy; # after any explicit --ssh -S
@@ -896,7 +904,7 @@ if ( $pid == 0 ) { # child
   push @client_crypto, '--no-sixel' if $no_sixel;
   push @client_crypto, '--udp-relay' if @jumps;
   push @client_crypto, "--socks5-proxy=$socks5_proxy" if defined $socks5_proxy;
-  exec {$client} ("$client", "-# @cmdline |", @client_crypto, @client_forwarding, $ip, $port);
+  exec {$client} ("$client", "-# @cmdline |", "--connect-timeout=$connect_timeout", @client_crypto, @client_forwarding, $ip, $port);
 }
 
 sub shell_quote { join ' ', map {(my $a = $_) =~ s/'/'\\''/g; "'$a'"} @_ }
@@ -944,8 +952,8 @@ sub socks_connect {
   my $ipv4 = eval { Socket::inet_pton( Socket::AF_INET(), $host ) };
   my $ipv6 = eval { Socket::inet_pton( Socket::AF_INET6(), $host ) };
   my $address = defined( $ipv4 ) ? "\1$ipv4" : defined( $ipv6 ) ? "\4$ipv6" : pack( 'CC', 3, length $host ) . $host;
-  local $SIG{ALRM} = sub { die "$0: SOCKS5 SSH handshake timed out.\n"; };
-  alarm 30;
+  local $SIG{ALRM} = sub { die "$0: SOCKS5 SSH handshake timed out after $connect_timeout seconds.\n"; };
+  alarm $connect_timeout;
   socks_write( $sock, "\5\1\0" );
   die "$0: SOCKS5 proxy must support no-authentication mode.\n" unless socks_read( $sock, 2 ) eq "\5\0";
   socks_write( $sock, "\5\1\0" . $address . pack( 'n', $port ) );
@@ -959,7 +967,7 @@ sub socks_connect {
 
 sub socks_proxy_command {
   my ( $hops, $report ) = @_;
-  my $command = shell_quote( $0, "--socks5-proxy=$socks5_proxy", "--family=$family",
+  my $command = shell_quote( $0, "--socks5-proxy=$socks5_proxy", "--family=$family", "--connect-timeout=$connect_timeout",
                               '--fake-proxy', $report && !$hops ? '--proxy-report' : '--no-proxy-report', '--', '%h', '%p' );
   for ( my $hop = 0; $hop < $hops; ++$hop ) {
     my ( $host, $port ) = parse_jump( $jumps[$hop] );
@@ -1009,7 +1017,7 @@ sub start_udp_relay {
   } elsif ( !defined $socks5_proxy ) {
     # Capture the address actually used by SSH, honoring HostName and address
     # family selection. The SSH-facing interface may be private behind NAT.
-    my $proxy = shell_quote( $0, "--family=$family" );
+    my $proxy = shell_quote( $0, "--family=$family", "--connect-timeout=$connect_timeout" );
     push @args, ( '-o', "ProxyCommand=$proxy --fake-proxy -- %h %p" );
   }
   my @relay = ( 'relay', "--idle-timeout=$jump_idle_timeout" );
@@ -1063,7 +1071,7 @@ sub upload_state_dictionary {
       push @upload_ssh, '-6';
     }
   } elsif ( $use_remote_ip eq 'proxy' && !defined $socks5_proxy ) {
-    my $quoted_proxy_command = shell_quote( $0, "--family=$family" );
+    my $quoted_proxy_command = shell_quote( $0, "--family=$family", "--connect-timeout=$connect_timeout" );
     push @upload_ssh, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
 

@@ -1,4 +1,6 @@
-/* Distributed under the GNU GPL, version 3 or later. */
+/*
+    Modified for Goblin Skiff on 2026-09-19.
+ Distributed under the GNU GPL, version 3 or later. */
 #ifndef MOSH_LINKBUDGET_H
 #define MOSH_LINKBUDGET_H
 
@@ -32,6 +34,7 @@ class LinkBudget
   uint64_t report_ack = 0, report_mask = 0;
   bool have_report = false;
   unsigned feedback_packet_size = 128;
+  bool radio = false;
 
   static void put( std::string& out, uint64_t n, unsigned bytes )
   { for ( int shift = int( bytes * 8 ) - 8; shift >= 0; shift -= 8 ) { out += char( n >> shift ); } }
@@ -40,12 +43,16 @@ class LinkBudget
   void set_rate( double value, uint64_t now )
   {
     const double debt = std::max( 0.0, next_send - now ) * rate / 1000;
-    rate = std::max( 64.0, std::min( 12500000.0, value ) );
+    rate = std::max( 64.0, std::min( radio ? 128.0 : 12500000.0, value ) );
     next_send = now + debt * 1000 / rate;
   }
 
 public:
   void enable( bool value ) { enabled = value; }
+  // A goTenna packet consumes airtime even when almost empty. Limit each
+  // direction to at most one packet per 1.5 s, including ACKs and reports.
+  // Congestion can reduce this further; idle/growth must preserve the cap.
+  void enable_radio() { radio = true; rate = 128; largest_packet = 192; }
   void set_feedback_packet_size( unsigned bytes ) { feedback_packet_size = std::max( 128u, bytes ); }
   bool active() const { return enabled; }
   double budget() const { return rate; }
@@ -72,7 +79,7 @@ public:
     // Control packets can still get through and release the window.
     if ( !foreground && sent.size() >= 512 ) { demand_at = now; return 100; }
     const double slack = measured ? std::min( 1.0, 4096000 / rate ) : 0;
-    const double due = next_send - slack - ( foreground ? 128000 / rate : 0 );
+    const double due = next_send - ( radio ? 0 : slack + ( foreground ? 128000 / rate : 0 ) );
     if ( due <= now ) { return 0; }
     demand_at = now;
     return int( std::min( double( INT_MAX ), std::ceil( due - now ) ) );
@@ -85,7 +92,7 @@ public:
     if ( !tx_epoch ) { tx_epoch = now; }
     tx_bytes += bytes;
     if ( now >= tx_epoch + 1000 ) { upload = tx_bytes * 1000.0 / std::max<uint64_t>( 1, now - tx_epoch ); tx_epoch = now; tx_bytes = 0; }
-    next_send = std::max( double( now ), next_send ) + bytes * 1000.0 / rate;
+    next_send = std::max( double( now ), next_send ) + ( radio ? std::max<size_t>( 192, bytes ) : bytes ) * 1000.0 / rate;
     if ( feedback ) { return; }
     total_sent_bytes += bytes;
     last_data_sent = now;

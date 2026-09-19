@@ -669,6 +669,8 @@ static int run_server( const char* desired_ip,
   unsetenv( "MOSH_RELAY_HOPS" ); // routing metadata is not an application environment setting
   const bool link_budget = compact_keepalive && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "link-budget-v1" );
   network->enable_link_budget( link_budget );
+  const bool radio_mode = link_budget && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "radio-v1" );
+  if ( radio_mode ) { network->enable_radio_mode(); }
 
   StreamForwarder forwarder(
     StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second, crypto_mode );
@@ -719,6 +721,7 @@ static int run_server( const char* desired_ip,
     puts( "MOSH TMUX control-v1" );
   }
   if ( link_budget ) { puts( "MOSH LINK budget-v1" ); }
+  if ( radio_mode ) { puts( "MOSH RADIO single-frame-v1" ); }
   if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "directory-v2" ) ) {
     puts( "MOSH DIRECTORY directory-v2" );
   } else if ( has_capability( getenv( "MOSH_CLIENT_CAPS" ), "directory-v1" ) ) {

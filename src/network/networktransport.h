@@ -1,4 +1,6 @@
 /*
+    Modified for Goblin Skiff on 2026-09-19.
+
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
 
@@ -101,6 +103,7 @@ public:
                      std::max( connection.feedback_wait_time(), connection.pacing_wait_time( true ) ) );
   }
   void enable_link_budget( bool enabled ) { connection.enable_link_budget( enabled ); }
+  void enable_radio_mode() { connection.enable_radio_mode(); }
   void set_relay_hops( unsigned hops ) { connection.set_relay_hops( hops ); }
   void set_relay_keys( const std::string& keys ) { connection.set_relay_keys( keys ); }
   const LinkBudget& link_budget() const { return connection.link_budget(); }

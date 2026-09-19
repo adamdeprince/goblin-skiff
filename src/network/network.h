@@ -1,4 +1,6 @@
 /*
+    Modified for Goblin Skiff on 2026-09-19.
+
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
 
@@ -42,6 +44,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 #include <netinet/in.h>
@@ -217,6 +220,8 @@ private:
   LinkBudget link;
   bool sending_feedback = false;
   bool link_offered = false, link_confirmed = false;
+  bool radio_mode = false;
+  bool radio_keepalive_pending = false;
   uint64_t link_confirmation_deadline = 0;
 
   Packet new_packet( const std::string& s_payload );
@@ -260,14 +265,22 @@ public:
     link_confirmation_deadline = timestamp() + 10000;
   }
   const LinkBudget& link_budget() const { return link; }
+  void enable_radio_mode() {
+    if ( relay_hops ) { throw std::invalid_argument( "Radio mode cannot use UDP jump relays" ); }
+    radio_mode = true;
+    link.enable_radio();
+    SRTT = 6000; RTTVAR = 3000;
+  }
+  uint64_t active_retry_timeout() const { return radio_mode ? 120000 : 10000; }
   int pacing_wait_time( bool foreground = false ) { return link.wait_time( timestamp(), foreground ); }
   int feedback_wait_time() const { return link_confirmed ? link.feedback_wait( timestamp() ) : INT_MAX; }
   std::string recv( void );
-  int keepalive_wait_time( void ) const;
+  int keepalive_wait_time( void );
   void tick( void );
   const std::vector<int> fds( void ) const;
   int get_MTU( void ) const {
-    return relay_hops ? std::min( MTU, int( Relay::WIRE_MTU ) ) - Relay::overhead( crypto_mode, relay_hops ) : MTU;
+    const int wire_mtu = radio_mode ? std::min( MTU, 128 ) : MTU;
+    return relay_hops ? std::min( wire_mtu, int( Relay::WIRE_MTU ) ) - Relay::overhead( crypto_mode, relay_hops ) : wire_mtu;
   }
   int packet_overhead( void ) const { return ADDED_BYTES + session.added_bytes(); }
 

@@ -100,6 +100,13 @@ again.
 
 .SH OPTIONS
 .TP
+.B \-\-connect\-timeout=\fISECONDS\fP
+Wait this many seconds for the initial UDP connection and for each proxy
+connection/setup operation. The default is 120 seconds; valid values are
+1 through 3600. Increase this for slow radio and satellite links. This does
+not change the lifetime of an established session or SSH authentication
+timeouts. The option is also accepted by goblin-skiff-client (UDP startup only).
+.TP
 .B \-\-socks5\-proxy=\fIHOST:PORT\fP
 Use a SOCKS5 proxy for both SSH CONNECT and session UDP ASSOCIATE.
 Useful with tailscaled \-\-tun=userspace-networking on devices without TUN

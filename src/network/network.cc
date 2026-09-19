@@ -1,4 +1,6 @@
 /*
+    Modified for Goblin Skiff on 2026-09-19.
+
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
 
@@ -410,6 +412,7 @@ Connection::~Connection()
 
 void Connection::set_relay_hops( unsigned hops )
 {
+  if ( radio_mode && hops ) { throw std::invalid_argument( "Radio mode cannot use UDP jump relays" ); }
   (void)Relay::overhead( crypto_mode, hops ); // validate before changing the MTU
   if ( !server ) { throw std::logic_error( "Relay hop budget is a server option" ); }
   relay_hops = hops;
@@ -418,6 +421,7 @@ void Connection::set_relay_hops( unsigned hops )
 
 void Connection::set_relay_keys( const std::string& keys )
 {
+  if ( radio_mode && !keys.empty() ) { throw std::invalid_argument( "Radio mode cannot use UDP jump relays" ); }
   if ( server ) { throw std::logic_error( "Relay keys are a client option" ); }
   relays.configure( keys, crypto_mode );
   relay_hops = relays.size();
@@ -469,18 +473,20 @@ void Connection::send( const std::string& s )
   }
 }
 
-int Connection::keepalive_wait_time( void ) const
+int Connection::keepalive_wait_time( void )
 {
   const int proxy_wait = socks5 ? socks5->wait_time( timestamp() ) : INT_MAX;
   // An overdue keepalive must not spin the event loop while the proxy is
   // backing off. A new association explicitly schedules a fresh ping.
   if ( socks5 && !socks5->ready() ) { return proxy_wait; }
+  if ( radio_keepalive_pending ) { return pacing_wait_time( true ); }
   if ( !compact_keepalive || server || !has_remote_addr ) {
     return proxy_wait;
   }
 
   const uint64_t now = timestamp();
-  return std::min( proxy_wait, next_keepalive > now ? static_cast<int>( next_keepalive - now ) : 0 );
+  const int due = next_keepalive > now ? static_cast<int>( next_keepalive - now ) : 0;
+  return std::min( proxy_wait, radio_mode ? std::max( due, pacing_wait_time( true ) ) : due );
 }
 
 ssize_t Connection::send_datagram( const std::string& packet )
@@ -510,8 +516,11 @@ void Connection::tick( void )
   // A new wrapper can launch an old --client binary. Do not send an
   // extension packet until the binary itself demonstrates support, and
   // restore legacy pacing if it never confirms the advertised capability.
-  if ( link_offered && !link_confirmed && timestamp() >= link_confirmation_deadline ) { link.enable( false ); }
+  if ( link_offered && !link_confirmed && !radio_mode && timestamp() >= link_confirmation_deadline ) { link.enable( false ); }
   link.tick( timestamp(), SRTT );
+  if ( radio_keepalive_pending && !pacing_wait_time( true ) ) {
+    send( "" ); radio_keepalive_pending = false;
+  }
   // Reports are authenticated, bounded and sent only for newly received
   // application packets. They never solicit an ACK or create an idle loop.
   if ( has_remote_addr && link_confirmed && link.feedback_wait( timestamp() ) == 0 && pacing_wait_time( true ) == 0 ) {
@@ -521,6 +530,7 @@ void Connection::tick( void )
     sending_feedback = false;
   }
   if ( compact_keepalive && !server && has_remote_addr && timestamp() >= next_keepalive
+       && ( !radio_mode || !pacing_wait_time( true ) )
        && ( !socks5 || socks5->ready() ) ) {
     if ( keepalive_outstanding ) {
       hop_port();
@@ -658,7 +668,9 @@ std::string Connection::recv_one( int sock_to_recv )
     uint16_t now = timestamp16();
     double R = timestamp_diff( now, p.timestamp_reply );
 
-    if ( R < 5000 ) {   /* ignore large values, e.g. server was Ctrl-Zed */
+    // Radio RTTs routinely exceed five seconds. Limit accepted samples to
+    // less than half the 16-bit timestamp period.
+    if ( R < ( radio_mode ? 30000 : 5000 ) ) {
       if ( !RTT_hit ) { /* first measurement */
         SRTT = R;
         RTTVAR = R / 2;
@@ -705,7 +717,8 @@ std::string Connection::recv_one( int sock_to_recv )
 
   if ( compact_keepalive && p.payload.empty() ) {
     if ( server ) {
-      send( "" );
+      if ( radio_mode ) { radio_keepalive_pending = true; }
+      else { send( "" ); }
     } else {
       last_roundtrip_success = timestamp();
     }
@@ -761,10 +774,12 @@ uint16_t Network::timestamp_diff( uint16_t tsnew, uint16_t tsold )
 uint64_t Connection::timeout( void ) const
 {
   uint64_t RTO = lrint( ceil( SRTT + 4 * RTTVAR ) );
-  if ( RTO < MIN_RTO ) {
-    RTO = MIN_RTO;
-  } else if ( RTO > MAX_RTO ) {
-    RTO = MAX_RTO;
+  const uint64_t minimum = radio_mode ? 6000 : MIN_RTO;
+  const uint64_t maximum = radio_mode ? 60000 : MAX_RTO;
+  if ( RTO < minimum ) {
+    RTO = minimum;
+  } else if ( RTO > maximum ) {
+    RTO = maximum;
   }
   return RTO;
 }

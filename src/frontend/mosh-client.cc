@@ -102,6 +102,8 @@ static void print_usage( FILE* file, const char* argv0 )
            "       --image-codecs lists supported image transport codecs and exits\n"
            "       --connection-version reports release, build and compatibility protocol and exits\n"
            "       --udp-relay uses GOBLIN_SKIFF_RELAY_KEYS supplied by the wrapper's -J route\n"
+           "       --connect-timeout=SECONDS waits 1..3600 seconds for initial UDP connection (default 120)\n"
+           "       --radio uses negotiated goTenna pacing, small datagrams and longer retry waits\n"
            "       --socks5-proxy=HOST:PORT carries UDP through a SOCKS5 proxy (proxy DNS)\n"
            "       Ctrl-^ then 0 opens or resumes the local file browser\n",
            argv0,
@@ -168,6 +170,8 @@ static void print_colorcount( void )
 int main( int argc, char* argv[] )
 {
   unsigned int verbose = 0;
+  unsigned int connect_timeout = 120;
+  bool radio_mode = false;
   std::vector<std::string> local_forwards;
   std::vector<std::string> dynamic_forwards;
   bool agent_forwarding = false;
@@ -227,6 +231,8 @@ int main( int argc, char* argv[] )
     { "no-sixel", no_argument, NULL, 266 },
     { "udp-relay", no_argument, NULL, 267 },
     { "socks5-proxy", required_argument, NULL, 268 },
+    { "connect-timeout", required_argument, NULL, 269 },
+    { "radio", no_argument, NULL, 270 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -293,6 +299,16 @@ int main( int argc, char* argv[] )
         break;
       case 267:
         udp_relay = true;
+        break;
+      case 269:
+        connect_timeout = parse_uint_option( "--connect-timeout", optarg );
+        if ( connect_timeout < 1 || connect_timeout > 3600 ) {
+          fputs( "--connect-timeout must be 1..3600 seconds\n", stderr );
+          return 1;
+        }
+        break;
+      case 270:
+        radio_mode = true;
         break;
       case 268:
         socks5_proxy = optarg;
@@ -413,6 +429,8 @@ int main( int argc, char* argv[] )
                       allow_sixel );
     if ( udp_relay ) { client.set_relay_keys( relay_keys ); relay_keys.clear(); }
     client.set_socks5_proxy( socks5_proxy );
+    client.set_connect_timeout( connect_timeout );
+    client.set_radio_mode( radio_mode );
     client.init();
 
     try {

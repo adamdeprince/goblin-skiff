@@ -63,6 +63,7 @@ private:
   std::string socks5_proxy {};
   Crypto::Mode crypto_mode;
   bool compact_keepalive;
+  bool radio_mode = false;
   bool tmux_control;
   Terminal::TmuxControlParser tmux_parser;
   Mascot::Splash mascot;
@@ -110,6 +111,7 @@ private:
   bool screen_initialized, repaint_requested, lf_entered, quit_sequence_started;
   bool clean_shutdown;
   unsigned int verbose;
+  unsigned int connect_timeout_seconds = 120;
 
   void main_init( void );
   void process_network_input( void );
@@ -133,6 +135,9 @@ private:
   void resume( void ); /* restore state after SIGCONT */
 
 public:
+  void set_radio_mode( bool enabled ) { radio_mode = enabled; }
+  void set_connect_timeout( unsigned int seconds ) { connect_timeout_seconds = seconds; }
+
   STMClient( const char* s_ip,
              const char* s_port,
              const char* s_key,
