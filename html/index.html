@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Goblin Mosh: zstd-22 screen updates, adaptive link pacing, FEC file synchronization, Kitty and sixel graphics. Source artifacts, packages, and a comparison with Mosh, SSH, Eternal Terminal, and autossh.">
+  <meta name="description" content="Goblin Skiff: zstd-22 screen updates, adaptive link pacing, FEC file synchronization, Kitty and sixel graphics. Source artifacts, packages, and a comparison with Mosh, SSH, Eternal Terminal, and autossh.">
   <meta name="theme-color" content="#f3f1e8">
-  <meta property="og:title" content="goblin-mosh — low-bandwidth patch record">
+  <meta property="og:title" content="goblin-skiff — low-bandwidth patch record">
   <meta property="og:description" content="What changed in Mosh, why it changed, and what the changes mean on bandwidth-constrained links.">
   <meta property="og:image" content="goblin.png">
   <link rel="icon" href="goblin.png" type="image/png" sizes="1254x1254">
   <link rel="apple-touch-icon" href="goblin.png">
-  <title>goblin-mosh — low-bandwidth patch record</title>
+  <title>Goblin Skiff — remote terminal for bandwidth-constrained links</title>
   <style>
     :root {
       color-scheme: light;
@@ -594,10 +594,10 @@
 
   <header class="site-header">
     <div class="header-inner shell">
-      <a class="identity" href="#content" aria-label="goblin-mosh patch record">
+      <a class="identity" href="#content" aria-label="goblin-skiff patch record">
         <span class="mark"><img src="goblin.png" alt="" width="1254" height="1254"></span>
         <span class="identity-text">
-          <strong>goblin-mosh</strong>
+          <strong>goblin-skiff</strong>
           <small>low-bandwidth patch record</small>
         </span>
       </a>
@@ -615,10 +615,11 @@
       <div class="shell">
         <div class="intro-grid">
           <div>
-            <p class="eyebrow">Mosh patch series</p>
-            <h1>Mosh changes for bandwidth-constrained links.</h1>
+            <p class="eyebrow">Goblin Skiff</p>
+            <h1>Goblin Skiff</h1>
             <p class="lede">
-              Goblin Mosh keeps Mosh's roaming and predictive typing, and adds UDP jump relays
+              Goblin Skiff is a fork of Mosh, optimized for bandwidth-constrained links.
+              Skiff keeps Mosh's roaming and predictive typing, and adds UDP jump relays
               for sessions where the client cannot reach the destination directly over UDP.
               It also adds zstd-22 compression, directional bandwidth pacing, repairable file transfers,
               and modern terminal graphics.
@@ -971,7 +972,7 @@
         <div>
           <h2>What each tool provides.</h2>
           <p class="section-deck">
-            Goblin Mosh adds integrated low-bandwidth features to Mosh. SSH remains a general-purpose
+            Goblin Skiff adds integrated low-bandwidth features to Mosh. SSH remains a general-purpose
             secure transport; Eternal Terminal resumes a byte stream; autossh supervises SSH.
             These are different tradeoffs, not a performance ranking.
           </p>
@@ -990,7 +991,7 @@
           <thead>
             <tr>
               <th scope="col">Feature</th>
-              <th scope="col"><a href="#changes">Goblin Mosh</a><br>this branch</th>
+              <th scope="col"><a href="#changes">Goblin Skiff</a><br>this branch</th>
               <th scope="col"><a href="#source-mosh">Mosh [1]</a><br>upstream 1.4.0</th>
               <th scope="col"><a href="#source-ssh">OpenSSH [2]</a><br>ssh client/server</th>
               <th scope="col"><a href="#source-et">Eternal Terminal [3]</a></th>
@@ -1035,7 +1036,7 @@
             </tr>
             <tr>
               <th scope="row">File copying and deltas</th>
-              <td>Two-pane file/directory copy, librsync deltas and <code>goblin-moshcp</code></td><td>Separate SSH/SFTP/rsync workflow</td>
+              <td>Two-pane file/directory copy, librsync deltas and <code>goblin-skiffcp</code></td><td>Separate SSH/SFTP/rsync workflow</td>
               <td>SFTP/scp; rsync as a separate tool</td><td>No built-in two-pane delta-copy workflow documented</td><td>No file browser; can supervise SSH tunnels used by other tools</td>
             </tr>
             <tr>
@@ -1073,18 +1074,18 @@
       </div>
       <p class="table-note">
         The graphics row compares carrying a remote application's graphics protocol to the local terminal,
-        not whether the connection can run inside Kitty. Goblin Mosh interprets supported static graphics,
+        not whether the connection can run inside Kitty. Goblin Skiff interprets supported static graphics,
         synchronizes image and placement state, then re-emits graphics client-side; it is not
         byte-for-byte passthrough. Sixel is re-emitted as sixel when supported locally, or converted
         client-side to Kitty on a Kitty-only terminal. SSH and Eternal Terminal carry the inline
         protocol bytes without interpreting the images. Display still requires a capable local terminal;
         byte passthrough alone does not resolve a remote filename or shared-memory reference locally.
         Native tmux integration also needs a supporting local terminal. None of the rows claims
-        that Goblin Mosh implements every SSH feature or every Kitty extension.
+        that Goblin Skiff implements every SSH feature or every Kitty extension.
       </p>
       <p class="table-note">
         The jump-host row compares the session's data path, not just SSH login.
-        Goblin Mosh no longer needs direct client-to-destination UDP reachability when using its relays;
+        Goblin Skiff no longer needs direct client-to-destination UDP reachability when using its relays;
         UDP must pass between adjacent hops. The client, every jump and the destination need updated
         Goblin binaries. Session encryption remains end to end; each hop adds its own authentication.
         This is not arbitrary UDP port forwarding: <code>-L/-R</code> and SOCKS5 <code>-D</code>
@@ -1177,7 +1178,7 @@
           </p>
           <p>
             Upload and download budgets are estimated separately. A manual transfer-rate ceiling
-            still applies when configured; <code>goblin-moshcp --rate=0</code> removes its own ceiling,
+            still applies when configured; <code>goblin-skiffcp --rate=0</code> removes its own ceiling,
             not the session-wide pacer. Sparse traffic cannot measure unused link capacity.
           </p>
         </aside>
@@ -1189,10 +1190,10 @@
         <p class="section-index">04 / Distribution</p>
         <div>
           <h2>Published packages.</h2>
-          <p class="section-deck">Install <code>goblin-mosh</code> on both endpoints. These are the published binary targets, not a list of every platform upstream Mosh supports.</p>
+          <p class="section-deck">Install <code>goblin-skiff</code> on both endpoints. These are the published binary targets, not a list of every platform upstream Mosh supports.</p>
         </div>
       </div>
-      <div class="table-wrap" style="margin-top: 30px" role="region" aria-label="Published Goblin Mosh packages" tabindex="0">
+      <div class="table-wrap" style="margin-top: 30px" role="region" aria-label="Published Goblin Skiff packages" tabindex="0">
         <table class="package-table">
           <thead><tr><th scope="col">System</th><th scope="col">Binary architecture</th><th scope="col">Setup and artifacts</th></tr></thead>
           <tbody>
@@ -1207,7 +1208,7 @@
         Inventory checked 11 September 2026 against the public
         <a href="https://apt.goblinreactor.com/packages.json">APT/RPM catalog</a> and
         <a href="https://brew.goblinreactor.com/packages.json">Homebrew catalog</a>.
-        Linux ARM packages are not published yet. All listed Goblin Mosh binaries exclude RaptorQ.
+        Linux ARM packages are not published yet. All listed Goblin Skiff binaries exclude RaptorQ.
         Catalogs and repository setup pages provide exact versions, matching source, checksums and verification records.
         These packages include the directory-cache fixes and authenticated UDP jump relays.
         Install the updated server on every jump host as well as the destination.
@@ -1236,7 +1237,7 @@
           </div>
           <pre><span class="prompt">$</span> git clone --branch low-bandwidth-mosh --single-branch \
     https://github.com/adamdeprince/mosh.git
-<span class="prompt">$</span> cd mosh
+<span class="prompt">$</span> cd goblin-skiff
 <span class="prompt">$</span> ./autogen.sh
 <span class="prompt">$</span> ./configure --with-zstd --with-librsync \
     --without-libraptorq
@@ -1245,7 +1246,7 @@
 <span class="prompt">$</span> sudo make install
 
 <span class="comment"># Run the prefixed client.</span>
-<span class="prompt">$</span> goblin-mosh user@host
+<span class="prompt">$</span> goblin-skiff user@host
 
 <span class="comment"># In the session: Ctrl-^, release, then 0 opens files.</span></pre>
         </div>
@@ -1311,7 +1312,7 @@
   <footer class="site-footer">
     <div class="footer-inner shell">
       <p class="footer-note">
-        Goblin Mosh is a GPL-3.0-or-later patch series built on Mosh, with upstream notices and
+        Goblin Skiff is a GPL-3.0-or-later patch series built on Mosh, with upstream notices and
         exceptions retained. A source-backed record, not an upstream release or a claim of FIPS certification.
       </p>
       <div class="footer-links">

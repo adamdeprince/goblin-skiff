@@ -2,17 +2,17 @@
 
 The public tap is hosted directly at
 `https://brew.goblinreactor.com/homebrew-tap.git`. It contains a formula for
-`goblinreactor/tap/goblin-mosh`; stock Homebrew Mosh remains a separate package.
+`goblinreactor/tap/goblin-skiff`; stock Homebrew Mosh remains a separate package.
 The web root on hail is `/mnt/distribution/brew.goblinreactor.com`.
 
 Build the source distribution with `make distdir`, then archive its single
-`goblin-mosh/` directory. Never include product HTML, Git metadata, credentials,
+`goblin-skiff/` directory. Never include product HTML, Git metadata, credentials,
 host configuration or signing keys in that snapshot. The formula template is
 included in the source; its SHA-256 placeholder avoids a self-referential
 archive hash. Render it after archiving with:
 
 ```sh
-sh packaging/homebrew/render-formula.sh goblin-mosh-1.4.0-goblin20260910.2.tar.gz
+sh packaging/homebrew/render-formula.sh goblin-skiff-1.4.0-goblin20260910.2.tar.gz
 ```
 
 The formula uses Homebrew's dynamically linked dependencies, runs 24 core
@@ -29,10 +29,10 @@ and patent review; see [THIRD_PARTY.md](../../THIRD_PARTY.md).
 Build the bottle on its actual target macOS/architecture:
 
 ```sh
-brew install --build-bottle --include-test goblinreactor/tap/goblin-mosh
-brew test goblinreactor/tap/goblin-mosh
+brew install --build-bottle --include-test goblinreactor/tap/goblin-skiff
+brew test goblinreactor/tap/goblin-skiff
 brew bottle --json --root-url=https://brew.goblinreactor.com/bottles \
-  goblinreactor/tap/goblin-mosh
+  goblinreactor/tap/goblin-skiff
 ```
 
 Keep existing installations and running sessions untouched while testing.

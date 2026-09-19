@@ -8,16 +8,16 @@ Rocky builds need EPEL and CRB for dependencies. Only x86_64 is built here.
 
 Prepare a source distribution with `make distdir`. Exclude the untracked
 product HTML, Git metadata, signing material and host configuration. Create
-`snapshot.tar.gz` with a single `goblin-mosh/` directory, including this spec
-and the build recipes. Copy `Containerfile`, `goblin-mosh.spec` and
+`snapshot.tar.gz` with a single `goblin-skiff/` directory, including this spec
+and the build recipes. Copy `Containerfile`, `goblin-skiff.spec` and
 `build-release.sh` beside the snapshot, then:
 
 ```sh
 podman build --build-arg BASE_IMAGE=registry.fedoraproject.org/fedora:44 \
-  -f Containerfile -t goblin-mosh-build:fedora44 .
+  -f Containerfile -t goblin-skiff-build:fedora44 .
 mkdir -p artifacts/fedora44
 podman run --rm -v "$PWD/artifacts/fedora44:/out" \
-  goblin-mosh-build:fedora44 fedora44
+  goblin-skiff-build:fedora44 fedora44
 ```
 
 Pin the resolved image digest for a release build. The build produces an RPM

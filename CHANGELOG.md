@@ -1,4 +1,4 @@
-# Goblin Mosh changes
+# Goblin Skiff changes
 
 ## 1.4.0-goblin20260915.1 — 2026-09-15
 

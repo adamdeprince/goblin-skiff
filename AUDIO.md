@@ -37,9 +37,9 @@ Backend inspection:
   libraries exist; their development packages were not found by pkg-config.
   The bridge has not been installed or tested against that service.
 
-## Control-panel audio page (Mosh prefix, then 0)
+## Control-panel audio page (Skiff prefix, then 0)
 
-Keep controls, preferences and pending negotiations for the life of the Mosh
+Keep controls, preferences and pending negotiations for the life of the Skiff
 session, independently of whether the popup is visible. Opening the audio page
 does not itself authorize microphone capture. The terminal behind it stays live.
 
@@ -64,7 +64,7 @@ the menu must not unmute audio or replay a previous headphone test.
 
 ## Transport and codecs
 
-Carry live media in separate logical channels inside the authenticated Mosh
+Carry live media in separate logical channels inside the authenticated Skiff
 connection, outside terminal screen-state synchronization. Prioritize live
 audio alongside interactive traffic and above forwarded socket/bulk payloads,
 with bounded work and queues so it cannot monopolize keyboard/screen service.

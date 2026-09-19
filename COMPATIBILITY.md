@@ -1,4 +1,4 @@
-# Goblin Mosh version compatibility
+# Goblin Skiff version compatibility
 
 `1.4.0-goblin20260915.1` is the first compatibility baseline. Its Goblin
 protocol is **1**; the underlying Mosh SST protocol remains **2**. The tracked
@@ -15,8 +15,8 @@ breaking change requires an explicit protocol bump and migration notes.
 
 ## Connection identification
 
-`goblin-mosh --version`, `goblin-mosh-client --version` and
-`goblin-mosh-server --version` report the release and build. The wrapper
+`goblin-skiff --version`, `goblin-skiff-client --version` and
+`goblin-skiff-server --version` report the release and build. The wrapper
 queries the selected client binary with `--connection-version`; the server
 emits the same metadata before its unchanged `MOSH CONNECT` message:
 

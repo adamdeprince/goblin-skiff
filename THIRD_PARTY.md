@@ -1,6 +1,6 @@
 # Licenses and corresponding source
 
-Goblin-mosh is derived from Mosh and remains GPL version 3 or later. See
+Goblin Skiff is derived from Mosh and remains GPL version 3 or later. See
 [COPYING](COPYING) and individual source-file notices. Existing copyright
 notices and linking exceptions must be retained. This is not an Apache-2.0-only
 distribution.
@@ -59,7 +59,7 @@ Upstream references:
 - [LPCNet COPYING](https://github.com/xiph/LPCNet/blob/master/COPYING)
 - [Lyra LICENSE](https://github.com/google/lyra/blob/main/LICENSE)
 
-LGPL-2.1 is compatible with using Codec 2 as a library in GPLv3 Mosh. This is
+LGPL-2.1 is compatible with using Codec 2 as a library in GPLv3 Goblin Skiff. This is
 not the GPLv2-only versus GPLv3 incompatibility. LGPL-2.1 section 3 also permits
 applying GPL version 2 or a later GPL version to a copy; no such notice rewrite
 is necessary for the planned separately maintained library dependency. See
@@ -94,6 +94,6 @@ See [LGPL-2.1 section 6](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
 and the [FSF linking guidance](https://www.gnu.org/licenses/gpl-faq.en.html#LGPLStaticVsDynamic).
 Repository packages provide their matching source alongside the binaries at
 <https://apt.goblinreactor.com/>. Enable the matching release's `deb-src`
-entry and use `apt-get source goblin-mosh` to retrieve it. A workspace build
+entry and use `apt-get source goblin-skiff` to retrieve it. A workspace build
 can differ from a published package; a moving branch alone is not a matching
 source release. The unimplemented codec plan above is not a completed audit.

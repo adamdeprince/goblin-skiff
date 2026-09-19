@@ -1,44 +1,46 @@
 [![ci](https://github.com/mobile-shell/mosh/actions/workflows/ci.yml/badge.svg)](https://github.com/mobile-shell/mosh/actions/workflows/ci.yml)
 
-Mosh: the mobile shell
-======================
+Goblin Skiff
+============
 
-Mosh is a remote terminal application that supports intermittent
+Goblin Skiff is a fork of Mosh, optimized for bandwidth-constrained links.
+
+Skiff supports intermittent
 connectivity, allows roaming, and provides speculative local echo
 and line editing of user keystrokes.
 
 It aims to support the typical interactive uses of SSH, plus:
 
-   * Mosh keeps the session alive if the client goes to sleep and
+   * Skiff keeps the session alive if the client goes to sleep and
      wakes up later, or temporarily loses its Internet connection.
 
-   * Mosh allows the client and server to "roam" and change IP
-     addresses, while keeping the connection alive. Unlike SSH, Mosh
+   * Skiff allows the client and server to "roam" and change IP
+     addresses, while keeping the connection alive. Unlike SSH, Skiff
      can be used while switching between Wi-Fi networks or from Wi-Fi
      to cellular data to wired Ethernet.
 
-   * The Mosh client runs a predictive model of the server's behavior
+   * The Skiff client runs a predictive model of the server's behavior
      in the background and tries to guess intelligently how each
      keystroke will affect the screen state. When it is confident in
      its predictions, it will show them to the user while waiting for
      confirmation from the server. Most typing and uses of the left-
      and right-arrow keys can be echoed immediately.
 
-     As a result, Mosh is usable on high-latency links, e.g. on a
+     As a result, Skiff is usable on high-latency links, e.g. on a
      cellular data connection or spotty Wi-Fi. In distinction from
-     previous attempts at local echo modes in other protocols, Mosh
+     previous attempts at local echo modes in other protocols, Skiff
      works properly with full-screen applications such as emacs, vi,
      alpine, and irssi, and automatically recovers from occasional
-     prediction errors within an RTT. On high-latency links, Mosh
+     prediction errors within an RTT. On high-latency links, Skiff
      underlines its predictions while they are outstanding and removes
      the underline when they are confirmed by the server.
 
-Mosh does not support sshfs.  This version also includes experimental stream
+Skiff does not support sshfs.  This version also includes experimental stream
 forwarding for selected SSH-like uses: local TCP forwards (`-L`), remote TCP
 forwards (`-R`), local SOCKS5 dynamic forwards (`-D`), SSH agent forwarding
 (`-A`), and basic X11 forwarding (`-X`).
-`-J` / `--jump` also relays the encrypted Mosh UDP session through up to four
-Goblin Mosh jump hosts, including routes discovered from SSH `ProxyJump`.
+`-J` / `--jump` also relays the encrypted Skiff UDP session through up to four
+Goblin Skiff jump hosts, including routes discovered from SSH `ProxyJump`.
 It does not add arbitrary UDP port forwarding; `-L/-R/-D` remain TCP streams.
 
 `--socks5-proxy=127.0.0.1:1055` carries SSH setup and the session UDP through
@@ -55,32 +57,33 @@ and [release changes](CHANGELOG.md).
 Other features
 --------------
 
-   * Mosh adjusts its frame rate so as not to fill up network queues
+   * Skiff adjusts its frame rate so as not to fill up network queues
      on slow links, so "Control-C" always works within an RTT to halt
      a runaway process.
 
-   * Mosh warns the user when it has not heard from the server
+   * Skiff warns the user when it has not heard from the server
      in a while.
 
-   * Mosh supports lossy links that lose a significant fraction
+   * Skiff supports lossy links that lose a significant fraction
      of their packets.
 
-   * Mosh handles some Unicode edge cases better than SSH and existing
+   * Skiff handles some Unicode edge cases better than SSH and existing
      terminal emulators by themselves, but requires a UTF-8
      environment to run.
 
-   * Mosh leverages SSH to set up the connection and authenticate
-     users. Mosh does not contain any privileged (root) code.
+   * Skiff leverages SSH to set up the connection and authenticate
+     users. Skiff does not contain any privileged (root) code.
 
-Getting Mosh
-------------
+Getting Goblin Skiff
+--------------------
 
-  [The Mosh web site](https://mosh.org/#getting) has information about
-  packages for many operating systems, as well as instructions for building
-  from source.
+  Install `goblin-skiff` on both endpoints. See the
+  [Debian](packaging/debian/README.md), [RPM](packaging/rpm/README.md), and
+  [Homebrew](packaging/homebrew/README.md) packaging instructions, or build
+  from source using the steps below.
 
-  Note that `goblin-mosh-client` receives an AES session key as an environment
-  variable.  If you are porting Mosh to a new operating system, please make
+  Note that `goblin-skiff-client` receives an AES session key as an environment
+  variable.  If you are porting Skiff to a new operating system, please make
   sure that a running process's environment variables are not readable by other
   users.  We have confirmed that this is the case on GNU/Linux, OS X, and
   FreeBSD.
@@ -88,19 +91,19 @@ Getting Mosh
 Usage
 -----
 
-  The `goblin-mosh-client` binary must exist on the user's machine, and the
-  `goblin-mosh-server` binary on the remote host.
+  The `goblin-skiff-client` binary must exist on the user's machine, and the
+  `goblin-skiff-server` binary on the remote host.
 
   The user runs:
 
-    $ goblin-mosh [user@]host
+    $ goblin-skiff [user@]host
 
-  To reach a destination through a jump host, for both setup and Mosh UDP:
+  To reach a destination through a jump host, for both setup and Skiff UDP:
 
-    $ goblin-mosh -J [user@]jump destination
-    $ goblin-mosh -J jump-a,jump-b destination
+    $ goblin-skiff -J [user@]jump destination
+    $ goblin-skiff -J jump-a,jump-b destination
 
-  Install the updated `goblin-mosh-server` on every jump and the destination.
+  Install the updated `goblin-skiff-server` on every jump and the destination.
   Each hop needs UDP reachability to the next, with UDP 60001–60999 permitted
   by default. SSH is used only for setup; terminal traffic remains encrypted
   end to end, with separately authenticated relay envelopes. `--jump-port`
@@ -113,9 +116,9 @@ Usage
   stored asset is a 15,616-byte, 512-by-512 lossy WebP. Kitty uses about
   16 columns by 8 rows, sixel about 20 by 10, and ASCII 32 by 16, reduced
   for small windows. The image and capability probes stay on the local tty;
-  they are not sent over the Mosh connection. Use `--no-mascot` to disable
+  they are not sent over the Skiff connection. Use `--no-mascot` to disable
   it, or `--mascot=kitty|sixel|ascii` to override detection. Preview without
-  connecting with `goblin-mosh-client --show-mascot=ascii` (or kitty/sixel).
+  connecting with `goblin-skiff-client --show-mascot=ascii` (or kitty/sixel).
   The mascot is printed once, inline. On the default primary screen, the
   remote prompt starts below earlier output, reserving only the rows it needs.
   The mascot moves into native history as output grows, not all at once when
@@ -128,9 +131,9 @@ Usage
   unsupported. These suppress its mascot probes/output; `--no-kitty` also
   disables remote Kitty image rendering locally. Combine both for ASCII:
 
-    $ goblin-mosh --no-kitty --no-sixel naamah
+    $ goblin-skiff --no-kitty --no-sixel naamah
 
-  The disable options also work on `goblin-mosh-client`, take precedence over
+  The disable options also work on `goblin-skiff-client`, take precedence over
   forced mascot/preview formats (falling back to ASCII), and do not change the
   remote `TERM` value or send extra capability packets over the link.
 
@@ -146,13 +149,13 @@ Usage
   to deliver files toward the user's terminal. The client forwards to a Goblin
   parent if supported, otherwise uses Kitty file transfer, otherwise opens a
   confirmation to save to local Downloads (`y` selects Save, then Enter confirms;
-  the Mosh prefix followed by `0` hides or reopens it). Intermediate clients do
+  the Skiff prefix followed by `0` hides or reopens it). Intermediate clients do
   not save copies or ask again after a parent refuses. Terminal base64 is decoded
   before binary zstd-22/FEC transfer on the background path. Local fallback
   writes never overwrite existing files. Use `--no-downloads` to disable all
   routes or `--download-directory=DIR` to set the local fallback directory.
 
-  The Mosh command prefix followed by `0` opens a local, two-pane directory
+  The Skiff command prefix followed by `0` opens a local, two-pane directory
   browser over the live remote screen. By default, type Ctrl-^ (Ctrl-6 in
   Kitty, often Ctrl-Shift-6 elsewhere), release it, then press `0`. Repeat that
   sequence or press Escape to hide it; reopening resumes the same directories,
@@ -164,7 +167,7 @@ Usage
   The high-contrast panes have rounded Unicode borders and file sizes.
   The initial paths are the client and server
   processes' working directories, not the remote shell's current directory.
-  This honors `MOSH_ESCAPE_KEY`, including the leading Enter required for
+  This honors upstream Mosh’s `MOSH_ESCAPE_KEY`, including the leading Enter required for
   printable prefixes. Both legacy control bytes and Kitty keyboard events
   are supported; no Option-as-Meta configuration is needed. Alt-0 is no
   longer intercepted. Bracketed paste cannot activate the shortcut, and it
@@ -207,7 +210,7 @@ Usage
   packages are `librsync-dev` and `libssl-dev`; on macOS install `librsync` and
   `openssl@3` with Homebrew. Pass its include/library directories via `CPPFLAGS`
   and `LDFLAGS` if needed. This feature does not change the separate
-  `goblin-moshcp` CLI protocol. Live forwarding edits are not yet connected to
+  `goblin-skiffcp` CLI protocol. Live forwarding edits are not yet connected to
   this popup; UDP jump routes are selected at session startup with `-J`.
 
   The requested audio page (independent input/output codecs, on/off, volume,
@@ -279,15 +282,15 @@ Usage
   pacer allows at most 1 ms / 4 KiB of scheduling slack, without idle burst
   accumulation. The file menu bypasses its legacy 20 ms per-symbol delay
   when this pacer is active; old peers retain that fallback delay. The
-  local bulk socket backpressures `goblin-moshcp --rate=0` instead of growing
+  local bulk socket backpressures `goblin-skiffcp --rate=0` instead of growing
   an unbounded queue. Forwarding uses its local directional estimate unless
-  `--stream-bandwidth` specifies a manual ceiling. The moshcp `--rate` ceiling
+  `--stream-bandwidth` specifies a manual ceiling. The `goblin-skiffcp` `--rate` ceiling
   still applies (default 2048 bytes/s); `--rate=0` removes that extra ceiling,
   not the session pacer. Older peers retain the legacy transport behavior.
 
   For native tmux integration in a supporting terminal such as iTerm2:
 
-    $ goblin-mosh --tmux-control [user@]host -- tmux -CC new-session -A -s main
+    $ goblin-skiff --tmux-control [user@]host -- tmux -CC new-session -A -s main
 
   You can also connect with `--tmux-control` and run `tmux -CC` from the
   remote shell later. Both endpoints must support `tmux-control-v1`; the
@@ -300,25 +303,25 @@ Usage
   existing encrypted, compressed UDP transport. They survive packet loss and
   roaming without being reduced to screen diffs. Unacknowledged queues apply
   backpressure at 64 KiB (plus at most one PTY read), so a stalled connection
-  does not accumulate unlimited protocol history in Mosh. Because every byte
+  does not accumulate unlimited protocol history in Skiff. Because every byte
   must arrive, a busy tmux pane can cost more bandwidth and take longer to
   catch up than ordinary screen synchronization.
 
-  While tmux control mode is active, Mosh suppresses screen redraws, prediction,
+  While tmux control mode is active, Skiff suppresses screen redraws, prediction,
   status overlays, and its escape-key shortcuts so they cannot corrupt the
   protocol. Use the local terminal's tmux detach action to return to the remote
-  shell; normal Mosh rendering then resumes. A new Mosh client process requires
-  a fresh tmux attachment. Existing Mosh connections can still roam and recover
+  shell; normal Skiff rendering then resumes. A new Skiff client process requires
+  a fresh tmux attachment. Existing Skiff connections can still roam and recover
   from temporary network loss.
 
   Local forwarding follows the OpenSSH-style command line:
 
-    $ goblin-mosh -L 8080:127.0.0.1:80 [user@]host
-    $ goblin-mosh -R 2222:127.0.0.1:22 [user@]host
-    $ goblin-mosh -D 1080 [user@]host
-    $ goblin-mosh -A [user@]host
-    $ goblin-mosh -X [user@]host
-    $ goblin-mosh --fips-crypto [user@]host
+    $ goblin-skiff -L 8080:127.0.0.1:80 [user@]host
+    $ goblin-skiff -R 2222:127.0.0.1:22 [user@]host
+    $ goblin-skiff -D 1080 [user@]host
+    $ goblin-skiff -A [user@]host
+    $ goblin-skiff -X [user@]host
+    $ goblin-skiff --fips-crypto [user@]host
 
   `--fips-crypto` is an explicit, fail-closed transport mode intended as a
   building block for deployments with FIPS requirements.  Client and server
@@ -332,12 +335,12 @@ Usage
   or the remote endpoint does not confirm the suite, setup stops rather than
   falling back.
 
-  This option does not claim that a goblin-mosh installation or complete
+  This option does not claim that a goblin-skiff installation or complete
   system is FIPS compliant.  A deployment still needs an appropriate validated
   OpenSSL module and configuration, an approved system entropy source, a
   compliant SSH bootstrap and operating environment, and the required
   operational controls and validation evidence.  Normal sessions continue to
-  use Mosh's existing AES-128-OCB transport.  Configure auto-detects OpenSSL 3;
+  use upstream Mosh's existing AES-128-OCB transport.  Configure auto-detects OpenSSL 3;
   use `./configure --with-fips-crypto=yes` to require build support, or
   `--without-fips-crypto` to omit it.
 
@@ -347,9 +350,9 @@ Usage
   `--stream-bandwidth=BPS`.  Terminal screen updates and keystrokes are
   scheduled ahead of forwarded streams.  X11 and SSH agent forwarding are
   medium priority with their own stream token bucket; TCP and SOCKS
-  forwarding are low priority with a separate bucket.  Mosh emits at most one
+  forwarding are low priority with a separate bucket.  Skiff emits at most one
   forwarded stream event per reliable send opportunity and caps stream chunks
-  below the path-MTU payload budget.  `goblin-moshcp` bulk datagrams are sent only
+  below the path-MTU payload budget.  `goblin-skiffcp` bulk datagrams are sent only
   when no reliable terminal or forwarded stream traffic is queued.
 
   Sustained terminal state updates are paced between 10 frames per second on
@@ -362,34 +365,34 @@ Usage
   keepalives bypass terminal state serialization, compression, fragmentation,
   and chaff.  Mixed-version connections retain the legacy state heartbeat.
 
-  Native terminal scrolling is enabled by default.  `goblin-mosh` stays on
+  Native terminal scrolling is enabled by default.  `goblin-skiff` stays on
   the client's primary screen and turns recognized full-screen upward motion
   into real terminal scroll operations, allowing Ghostty, xterm, Kitty, and
   similar terminals to retain the rows they receive in their own scrollback.
-  Because Mosh synchronizes visible state, it cannot recover intermediate
+  Because Skiff synchronizes visible state, it cannot recover intermediate
   output that was skipped while a link was slow or disconnected.  Use
   `--alternate-screen` to restore the isolated, no-scrollback behavior of
   traditional Mosh; `--no-init` remains an alias for native scrolling.
 
-  `goblin-moshcp` transfers files over an active Mosh session.  Start a receiver on
+  `goblin-skiffcp` transfers files over an active Skiff session.  Start a receiver on
   one side of the session and a sender on the other:
 
-    remote$ goblin-moshcp receive .
-    local$  goblin-moshcp send --rate=2k --redundancy=20% ./file.bin
+    remote$ goblin-skiffcp receive .
+    local$  goblin-skiffcp send --rate=2k --redundancy=20% ./file.bin
 
-  `goblin-moshcp` discovers the active session through `GOBLIN_MOSHCP_SOCK` or the
-  latest `goblin-moshcp.latest` control socket in the user's runtime directory.  This is intended
-  for the normal "one active Mosh session" case; like SSH agent forwarding,
+  `goblin-skiffcp` discovers the active session through `GOBLIN_MOSHCP_SOCK` or the
+  latest `goblin-skiffcp.latest` control socket in the user's runtime directory.  This is intended
+  for the normal "one active Skiff session" case; like SSH agent forwarding,
   it can point at the wrong session if a shell survives across tmux or
   reconnect handoffs. Prebuilt Debian/Ubuntu, RPM and Homebrew artifacts use
   the built-in Reed-Solomon FEC and exclude RaptorQ. Plain source builds also
   disable RaptorQ, even when its headers are installed. It requires an explicit
   custom build with `--with-libraptorq=DIR` (or `--with-libraptorq` for system
   headers), after reviewing the patent terms in [THIRD_PARTY.md](THIRD_PARTY.md).
-  Only those custom builds can use `goblin-moshcp send --fec=raptorq`.
-  `goblin-moshcp send` accepts multiple sources, `-r` for
+  Only those custom builds can use `goblin-skiffcp send --fec=raptorq`.
+  `goblin-skiffcp send` accepts multiple sources, `-r` for
   recursive directories, `-p` to preserve modes and mtimes, and optional zstd
-  compression with `-z --zstd-level=N`.  `goblin-moshcp receive --multi` keeps one
+  compression with `-z --zstd-level=N`.  `goblin-skiffcp receive --multi` keeps one
   receiver open for several simultaneous transfer ids and prints lightweight
   status counters unless `--quiet` is used.
 
@@ -400,9 +403,9 @@ Usage
   peers.  For very slow links, you can train a session-specific zstd
   dictionary from received state samples:
 
-    $ goblin-mosh --state-sample-log=alpine.samples.zst host
-    $ goblin-mosh-compile-dictionary --input=alpine.samples.zst --output=alpine.dict
-    $ goblin-mosh --state-zstd-dict=alpine.dict host
+    $ goblin-skiff --state-sample-log=alpine.samples.zst host
+    $ goblin-skiff-compile-dictionary --input=alpine.samples.zst --output=alpine.dict
+    $ goblin-skiff --state-zstd-dict=alpine.dict host
 
   Static Kitty graphics sent as RGB, RGBA, or PNG are normalized once and
   synchronized as image and placement state. Images with at most 16 distinct
@@ -422,7 +425,7 @@ Usage
   higher values preserve more detail and generally use more bandwidth. Even
   100 uses lossy WebP. Omitting the flag keeps WebP lossless.
 
-    $ goblin-mosh --lossy=75 host
+    $ goblin-skiff --lossy=75 host
 
   Separately, `--djvu-lossy` permits cjb2's `-lossy` mode for two-color images.
   This can remove small marks and substitute similar shapes, including text
@@ -430,9 +433,9 @@ Usage
   with three to sixteen colors remain lossless so that index bitplanes cannot
   invent colors. The flags may be used independently or together:
 
-    $ goblin-mosh --lossy=75 --djvu-lossy host
+    $ goblin-skiff --lossy=75 --djvu-lossy host
 
-  Both flags are also accepted by `goblin-mosh-server new`. The server needs
+  Both flags are also accepted by `goblin-skiff-server new`. The server needs
   the `cjb2` executable; both sides need the DjVuLibre library. No special
   terminal support for WebP or DjVu is needed.
 
@@ -464,25 +467,25 @@ Usage
   State sample logs contain the uncompressed terminal update stream and may
   include sensitive terminal contents.  A dictionary passed with
   `--state-zstd-dict=FILE` is stored as a zstd level-22 compressed file,
-  uploaded over SSH during setup, decompressed by `goblin-mosh-server`, used for
-  that Mosh session only, and not cached by `goblin-mosh-server`.
+  uploaded over SSH during setup, decompressed by `goblin-skiff-server`, used for
+  that Skiff session only, and not cached by `goblin-skiff-server`.
 
-  If the `goblin-mosh-client` or `goblin-mosh-server` binaries live outside the user's
-  `$PATH`, `goblin-mosh` accepts the arguments `--client=PATH` and `--server=PATH` to
-  select alternate locations. More options are documented in the goblin-mosh(1) manual
+  If the `goblin-skiff-client` or `goblin-skiff-server` binaries live outside the user's
+  `$PATH`, `goblin-skiff` accepts the arguments `--client=PATH` and `--server=PATH` to
+  select alternate locations. More options are documented in the goblin-skiff(1) manual
   page.
 
-  There are [more examples](https://mosh.org/#usage) and a
+  Upstream Mosh has [more examples](https://mosh.org/#usage) and a
   [FAQ](https://mosh.org/#faq) on the Mosh web site.
 
 How it works
 ------------
 
-  The `goblin-mosh` program will SSH to `user@host` to establish the connection.
+  The `goblin-skiff` program will SSH to `user@host` to establish the connection.
   SSH may prompt the user for a password or use public-key
   authentication to log in.
 
-  From this point, `goblin-mosh` runs the `goblin-mosh-server` process (as the user)
+  From this point, `goblin-skiff` runs the `goblin-skiff-server` process (as the user)
   on the server machine. The server process listens on a high UDP port
   and sends its port number and an AES-128 secret key back to the
   client over SSH. The SSH connection is then shut down and the
@@ -491,12 +494,12 @@ How it works
   If the client changes IP addresses, the server will begin sending
   to the client on the new IP address within a few seconds.
 
-  To function, Mosh requires UDP datagrams to be passed between client
-  and server. By default, `goblin-mosh` uses a port number between 60000 and
+  To function, Skiff requires UDP datagrams to be passed between client
+  and server. By default, `goblin-skiff` uses a port number between 60000 and
   61000, but the user can select a particular port with the -p option.
   Please note that the -p option has no effect on the port used by SSH.
 
-  Forwarded streams, X11 forwarding, SSH agent forwarding, and `goblin-moshcp` bulk
+  Forwarded streams, X11 forwarding, SSH agent forwarding, and `goblin-skiffcp` bulk
   datagrams use the same encrypted and authenticated UDP session as terminal
   traffic.  Bulk data is scheduled conservatively so that interactive terminal
   updates remain responsive on slow or lossy links.  Oversized bulk datagrams
@@ -505,16 +508,16 @@ How it works
 Advice to distributors
 ----------------------
 
-A note on compiler flags: Mosh is security-sensitive code. When making
+A note on compiler flags: Skiff is security-sensitive code. When making
 automated builds for a binary package, we recommend passing the option
 `--enable-compile-warnings=error` to `./configure`. On GNU/Linux with
 `g++` or `clang++`, the package should compile cleanly with
 `-Werror`. Please report a bug if it doesn't.
 
-Where available, Mosh builds with a variety of binary hardening flags
+Where available, Skiff builds with a variety of binary hardening flags
 such as `-fstack-protector-all`, `-D_FORTIFY_SOURCE=2`, etc.  These
 provide proactive security against the possibility of a memory
-corruption bug in Mosh or one of the libraries it uses.  For a full
+corruption bug in Skiff or one of the libraries it uses.  For a full
 list of flags, search for `HARDEN` in `configure.ac`.  The `configure`
 script detects which flags are supported by your compiler, and enables
 them automatically.  To disable this detection, pass
@@ -522,26 +525,19 @@ them automatically.  To disable this detection, pass
 have trouble with the default settings; we would like as many users as
 possible to be running a configuration as secure as possible.
 
-Mosh ships with a default optimization setting of `-O2`. Some
-distributors have asked about changing this to `-Os` (which causes a
-compiler to prefer space optimizations to time optimizations). We have
-benchmarked with the included `src/examples/benchmark` program to test
-this. The results are that `-O2` is 40% faster than `-Os` with g++ 4.6
-on GNU/Linux, and 16% faster than `-Os` with clang++ 3.1 on Mac OS
-X. In both cases, `-Os` did produce a smaller binary (by up to 40%,
-saving almost 200 kilobytes on disk). While Mosh is not especially CPU
-intensive and mostly sits idle when the user is not typing, we think
-the results suggest that `-O2` (the default) is preferable.
+Skiff retains upstream Mosh’s default `-O2` optimization. The upstream
+Mosh benchmarks found `-O2` faster than `-Os` with the tested GCC 4.6 and
+Clang 3.1 builds; those historical results are not new Skiff measurements.
 
-Our Debian and Fedora packaging presents Mosh as a single package.
-Mosh has a Perl dependency that is only required for client use.  For
-some platforms, it may make sense to have separate goblin-mosh-server and
-goblin-mosh-client packages to allow goblin-mosh-server usage without Perl.
+Our Debian and Fedora packaging presents Skiff as a single package.
+Skiff has a Perl dependency that is only required for client use.  For
+some platforms, it may make sense to have separate goblin-skiff-server and
+goblin-skiff-client packages to allow goblin-skiff-server usage without Perl.
 
 Notes for developers
 --------------------
 
-To start contributing to Mosh, install the following dependencies:
+To start contributing to Skiff, install the following dependencies:
 
 Debian, Windows Subsystem for Linux:
 
@@ -567,7 +563,7 @@ MacOS:
 $ brew install protobuf automake libpng webp zstd djvulibre
 ```
 
-Once you have forked the repository, run the following to build and test Mosh:
+Once you have forked the repository, run the following to build and test Skiff:
 
 ```
 $ ./autogen.sh
@@ -576,7 +572,7 @@ $ make
 $ make check
 ```
 
-Mosh supports producing code coverage reports by tests, but this feature is
+Skiff supports producing code coverage reports by tests, but this feature is
 disabled by default. To enable it, make sure `lcov` is installed on your
 system. Then, configure and run tests:
 
@@ -589,10 +585,10 @@ This will run all tests and produce a coverage report in HTML form that can be
 opened with your favorite browser. Ideally, newly added code should strive for
 90% (or better) incremental test coverage.
 
-More info
----------
+Upstream Mosh resources
+-----------------------
 
-  * Mosh Web site:
+  * Upstream Mosh web site:
 
     <https://mosh.org>
 
@@ -607,3 +603,11 @@ More info
   * `#mosh` channel on [Libera Chat](https://libera.chat/)
 
     https://web.libera.chat/#mosh
+
+License and authorship
+----------------------
+
+Goblin Skiff is derived from Mosh, originally written by Keith Winstein and
+contributors listed in [AUTHORS](AUTHORS). Upstream copyright notices are
+preserved. Skiff is distributed under the [GNU GPL version 3 or later](COPYING),
+with the same OpenSSL and [iOS exceptions](COPYING.iOS) as upstream Mosh.

@@ -1,16 +1,16 @@
-# Mosh IP-volume benchmark
+# Goblin Skiff / upstream Mosh IP-volume benchmark
 
-This harness compares the downlink IP volume of two Mosh installations while
+This harness compares the downlink IP volume of Goblin Skiff and upstream Mosh installations while
 they carry the same deterministic terminal activity. It is aimed at measuring
 the branch against stock Mosh over a real low-bandwidth path.
 
 ## Quick start
 
-Both Mosh variants and their corresponding servers must already be installed.
-By default the harness runs `/usr/local/bin/goblin-mosh` against `mosh`. It needs
+Both installations and their corresponding servers must already be installed.
+By default the harness runs `/usr/local/bin/goblin-skiff` against `mosh`. It needs
 Python 3 on the client and server, plus `tcpdump` on the client.
 
-The patched wrapper invokes `goblin-mosh-server`; the stock wrapper invokes
+The patched wrapper invokes `goblin-skiff-server`; the stock wrapper invokes
 `mosh-server`. Both server commands therefore need to be on the remote `PATH`.
 
 ```sh
@@ -26,14 +26,14 @@ interface explicitly:
 ./run.py adam@naamah \
   --server-ip 192.0.2.10 \
   --interface en0 \
-  --variant patched=/usr/local/bin/goblin-mosh \
+  --variant patched=/usr/local/bin/goblin-skiff \
   --variant system=/opt/homebrew/bin/mosh
 ```
 
 The default capture command is `sudo -n tcpdump`, so `sudo -v` obtains the
 credential before the unattended run. Use `--tcpdump-command` for a different
 capture wrapper, or `--no-capture` for a quick protocol smoke test. `--dry-run`
-prints every Mosh command without connecting.
+prints every session command without connecting.
 
 The capture interface is inferred from the route (`route get` on macOS and
 `ip route get` on Linux); `--interface` overrides it. If a VPN or Network
@@ -44,7 +44,7 @@ packets instead of reporting a misleading zero.
 ## What happens in each run
 
 The harness uploads `workload.py` to a private cache directory on the server,
-starts Mosh on a unique UDP port, and captures only UDP traffic for that server
+starts the selected client on a unique UDP port, and captures only UDP traffic for that server
 and port. Tcpdump runs in immediate mode so short runs are not left in libpcap's
 kernel buffer at shutdown. The remote workload sets a READY terminal-title
 marker and waits. When the local runner sees it, it timestamps and sends a
@@ -56,7 +56,7 @@ Two accounting windows are recorded:
 
 - `active_*` covers the start signal through receipt of DONE. This is the main
   comparison and includes packets needed to deliver the complete workload.
-- `session_*` covers all captured UDP traffic, including Mosh startup and
+- `session_*` covers all captured UDP traffic, including session startup and
   shutdown.
 
 `*_ip_bytes` is the IPv4 total length or the IPv6 fixed header plus payload

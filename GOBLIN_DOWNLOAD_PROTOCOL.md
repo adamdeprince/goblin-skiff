@@ -4,7 +4,7 @@ Status: implemented in the development tree. Both endpoints must negotiate
 `goblin-download-v2` (the on-terminal OSC format remains `v=1`). This document is the integration contract for terminal
 applications such as Alpine; use the capability query before sending data.
 
-This extension asks goblin-mosh to deliver an inline file toward the **user's
+This extension asks goblin-skiff to deliver an inline file toward the **user's
 terminal**. It is not OSC 5522 clipboard data and does not replace
 drag-and-drop input. Downloads use the background FEC path, below interactive
 terminal traffic and socket forwarding, regardless of file size.
@@ -15,7 +15,7 @@ The receiving client chooses one route per connection, in this order:
 
 1. **Goblin parent:** if the enclosing terminal answers the Goblin capability
    query, forward begin/data/end to it, with locally allocated request IDs.
-   This includes a client running inside another Goblin Mosh session. The
+   This includes a client running inside another Goblin Skiff session. The
    intermediate client does not create a file or show a save prompt.
 2. **Kitty parent:** otherwise, if the terminal supports the
    [Kitty file-transfer protocol](https://sw.kovidgoyal.net/kitty/file-transfer-protocol/),
@@ -26,7 +26,7 @@ The receiving client chooses one route per connection, in this order:
    save to the client's Downloads directory, showing the full filename, byte
    count and local destination. Press `y` to select Save, then Enter after the
    confirmation is displayed to approve just that file. Enter defaults to
-   declining; `n` always declines. The Mosh command prefix followed by `0`
+   declining; `n` always declines. The Skiff command prefix followed by `0`
    (normally Ctrl-^ then `0`) hides or reopens the pending offer.
    The popup waits for an in-progress bracketed paste or split key sequence;
    pasted text cannot approve. No filesystem worker or staging file is created
@@ -83,7 +83,7 @@ OSC 777;goblin-download;v=1:op=cancel:id=123 ST
 ```
 
 The application emits plain file bytes encoded as base64; it does **not**
-perform FEC or zstd compression. Goblin-mosh decodes base64 before transmitting
+perform FEC or zstd compression. goblin-skiff decodes base64 before transmitting
 binary file data, compressed at **zstd level 22**, over its authenticated FEC
 channel. Neither the file nor its transfer progress belongs in screen state.
 
@@ -156,13 +156,13 @@ their own final directory and report the final basename through the chain.
   remove incomplete staging files. Completed downloads are left alone.
 - An unfinished begin/data sequence expires after two minutes without another
   chunk. A fully queued transfer can wait for a slow/busy link without that
-  timeout. Keep the Mosh session alive until `saved`; quitting it does not start
+  timeout. Keep the Skiff session alive until `saved`; quitting it does not start
   an independent download daemon. Cancellation is best-effort if publication
   has already completed.
 - Filesystem work runs in a separate process. A filesystem operation that does
   not respond within 30 seconds fails the transfer, without blocking the screen.
 - The existing local destination directory defaults to `$HOME/Downloads`.
-  `goblin-mosh --download-directory=DIR host` (or the local `MOSH_DOWNLOAD_DIR`
+  `goblin-skiff --download-directory=DIR host` (or the local `MOSH_DOWNLOAD_DIR`
   environment variable) selects another directory. This path is never supplied
   by the remote program. These options affect only local fallback, not a parent
   terminal's filesystem. `--no-downloads` disables the feature for a connection.
@@ -171,7 +171,7 @@ their own final directory and report the final basename through the chain.
   No route launches, opens, or executes the downloaded content.
 - A parent awaiting approval is given two minutes. A forwarded transfer with
   no data activity for five minutes fails and is canceled, without a local-save
-  fallback. Keep nested Mosh sessions open until final completion.
+  fallback. Keep nested Skiff sessions open until final completion.
 
 Data and transfer control are separate from screen-state snapshots. The
 background transport uses bounded ordered records, Reed-Solomon repair symbols

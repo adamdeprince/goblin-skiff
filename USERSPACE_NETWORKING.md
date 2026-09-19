@@ -1,6 +1,6 @@
 # Userspace Tailscale and SOCKS5
 
-Goblin Mosh can use a SOCKS5 proxy for both SSH setup and the encrypted UDP
+Goblin Skiff can use a SOCKS5 proxy for both SSH setup and the encrypted UDP
 session. This allows devices such as a reMarkable 2 to use an existing
 userspace `tailscaled` without a TUN device, kernel modules, routing changes,
 or an embedded second Tailscale instance.
@@ -15,11 +15,11 @@ tailscaled --tun=userspace-networking --socks5-server=127.0.0.1:1055
 Authenticate that daemon normally, then run:
 
 ```sh
-goblin-mosh --socks5-proxy=127.0.0.1:1055 adam@naamah
-goblin-mosh --socks5-proxy=127.0.0.1:1055 -J adam@jump destination
+goblin-skiff --socks5-proxy=127.0.0.1:1055 adam@naamah
+goblin-skiff --socks5-proxy=127.0.0.1:1055 -J adam@jump destination
 ```
 
-The updated wrapper and client are required. An ordinary reachable Mosh
+The updated wrapper and client are required. An ordinary reachable Skiff
 server does not need a SOCKS5-specific update. Goblin features and jump
 relays retain their existing peer-version requirements.
 
@@ -46,7 +46,7 @@ relays retain their existing peer-version requirements.
 - There is no direct-network fallback, and no implicit `ALL_PROXY` support.
   `--local` cannot be combined with the proxy option. The option determines
   destination discovery regardless of `--experimental-remote-ip`.
-- `-D` is different: it offers a SOCKS5 **TCP** proxy inside a Mosh session;
+- `-D` is different: it offers a SOCKS5 **TCP** proxy inside a Skiff session;
   it cannot serve as this outer UDP proxy.
 
 Use a loopback-only proxy listener. This client supports SOCKS5's
@@ -66,21 +66,21 @@ successfully opening SSH alone is not sufficient.
 The UDP association's handshake is nonblocking with a ten-second deadline.
 Connection failures back off from 250 milliseconds to 30 seconds. A proxy
 disconnect closes the old UDP socket and recreates the association, without
-resetting Mosh keys, packet sequence numbers, replay checks, or screen state.
+resetting Skiff keys, packet sequence numbers, replay checks, or screen state.
 There is no disconnected datagram queue: state synchronization and reliable
 channels retransmit as needed, while stale real-time packets are discarded.
-The initial client connection still has Mosh's normal startup timeout.
+The initial client connection still has Skiff's normal startup timeout.
 
 A ready idle association adds no periodic polling timer or wire heartbeat.
-Mosh retains its existing idle keepalive backoff. On recovery, a fresh
+Skiff retains its existing idle keepalive backoff. On recovery, a fresh
 authenticated ping lets the server learn the new source port. Local UDP
 responses must come from the negotiated proxy socket and match the target
-port/address; Mosh still authenticates every inner packet.
+port/address; Skiff still authenticates every inner packet.
 
 The proxy path budgets a conservative 1,216-byte encrypted UDP payload
 before any Goblin relay envelopes. SOCKS framing is removed by the proxy,
-so it is not charged as remote Mosh traffic. Tailscale's own encapsulation,
-discovery, keepalives and relay traffic are outside Mosh's traffic counter.
+so it is not charged as remote Skiff traffic. Tailscale's own encapsulation,
+discovery, keepalives and relay traffic are outside Skiff's traffic counter.
 Measure the physical link when evaluating total satellite usage or power.
 
 ## Checks and current validation scope
