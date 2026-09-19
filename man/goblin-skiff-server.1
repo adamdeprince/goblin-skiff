@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH-SERVER 1 "September 11, 2026"
+.TH GOBLIN-SKIFF-SERVER 1 "September 19, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,9 +16,9 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-goblin-mosh-server \- server-side helper for mosh
+goblin-skiff-server \- server-side helper for Goblin Skiff
 .SH SYNOPSIS
-.B goblin-mosh-server
+.B goblin-skiff-server
 new
 [\-s]
 [\-v]
@@ -33,35 +33,35 @@ new
 [\-\-fips\-crypto]
 [\-\- command...]
 .br
-.B goblin-mosh-server relay
+.B goblin-skiff-server relay
 [\-\-bind=\fIIP\fP]
 [\-\-port=\fIPORT[:PORT2]\fP]
 [\-\-fips\-crypto]
 \fITARGET_IP TARGET_PORT\fP
 .SH DESCRIPTION
-\fBgoblin-mosh-server\fP is a helper program for the
-.BR mosh(1)
+\fBgoblin-skiff-server\fP is a helper program for the
+.BR goblin-skiff (1)
 remote terminal application.
 
-\fBgoblin-mosh-server\fP binds to a high UDP port and chooses an encryption
+\fBgoblin-skiff-server\fP binds to a high UDP port and chooses an encryption
 key to protect the session. It prints both on standard output,
-detaches from the terminal, and waits for the \fBgoblin-mosh-client\fP to
+detaches from the terminal, and waits for the \fBgoblin-skiff-client\fP to
 establish a connection. It will exit if no client has contacted
 it within 60 seconds (ten minutes for negotiated UDP relay setup).
 
-By default, \fBgoblin-mosh-server\fP binds to a port between 60000 and
+By default, \fBgoblin-skiff-server\fP binds to a port between 60000 and
 61000 and executes the user's login shell.
 
-On platforms with \fButempter\fP, \fBgoblin-mosh-server\fP maintains an entry
+On platforms with \fButempter\fP, \fBgoblin-skiff-server\fP maintains an entry
 in the
 .BR utmp(5)
 file to indicate its process ID, whether the session is connected,
 and the client's current IP address.
 
-\fBgoblin-mosh-server\fP exits when the client terminates the connection.
+\fBgoblin-skiff-server\fP exits when the client terminates the connection.
 
 .SH UDP RELAY
-The \fBrelay\fP subcommand is normally launched by goblin-mosh's \-J option
+The \fBrelay\fP subcommand is normally launched by goblin-skiff's \-J option
 over SSH. It binds an unprivileged UDP socket, generates an independent
 authentication key, prints \fBMOSH RELAY 1 SUITE BIND_IP PORT KEY\fP, detaches,
 and relays only authenticated packets to a single fixed numeric destination.
@@ -142,7 +142,7 @@ set of UTF-8.
 .TP
 .B \-R \fISPEC\fP
 Request a remote TCP forward. See
-.BR goblin-mosh (1)
+.BR goblin-skiff (1)
 for the format.
 
 .TP
@@ -169,22 +169,22 @@ sending.
 Cap forwarded stream payload bytes per second.
 
 .SH ENVIRONMENT VARIABLES
-These variables allow server-side configuration of Mosh's behavior.
+These variables allow server-side configuration of Skiff's behavior.
 They may be set by administrators in system login/rc files,
 /etc/login.conf, or similar mechanisms, or users in their shell's
-login/rc files.  \fBgoblin-mosh-server\fP passes these variables to the login
+login/rc files.  \fBgoblin-skiff-server\fP passes these variables to the login
 session and shell that it starts, but changing them there will have no
 effect.
 
 .TP
 .B MOSH_SERVER_NETWORK_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBgoblin-mosh-server\fP will wait to receive an update from
+long (in seconds) \fBgoblin-skiff-server\fP will wait to receive an update from
 the
-client before exiting.  Since \fPmosh\fP is very useful for mobile
+client before exiting.  Since \fBSkiff\fP is very useful for mobile
 clients with intermittent operation and connectivity, we suggest
 setting this variable to a high value, such as 604800 (one week) or
-2592000 (30 days).  Otherwise, \fBgoblin-mosh-server\fP will wait
+2592000 (30 days).  Otherwise, \fBgoblin-skiff-server\fP will wait
 indefinitely for a client to reappear.  This variable is somewhat
 similar to the \fBTMOUT\fP variable found in many Bourne shells.
 However, it is not a login-session inactivity timeout; it only applies
@@ -193,14 +193,14 @@ to network connectivity.
 .TP
 .B MOSH_SERVER_SIGNAL_TMOUT
 If this variable is set to a positive integer number, it specifies how
-long (in seconds) \fBgoblin-mosh-server\fP will ignore SIGUSR1 while waiting
+long (in seconds) \fBgoblin-skiff-server\fP will ignore SIGUSR1 while waiting
 to receive an update from the client.  Otherwise, \fBSIGUSR1\fP will
-always terminate \fBgoblin-mosh-server\fP.  Users and administrators may
-implement scripts to clean up disconnected Mosh sessions.  With this
+always terminate \fBgoblin-skiff-server\fP.  Users and administrators may
+implement scripts to clean up disconnected Skiff sessions.  With this
 variable set, a user or administrator can issue
 
 .nf
-$ pkill -SIGUSR1 goblin-mosh-server
+$ pkill -SIGUSR1 goblin-skiff-server
 .fi
 
 to kill disconnected sessions without killing connected login
@@ -209,11 +209,11 @@ sessions.
 .TP
 .B MOSH_STREAM_DELAY
 Default forwarded-stream coalescing delay in milliseconds. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_CLIENT_TERM
-Client terminal type supplied by the \fBgoblin-mosh\fP wrapper. The server uses
+Client terminal type supplied by the \fBgoblin-skiff\fP wrapper. The server uses
 this value as \fBTERM\fP for the login session. If it is unset or empty, the
 server falls back to \fBxterm\fP or \fBxterm\-256color\fP based on the detected
 color count.
@@ -228,15 +228,15 @@ output as reliable bytes. Only advertise this when the client supports it.
 .TP
 .B MOSH_STREAM_BANDWIDTH
 Default forwarded-stream payload-byte-per-second cap. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_STATE_ZSTD_DICT
 Path to a zstd dictionary file to use for this server process. Files
 produced by
-.BR goblin-mosh-compile-dictionary (1)
+.BR goblin-skiff-compile-dictionary (1)
 are stored compressed with zstd level 22 and are decompressed before
-use. The \fBmosh\fP wrapper sets this to a temporary uploaded copy
+use. The \fBgoblin-skiff\fP wrapper sets this to a temporary uploaded copy
 when \fB\-\-state\-zstd\-dict\fP is used.
 
 .TP
@@ -249,29 +249,30 @@ server-side.
 .SH EXAMPLE
 
 .nf
-$ goblin-mosh-server
+$ goblin-skiff-server
 
 MOSH CONNECT 60001 UAkFedSsVJs2LfMeKyQB5g
 
-goblin-mosh-server (mosh 1.1)
+goblin-skiff-server 1.4.0-goblin20260915.1 (goblin-skiff 1.4.0)
 [...] (copyright notice omitted)
 
-[goblin-mosh-server detached, pid = 20443]
+[goblin-skiff-server detached, pid = 20443]
 .fi
 
 .SH SEE ALSO
-.BR goblin-mosh (1),
-.BR goblin-mosh-client (1),
-.BR goblin-moshcp (1),
-.BR goblin-mosh-compile-dictionary (1).
+.BR mosh (1),
+.BR goblin-skiff (1),
+.BR goblin-skiff-client (1),
+.BR goblin-skiffcp (1),
+.BR goblin-skiff-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org
 
 .SH AUTHOR
-mosh was written by Keith Winstein <mosh-devel@mit.edu>.
+Upstream Mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS
-Please report bugs to \fImosh-devel@mit.edu\fP. Users may also subscribe
+For upstream Mosh discussion, users may subscribe to
 to the
 .nh
 .I mosh-users@mit.edu

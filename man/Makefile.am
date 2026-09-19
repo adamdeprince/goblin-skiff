@@ -1,11 +1,11 @@
 dist_man_MANS =
 
-dist_man_MANS += goblin-moshcp.1 goblin-mosh-compile-dictionary.1
+dist_man_MANS += goblin-skiffcp.1 goblin-skiff-compile-dictionary.1
 
 if BUILD_CLIENT
-  dist_man_MANS += goblin-mosh.1 goblin-mosh-client.1
+  dist_man_MANS += goblin-skiff.1 goblin-skiff-client.1
 endif
 
 if BUILD_SERVER
-  dist_man_MANS += goblin-mosh-server.1
+  dist_man_MANS += goblin-skiff-server.1
 endif

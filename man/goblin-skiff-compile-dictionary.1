@@ -1,21 +1,21 @@
 .\"                                      Hey, EMACS: -*- nroff -*-
-.TH GOBLIN-MOSH-COMPILE-DICTIONARY 1 "May 2026"
+.TH GOBLIN-SKIFF-COMPILE-DICTIONARY 1 "September 19, 2026"
 .SH NAME
-goblin-mosh-compile-dictionary \- build a zstd dictionary for Mosh state updates
+goblin-skiff-compile-dictionary \- build a zstd dictionary for Skiff state updates
 .SH SYNOPSIS
-.B goblin-mosh-compile-dictionary
+.B goblin-skiff-compile-dictionary
 \-\-input=\fIFILE\fP
 \-\-output=\fIFILE\fP
 [\-\-dict-size=\fIBYTES\fP]
 [\-\-max-samples=\fIN\fP]
 .br
-.B goblin-mosh-compile-dictionary
+.B goblin-skiff-compile-dictionary
 [\fIoptions\fP]
 \fIINPUT\fP
 \fIOUTPUT\fP
 .SH DESCRIPTION
-\fBgoblin-mosh-compile-dictionary\fP reads a Mosh state sample log produced by
-\fBgoblin-mosh --state-sample-log\fP and trains a zstd dictionary for later
+\fBgoblin-skiff-compile-dictionary\fP reads a Skiff state sample log produced by
+\fBgoblin-skiff --state-sample-log\fP and trains a zstd dictionary for later
 terminal state compression. The output dictionary file is compressed
 with zstd level 22.
 
@@ -24,9 +24,9 @@ a zstd-compressed framed format. It can include terminal contents and
 should be treated as sensitive.
 
 Use the generated dictionary with
-.BR "goblin-mosh --state-zstd-dict=" "FILE" .
+.BR "goblin-skiff --state-zstd-dict=" "FILE" .
 The wrapper uploads the dictionary over SSH during setup, and the
-server decompresses it and uses it for that Mosh session only.
+server decompresses it and uses it for that Skiff session only.
 .SH OPTIONS
 .TP
 .B \-\-input=\fIFILE\fP
@@ -42,11 +42,12 @@ Maximum dictionary size. The default is 65536 bytes.
 Train from at most \fIN\fP samples. The default, 0, means all samples.
 .SH EXAMPLE
 .nf
-$ goblin-mosh --state-sample-log=emacs.samples.zst host
-$ goblin-mosh-compile-dictionary --input=emacs.samples.zst --output=emacs.dict
-$ goblin-mosh --state-zstd-dict=emacs.dict host
+$ goblin-skiff --state-sample-log=emacs.samples.zst host
+$ goblin-skiff-compile-dictionary --input=emacs.samples.zst --output=emacs.dict
+$ goblin-skiff --state-zstd-dict=emacs.dict host
 .fi
 .SH SEE ALSO
-.BR goblin-mosh (1),
-.BR goblin-mosh-client (1),
-.BR goblin-mosh-server (1).
+.BR mosh (1),
+.BR goblin-skiff (1),
+.BR goblin-skiff-client (1),
+.BR goblin-skiff-server (1).

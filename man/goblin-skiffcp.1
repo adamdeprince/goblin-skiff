@@ -1,50 +1,50 @@
 .\"                                      Hey, EMACS: -*- nroff -*-
-.TH GOBLIN-MOSHCP 1 "May 2026"
+.TH GOBLIN-SKIFFCP 1 "September 19, 2026"
 .SH NAME
-goblin-moshcp \- transfer files over an active Mosh session
+goblin-skiffcp \- transfer files over an active Skiff session
 .SH SYNOPSIS
-.B goblin-moshcp
+.B goblin-skiffcp
 .B send
 [\fIoptions\fP]
 \fISOURCE\fP...
 .br
-.B goblin-moshcp
+.B goblin-skiffcp
 .B receive
 [\fIoptions\fP]
 [\fIDEST\fP|\fIDESTDIR\fP]
 .SH DESCRIPTION
-\fBgoblin-moshcp\fP transfers files over an already-running
-.BR goblin-mosh (1)
+\fBgoblin-skiffcp\fP transfers files over an already-running
+.BR goblin-skiff (1)
 session. It uses a local Unix-domain control socket exposed by
-\fBgoblin-mosh-client\fP or \fBgoblin-mosh-server\fP, then sends bulk datagrams over
-the existing encrypted and authenticated Mosh UDP connection.
+\fBgoblin-skiff-client\fP or \fBgoblin-skiff-server\fP, then sends bulk datagrams over
+the existing encrypted and authenticated Skiff UDP connection.
 
-\fBgoblin-moshcp\fP is intended for hostile or expensive networks where a
+\fBgoblin-skiffcp\fP is intended for hostile or expensive networks where a
 small, paced, forward-error-corrected transfer is preferable to opening
 a second transport. The default rate is conservative so terminal
 traffic remains usable while a transfer is running.
 
-Run \fBgoblin-moshcp receive\fP on one side of the Mosh session and
-\fBgoblin-moshcp send\fP on the other. The receiver writes to a temporary file
+Run \fBgoblin-skiffcp receive\fP on one side of the Skiff session and
+\fBgoblin-skiffcp send\fP on the other. The receiver writes to a temporary file
 and renames it into place after the file has been decoded. Multiple
-files and recursive directories are sent as one goblin-moshcp archive payload.
+files and recursive directories are sent as one goblin-skiffcp archive payload.
 
 .SH EXAMPLES
 
 .nf
-remote$ goblin-moshcp receive .
-local$  goblin-moshcp send --rate=2k --redundancy=20% ./archive.tar
+remote$ goblin-skiffcp receive .
+local$  goblin-skiffcp send --rate=2k --redundancy=20% ./archive.tar
 .fi
 
 Only for custom builds with RaptorQ enabled on both endpoints:
 .nf
-remote$ goblin-moshcp receive /tmp/output.bin
-local$  goblin-moshcp send --fec=raptorq --rate=1500 ./output.bin
+remote$ goblin-skiffcp receive /tmp/output.bin
+local$  goblin-skiffcp send --fec=raptorq --rate=1500 ./output.bin
 .fi
 
 .nf
-remote$ goblin-moshcp receive --multi incoming
-local$  goblin-moshcp send -r -p -z --zstd-level=22 --rate=1500 photos notes.txt
+remote$ goblin-skiffcp receive --multi incoming
+local$  goblin-skiffcp send -r -p -z --zstd-level=22 --rate=1500 photos notes.txt
 .fi
 
 .SH COMMANDS
@@ -71,10 +71,10 @@ output path.
 
 .TP
 .B \-\-socket=\fIPATH\fP
-Connect to a specific goblin-moshcp control socket. By default,
-\fBgoblin-moshcp\fP uses
+Connect to a specific goblin-skiffcp control socket. By default,
+\fBgoblin-skiffcp\fP uses
 .B GOBLIN_MOSHCP_SOCK
-if it is set, otherwise the latest goblin-moshcp control socket in the
+if it is set, otherwise the latest goblin-skiffcp control socket in the
 user's runtime directory.
 
 .TP
@@ -108,13 +108,13 @@ datagrams. The default is 512 bytes.
 .TP
 .B \-\-transfer\-id=\fIHEX\fP
 Use or accept only a specific transfer id. This is useful when several
-goblin-moshcp transfers share the same Mosh session and a receiver should be
+goblin-skiffcp transfers share the same Skiff session and a receiver should be
 pinned to one sender.
 
 .TP
 .B \-\-multi
 Keep
-.B goblin-moshcp receive
+.B goblin-skiffcp receive
 running after one transfer completes and track multiple simultaneous
 transfer ids. Without this option, the receiver exits after the first
 completed transfer.
@@ -122,7 +122,7 @@ completed transfer.
 .TP
 .B \-r, \-\-recursive
 Allow directory sources. Directories are walked recursively and sent as
-a goblin-moshcp archive payload.
+a goblin-skiffcp archive payload.
 
 .TP
 .B \-p, \-\-preserve
@@ -151,15 +151,15 @@ very slow uplinks, but they are CPU and memory intensive.
 Suppress periodic progress output. Errors are still reported.
 
 .SH DISCOVERY
-\fBgoblin-mosh-client\fP and \fBgoblin-mosh-server\fP expose a local control socket
+\fBgoblin-skiff-client\fP and \fBgoblin-skiff-server\fP expose a local control socket
 and set
 .B GOBLIN_MOSHCP_SOCK
 for processes they start when possible. A fallback symlink named
-\fBgoblin-moshcp.latest\fP is also created in the user's runtime directory.
+\fBgoblin-skiffcp.latest\fP is also created in the user's runtime directory.
 
 This discovery model is intentionally simple. It can point at the
-wrong Mosh connection if a shell is preserved by a multiplexer such as
-\fBtmux\fP after one Mosh client disconnects and another connects. This
+wrong Skiff connection if a shell is preserved by a multiplexer such as
+\fBtmux\fP after one Skiff client disconnects and another connects. This
 is similar to stale SSH agent forwarding state; use
 \fB\-\-socket\fP when the automatic choice is ambiguous.
 
@@ -172,28 +172,29 @@ carry lightweight counters for received symbols, duplicate symbols,
 and requested repair symbols. Finish datagrams report final status.
 
 Bulk datagrams are separate from terminal state datagrams but use the
-same Mosh encryption and authentication. Mosh sends bulk output only
+same Skiff encryption and authentication. Skiff sends bulk output only
 when no reliable terminal or stream-forwarding data is queued, and
 schedules it conservatively so large transfers do not intentionally
-fill slow queues. If a bulk datagram is larger than the current Mosh
-path-MTU payload budget, Mosh rejects it instead of handing it to UDP
+fill slow queues. If a bulk datagram is larger than the current Skiff
+path-MTU payload budget, Skiff rejects it instead of handing it to UDP
 fragmentation; reduce
 .B \-\-symbol\-size
 if this happens.
 
 .SH SEE ALSO
-.BR goblin-mosh (1),
-.BR goblin-mosh-client (1),
-.BR goblin-mosh-server (1).
+.BR mosh (1),
+.BR goblin-skiff (1),
+.BR goblin-skiff-client (1),
+.BR goblin-skiff-server (1).
 
 Project home page:
 .I https://mosh.org
 
 .br
 .SH AUTHOR
-mosh was written by Keith Winstein <mosh-devel@mit.edu>.
+Upstream Mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS
-Please report bugs to \fImosh-devel@mit.edu\fP. Users may also subscribe
+For upstream Mosh discussion, users may subscribe to
 to the
 .nh
 .I mosh-users@mit.edu

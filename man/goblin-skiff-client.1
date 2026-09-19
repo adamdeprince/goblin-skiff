@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH-CLIENT 1 "September 15, 2026"
+.TH GOBLIN-SKIFF-CLIENT 1 "September 19, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,10 +16,10 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-goblin-mosh-client \- client-side helper for mosh
+goblin-skiff-client \- client-side helper for Goblin Skiff
 .SH SYNOPSIS
 MOSH_KEY=KEY
-.B goblin-mosh-client
+.B goblin-skiff-client
 [\-v]
 [\-A]
 [\-X]
@@ -32,34 +32,34 @@ MOSH_KEY=KEY
 [\-\-state-sample-log=\fIFILE\fP]
 IP PORT
 .br
-.B goblin-mosh-client
+.B goblin-skiff-client
 \-c
 .SH DESCRIPTION
 .B \-\-image\-codecs
 prints supported image transport codecs and exits. The wrapper uses this
 query to negotiate palette/DjVu support with the server.
 .PP
-\fBgoblin-mosh-client\fP is a helper program for the
-.BR goblin-mosh (1)
+\fBgoblin-skiff-client\fP is a helper program for the
+.BR goblin-skiff (1)
 remote terminal application.
 
-\fBmosh\fP itself is a setup script that establishes an SSH
-connection, runs the server-side helper \fBgoblin-mosh-server\fP,
+\fBgoblin-skiff\fP itself is a setup script that establishes an SSH
+connection, runs the server-side helper \fBgoblin-skiff-server\fP,
 and collects the server's port number and session key.
 
-\fBgoblin-mosh\fP then executes \fBgoblin-mosh-client\fP with the server's IP
-address, port, and session key. \fBgoblin-mosh-client\fP runs for
+\fBgoblin-skiff\fP then executes \fBgoblin-skiff-client\fP with the server's IP
+address, port, and session key. \fBgoblin-skiff-client\fP runs for
 the lifetime of the connection.
 
-The 22-byte base64 session key given by \fBgoblin-mosh-server\fP is supplied
+The 22-byte base64 session key given by \fBgoblin-skiff-server\fP is supplied
 in the MOSH_KEY environment variable. This represents a 128-bit AES
 key that protects the integrity and confidentiality of the session.
 
 For constructing new setup wrappers for remote execution facilities
-other than SSH, it may be necessary to invoke \fBgoblin-mosh-client\fP
+other than SSH, it may be necessary to invoke \fBgoblin-skiff-client\fP
 directly.
 
-With the \-c option, \fBgoblin-mosh-client\fP instead prints the number of
+With the \-c option, \fBgoblin-skiff-client\fP instead prints the number of
 colors
 of the terminal given by the TERM environment variable.
 
@@ -139,13 +139,13 @@ be used with \fB-c\fP to verify local support before remote setup.
 .TP
 .B \-L \fISPEC\fP
 Request a local TCP forward. See
-.BR goblin-mosh (1)
+.BR goblin-skiff (1)
 for the format.
 
 .TP
 .B \-D \fISPEC\fP
 Request a local SOCKS5 dynamic forward. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B \-A
@@ -177,7 +177,7 @@ negotiated.
 .B \-\-state\-zstd\-dict=\fIFILE\fP
 Use \fIFILE\fP as the local zstd dictionary for state updates. Files
 produced by
-.BR goblin-mosh-compile-dictionary (1)
+.BR goblin-skiff-compile-dictionary (1)
 are stored compressed with zstd level 22 and are decompressed before
 use. This only enables dictionary compression if the peer advertises
 the same dictionary id.
@@ -186,7 +186,7 @@ the same dictionary id.
 .B \-\-state\-sample\-log=\fIFILE\fP
 Write received, uncompressed state samples to \fIFILE\fP in the framed
 zstd-compressed format consumed by
-.BR goblin-mosh-compile-dictionary (1).
+.BR goblin-skiff-compile-dictionary (1).
 The file can contain terminal contents and should be treated as
 sensitive.
 
@@ -200,27 +200,27 @@ Only log received state samples at least this large. The default is 0.
 .B MOSH_KEY
 This variable must be set, and must contain a Base64-encoded cryptographic
 key from
-.BR goblin-mosh-server (1).
+.BR goblin-skiff-server (1).
 
 .TP
 .B MOSH_ESCAPE_KEY
 See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_PREDICTION_DISPLAY
 Controls local echo as described in
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_PREDICTION_OVERWRITE
 Controls local echo insert/overwrite as described in
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_TITLE_NOPREFIX
 See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B DISPLAY
@@ -232,47 +232,48 @@ is enabled.
 .B XAUTHORITY
 Local X authority file used for MIT-MAGIC-COOKIE-1 rewriting when
 .B \-X
-is enabled. If unset, \fBgoblin-mosh-client\fP tries
+is enabled. If unset, \fBgoblin-skiff-client\fP tries
 .IR ~/.Xauthority .
 
 .TP
 .B MOSH_STREAM_DELAY
 Default forwarded-stream coalescing delay in milliseconds. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_STREAM_BANDWIDTH
 Default forwarded-stream payload-byte-per-second cap. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_STATE_ZSTD_DICT
 Default zstd state dictionary file. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_STATE_SAMPLE_LOG
 Default state sample log path. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .TP
 .B MOSH_STATE_SAMPLE_MIN_SIZE
 Default minimum serialized state sample size to log. See
-.BR goblin-mosh (1).
+.BR goblin-skiff (1).
 
 .SH SEE ALSO
-.BR goblin-mosh (1),
-.BR goblin-mosh-server (1),
-.BR goblin-moshcp (1),
-.BR goblin-mosh-compile-dictionary (1).
+.BR mosh (1),
+.BR goblin-skiff (1),
+.BR goblin-skiff-server (1),
+.BR goblin-skiffcp (1),
+.BR goblin-skiff-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org
 
 .SH AUTHOR
-mosh was written by Keith Winstein <mosh-devel@mit.edu>.
+Upstream Mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS
-Please report bugs to \fImosh-devel@mit.edu\fP. Users may also subscribe
+For upstream Mosh discussion, users may subscribe to
 to the
 .nh
 .I mosh-users@mit.edu

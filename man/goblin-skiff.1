@@ -2,7 +2,7 @@
 .\" First parameter, NAME, should be all caps
 .\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
 .\" other parameters are allowed: see man(7), man(1)
-.TH GOBLIN-MOSH 1 "September 15, 2026"
+.TH GOBLIN-SKIFF 1 "September 19, 2026"
 .\" Please adjust this date whenever revising the manpage.
 .\"
 .\" Some roff macros, for reference:
@@ -16,30 +16,32 @@
 .\" .sp <n>    insert n+1 empty lines
 .\" for manpage-specific macros, see man(7)
 .SH NAME
-goblin-mosh \- mobile shell with roaming and intelligent local echo
+goblin-skiff \- mobile shell with roaming and intelligent local echo
 .SH SYNOPSIS
-.B goblin-mosh
+.B goblin-skiff
 .RI [ options ]
 [--]
 [user@]host
 [command...]
 .SH DESCRIPTION
-\fBmosh\fP (mobile shell) is a remote terminal application that
+Goblin Skiff is a fork of Mosh, optimized for bandwidth-constrained links.
+.PP
+\fBgoblin-skiff\fP (mobile shell) is a remote terminal application that
 supports intermittent connectivity, allows roaming, and provides
 speculative local echo and line editing of user keystrokes.
 
-Compared with \fBssh\fP, \fBmosh\fP is more robust \(em its
+Compared with \fBssh\fP, \fBgoblin-skiff\fP is more robust \(em its
 connections stay up across sleeps and changes in the client's IP
 address \(em and more responsive, because the protocol is tolerant of
 packet loss and the client can echo most keystrokes immediately,
 without waiting for a network round-trip.
 
-\fBmosh\fP uses \fBssh\fP to establish a connection to the remote host
+\fBgoblin-skiff\fP uses \fBssh\fP to establish a connection to the remote host
 and authenticate with existing means (e.g., public-key authentication
-or a password). \fBgoblin-mosh\fP executes the unprivileged
-\fBgoblin-mosh-server\fP
+or a password). \fBgoblin-skiff\fP executes the unprivileged
+\fBgoblin-skiff-server\fP
 helper program on the server, then closes the SSH connection and
-starts the \fBgoblin-mosh-client\fP, which establishes a long-lived datagram
+starts the \fBgoblin-skiff-client\fP, which establishes a long-lived datagram
 connection over UDP.
 
 The wrapper displays both endpoint release versions on connection. Goblin
@@ -55,43 +57,43 @@ This lets remote applications detect client capabilities such as the Kitty
 graphics protocol advertised by \fBxterm\-ghostty\fP. The corresponding
 terminfo entry must be installed on the remote host.
 
-To improve responsiveness, \fBgoblin-mosh\fP runs a predictive model of the
+To improve responsiveness, \fBgoblin-skiff\fP runs a predictive model of the
 server's behavior in the background, trying to guess the effect of
 each keystroke on the screen. It makes predictions for normal typing,
 backspace, and the left- and right-arrow keys. When it is confident,
-\fBgoblin-mosh\fP displays the predictions without waiting for the
+\fBgoblin-skiff\fP displays the predictions without waiting for the
 server. The predictive model must prove itself anew on each row of the
-terminal and after each control character, so \fBmosh\fP avoids
+terminal and after each control character, so \fBgoblin-skiff\fP avoids
 echoing passwords or non-echoing editor commands.
 
-By default, \fBmosh\fP shows its predictions only on high-latency
+By default, \fBgoblin-skiff\fP shows its predictions only on high-latency
 connections and to smooth out network glitches. (On longer-latency
 links, the predicted cells are underlined until confirmed by the
 server.) Occasional echo mistakes are corrected within a network
 round-trip and do not cause lasting effect.
 
-\fBmosh\fP does not support sshfs. This build includes experimental
+\fBgoblin-skiff\fP does not support sshfs. This build includes experimental
 stream forwarding for local TCP forwards, remote TCP forwards, SOCKS5
 dynamic forwards, SSH agent forwarding, and basic X11 forwarding.
-\fBmosh\fP works through typical client-side network address
+\fBgoblin-skiff\fP works through typical client-side network address
 translators but requires UDP to pass between client and server. By
-default, \fBmosh\fP uses the ports between 60000 and 61000, but allows
+default, \fBgoblin-skiff\fP uses the ports between 60000 and 61000, but allows
 the user to request a particular UDP port instead.
 
-Currently, \fBmosh\fP has limited support for IPv6, dual-stack
+Currently, \fBgoblin-skiff\fP has limited support for IPv6, dual-stack
 networks, and servers with multiple addresses.  At session start, it
 will select a single IPv4 or IPv6 server address to connect to for the
 lifetime of the session.
 
-\fBmosh\fP will do its best to arrange a UTF-8 character set locale on
+\fBgoblin-skiff\fP will do its best to arrange a UTF-8 character set locale on
 the client and server. The client must have locale-related environment
-variables that specify UTF-8. \fBmosh\fP will pass these client
-variables to the \fBgoblin-mosh-server\fP on its command line, but in most
-cases they will not need to be used. \fBgoblin-mosh-server\fP first attempts
+variables that specify UTF-8. \fBgoblin-skiff\fP will pass these client
+variables to the \fBgoblin-skiff-server\fP on its command line, but in most
+cases they will not need to be used. \fBgoblin-skiff-server\fP first attempts
 to use its own locale-related environment variables, which come from
 the system default configuration (sometimes /etc/default/locale) or
 from having been passed over the SSH connection. But if these
-variables don't call for the use of UTF-8, \fBgoblin-mosh-server\fP will
+variables don't call for the use of UTF-8, \fBgoblin-skiff-server\fP will
 apply the locale-related environment variables from the client and try
 again.
 
@@ -117,19 +119,19 @@ Subsequent hops require normal UDP reachability. Not compatible with
 
 The association is recreated after proxy disconnection without resetting
 session keys or screen state. Datagrams are not queued while disconnected.
-An idle association adds no periodic heartbeat beyond normal Mosh
-keepalives. Tailscale's own background traffic is outside Mosh's accounting.
+An idle association adds no periodic heartbeat beyond normal Skiff
+keepalives. Tailscale's own background traffic is outside Skiff's accounting.
 This is distinct from \-D, which provides TCP-only dynamic forwarding.
 
 .nf
-goblin-mosh \-\-socks5-proxy=127.0.0.1:1055 user@host
+goblin-skiff \-\-socks5-proxy=127.0.0.1:1055 user@host
 .fi
 
 .TP
 .B \-J \fI[user@]host[:port][,...]\fP, \-\-jump=\fIHOSTS\fP
-Route both SSH setup and the encrypted Mosh UDP session through one to four
+Route both SSH setup and the encrypted Skiff UDP session through one to four
 jump hosts. OpenSSH ProxyJump configuration (including nested first-hop
-aliases and \-J in \-\-ssh) is also discovered. The updated goblin-mosh-server
+aliases and \-J in \-\-ssh) is also discovered. The updated goblin-skiff-server
 must be installed on every jump and the destination. The client requires UDP
 reachability only to the first jump; each jump must reach the next over UDP.
 No SSH connection remains in the data path. This is not arbitrary UDP port
@@ -142,14 +144,14 @@ options are not. Custom \-\-ssh commands must support OpenSSH \-G.
 Arbitrary ProxyCommand programs are not translated to UDP relay routes.
 
 Each relay uses an independent authentication key and sees only the inner
-encrypted Mosh packets, not the terminal session key. Client address changes
+encrypted Skiff packets, not the terminal session key. Client address changes
 are accepted only after a newer authenticated packet. Outer framing adds
 24 bytes per hop, or 36 bytes with \-\-fips-crypto; both endpoints budget for
 this overhead. FIPS mode must be available on every jump too.
 
 .TP
 .B \-\-jump\-server=\fICOMMAND\fP
-Server command on all jump hosts (default: goblin-mosh-server).
+Server command on all jump hosts (default: goblin-skiff-server).
 Separate from \-\-server on the final destination.
 
 .TP
@@ -188,12 +190,12 @@ Retention of graphics in history depends on the local terminal.
 
 .PP
 Options named \fB \-\-experimental-*\fP are subject to change or
-removal in future versions of Mosh; their design or function is not
+removal in future versions of Skiff; their design or function is not
 yet final.
 
 .TP
 .B \fIcommand\fP
-Command to run on remote host. By default, \fBmosh\fP executes a login shell.
+Command to run on remote host. By default, \fBgoblin-skiff\fP executes a login shell.
 
 .TP
 .B \-\-lossy=\fIQUALITY\fP
@@ -212,11 +214,11 @@ is independent of \fB\-\-lossy\fP and does not affect WebP quality.
 
 .TP
 .B \-\-client=\fIPATH\fP
-path to client helper on local machine (default: "goblin-mosh-client")
+path to client helper on local machine (default: "goblin-skiff-client")
 
 .TP
 .B \-\-server=\fICOMMAND\fP
-command to run server helper on remote machine (default: "goblin-mosh-server")
+command to run server helper on remote machine (default: "goblin-skiff-server")
 
 The server helper is unprivileged and can be installed in the user's
 home directory.
@@ -225,24 +227,24 @@ This option can be used to set environment variables for the server by
 using the
 .BR env (1)
 command to wrap the actual server command.  See
-.BR goblin-mosh-server (1)
+.BR goblin-skiff-server (1)
 for available environment variables.
 
 .TP
 .B \-\-tmux\-control
 Negotiate reliable passthrough for \fBtmux -CC\fP integration with the local
 terminal (for example, iTerm2). Both endpoints must support this feature.
-Run \fBgoblin-mosh --tmux-control host -- tmux -CC new-session -A -s main\fP,
+Run \fBgoblin-skiff --tmux-control host -- tmux -CC new-session -A -s main\fP,
 or launch \fBtmux -CC\fP later from the remote shell. The unframed \fB-C\fP
 interface is not supported by this option.
 
 The control protocol uses the existing encrypted and compressed transport.
 All bytes must be delivered, which can use more bandwidth than screen diffs.
 Pending queues apply backpressure at 64 KiB plus at most one PTY read.
-Prediction, status overlays, and Mosh escape-key shortcuts are suspended during
+Prediction, status overlays, and Skiff escape-key shortcuts are suspended during
 control mode; detach using the local terminal's tmux integration. Normal screen
 rendering resumes after detach. Temporary network loss and roaming remain
-supported; restarting the Mosh client requires a new tmux attachment.
+supported; restarting the Skiff client requires a new tmux attachment.
 
 .TP
 .B \-\-no\-downloads
@@ -251,12 +253,12 @@ terminal probes. When enabled, OSC 777 goblin-download requests are forwarded
 to a supporting Goblin parent terminal, otherwise translated to Kitty file
 transfer if supported, otherwise an automatic prompt asks to save to local
 Downloads. Press y to select Save, then Enter after the confirmation appears.
-Enter defaults to declining; n always declines. The Mosh escape prefix followed
+Enter defaults to declining; n always declines. The Skiff escape prefix followed
 by 0 (normally Ctrl-^ then 0) hides or reopens the
 pending offer. Pasted text cannot approve a download.
 Forwarding creates no intermediate copy; the parent handles permission and
 storage. A parent refusal is final, not a trigger for another save prompt.
-This requires support from both Mosh endpoints. Files use binary zstd level
+This requires support from both Skiff endpoints. Files use binary zstd level
 22 compression over the background FEC path, below terminal and socket traffic.
 The local fallback never overwrites existing files. Kitty owns its filesystem
 semantics; reported collisions are given a suffix before payload is sent.
@@ -281,13 +283,13 @@ does not confirm the suite. Provider-generated GCM IVs add 12 bytes to each UDP
 datagram compared with the default OCB framing.
 
 This mode is a building block for a future FIPS-compliant deployment; it is not
-by itself a claim that \fBgoblin-mosh\fP or the surrounding system is FIPS
+by itself a claim that \fBgoblin-skiff\fP or the surrounding system is FIPS
 compliant. The OpenSSL module and configuration, entropy source, SSH bootstrap,
 operating environment, and operational controls must be assessed separately.
 
 .TP
 .B \-\-ssh=\fICOMMAND\fP
-OpenSSH command to remotely execute goblin-mosh-server on the remote machine
+OpenSSH command to remotely execute goblin-skiff-server on the remote machine
 (default: "ssh")
 
 An alternate ssh port can be specified with, \fIe.g.\fP, \-\-ssh="ssh \-p 2222".
@@ -307,7 +309,7 @@ and can also be `always` or `never'.
 The MOSH_PREDICTION_DISPLAY environment variable controls this setting
 permanently and can adopt the same three values.
 
-Even on `always', \fBmosh\fP will only show predictions when it is
+Even on `always', \fBgoblin-skiff\fP will only show predictions when it is
 confident. This generally means a previous prediction on the same row
 of the terminal has been confirmed by the server, without any
 intervening control character keystrokes.
@@ -334,11 +336,11 @@ Synonym for \-\-predict\-overwrite
 
 .TP
 .B \-\-family=inet
-Only use IPv4 for the SSH connection and Mosh session.
+Only use IPv4 for the SSH connection and Skiff session.
 
 .TP
 .B \-\-family=inet6
-Only use IPv6 for the SSH connection and Mosh session.  This and the
+Only use IPv6 for the SSH connection and Skiff session.  This and the
 following modes require Perl's IO::Socket::IP or IO::Socket::INET6
 modules.
 
@@ -346,7 +348,7 @@ modules.
 .B \-\-family=auto
 Autodetect IPv4 or IPv6 for hosts that only have addresses
 in a single family.  Hosts with both IPv4 and IPv6 addresses will
-raise an error, and require re-invocation of \fBmosh\fP with another
+raise an error, and require re-invocation of \fBgoblin-skiff\fP with another
 \fB\-\-family\fP option.
 
 .TP
@@ -380,32 +382,32 @@ Use a particular server-side UDP port or port range,
 for example, if this is the
 only port that is forwarded through a firewall to the
 server. With \fB\-p 0\fP, the server will let the operating system pick an
-available UDP port. Otherwise, \fBmosh\fP will choose a port between 60000 and
+available UDP port. Otherwise, \fBgoblin-skiff\fP will choose a port between 60000 and
 61000. Please note that this option does not affect the server-side
 port used by SSH.
 
 .TP
 .B \-L [\fIBIND\fP:]\fIPORT\fP:\fIHOST\fP:\fIHOSTPORT\fP
-Forward a local TCP port to the remote side of the Mosh session. This
+Forward a local TCP port to the remote side of the Skiff session. This
 is similar to OpenSSH's
 .B \-L
-option: connections accepted on the client are carried over the Mosh
+option: connections accepted on the client are carried over the Skiff
 UDP connection and opened from the server side to
 \fIHOST\fP:\fIHOSTPORT\fP.
 
 .TP
 .B \-R [\fIBIND\fP:]\fIPORT\fP:\fIHOST\fP:\fIHOSTPORT\fP
-Forward a remote TCP port to the local side of the Mosh session. This
+Forward a remote TCP port to the local side of the Skiff session. This
 is similar to OpenSSH's
 .B \-R
-option: connections accepted by \fBgoblin-mosh-server\fP are carried over the
-Mosh UDP connection and opened from the client side to
+option: connections accepted by \fBgoblin-skiff-server\fP are carried over the
+Skiff UDP connection and opened from the client side to
 \fIHOST\fP:\fIHOSTPORT\fP.
 
 .TP
 .B \-D [\fIBIND\fP:]\fIPORT\fP
 Open a local SOCKS5 dynamic forward. SOCKS connections accepted on the
-client are carried over the Mosh UDP connection and opened from the
+client are carried over the Skiff UDP connection and opened from the
 server side.
 
 .TP
@@ -434,7 +436,7 @@ or
 .TP
 .B \-\-stream\-delay=\fIMS\fP
 Coalesce forwarded stream bytes for up to \fIMS\fP milliseconds before
-sending a Mosh datagram. The default is 75 ms. Raising this value can
+sending a Skiff datagram. The default is 75 ms. Raising this value can
 reduce packet overhead on very slow links; lowering it can improve
 latency for interactive forwarded connections.
 
@@ -457,7 +459,7 @@ so older peers remain compatible.
 .B \-\-state\-zstd\-dict=\fIFILE\fP
 Use \fIFILE\fP as a zstd dictionary for terminal state updates. The
 dictionary file is normally produced by
-.BR goblin-mosh-compile-dictionary (1)
+.BR goblin-skiff-compile-dictionary (1)
 and stored compressed with zstd level 22. The wrapper uploads the
 compressed dictionary file to the server over SSH during setup. The
 server decompresses it, uses it for this session, and removes the
@@ -469,7 +471,7 @@ id.
 .B \-\-state\-sample\-log=\fIFILE\fP
 Write received, uncompressed terminal state samples to \fIFILE\fP in a
 zstd-compressed framed format suitable for
-.BR goblin-mosh-compile-dictionary (1).
+.BR goblin-skiff-compile-dictionary (1).
 This file can contain terminal contents and should be treated as
 sensitive.
 
@@ -480,9 +482,9 @@ Only log received state samples at least this large. The default is 0.
 Terminal screen updates and keystrokes are highest priority. X11 and
 SSH agent forwarding are medium priority and use a separate stream
 token bucket from local, remote, and SOCKS5 TCP forwarding, which are
-low priority. Mosh emits at most one forwarded stream event per
+low priority. Skiff emits at most one forwarded stream event per
 reliable send opportunity and caps forwarded stream chunks below the
-path-MTU payload budget. \fBgoblin-moshcp\fP bulk datagrams are sent only
+path-MTU payload budget. \fBgoblin-skiffcp\fP bulk datagrams are sent only
 when no reliable terminal or stream-forwarding data is queued.
 
 .PP
@@ -500,7 +502,7 @@ heartbeat.
 
 .TP
 .B \-\-bind\-server={ssh|any|\fIIP\fP}
-Control the IP address that the \fBgoblin-mosh-server\fP binds to.
+Control the IP address that the \fBgoblin-skiff-server\fP binds to.
 
 The default is `ssh', in which case the server will reply from the IP
 address that the SSH connection came from (as found in the
@@ -536,14 +538,14 @@ is a compatibility alias for \fB\-\-alternate\-screen\fP.
 
 .TP
 .B \-\-local
-Invoke \fBgoblin-mosh-server\fP locally, without using \fBssh\fP.  This
+Invoke \fBgoblin-skiff-server\fP locally, without using \fBssh\fP.  This
 option requires the \fBhost\fP argument to be a local, numeric
 IPv4/IPv6 address.  This option is useful for testing.
 
 .TP
 .B \-\-experimental\-remote\-ip={proxy|local|remote}
 Select the method used to discover the IP address that the
-\fBgoblin-mosh-client\fP connects to.
+\fBgoblin-skiff-client\fP connects to.
 
 The default is \fBproxy\fP, which uses SSH's
 .B \-\-ssh\-proxy\-command
@@ -561,15 +563,15 @@ where \fBssh\fP forwarding is used, or the
 .B \-\-ssh\-proxy\-command
 option is used for other purposes.
 
-With \fBlocal\fP, Mosh resolves the hostname given on its command
-line, and uses that address for both \fBssh\fP and Mosh connections.
+With \fBlocal\fP, Skiff resolves the hostname given on its command
+line, and uses that address for both \fBssh\fP and Skiff connections.
 This option ignores any configuration in
 .B ssh_config
 for the same hostname.
 
 .SH ESCAPE SEQUENCES
 
-The default escape character used by Mosh is ASCII RS (decimal 30).
+The default escape character used by Skiff is ASCII RS (decimal 30).
 This is typically typed as \fBCtrl-^\fP or \fBCtrl-Shift-6\fP, on US
 English keyboards.  Users of non-English keyboards may find it
 difficult or impossible to type the default escape character, and may
@@ -583,7 +585,7 @@ whether the escape character is printable or not.
 If the escape character is a printable character, it must be prefixed
 with a newline, similar to \fBOpenSSH\fP.  To send the escape character
 itself, type it twice.  If the escape character is set to \fB~\fP,
-\fBmosh\fP will behave much like \fBOpenSSH\fP.
+\fBgoblin-skiff\fP will behave much like \fBOpenSSH\fP.
 
 If the escape character is a non-printable control character, no
 prefix is used and the escape character is recognized at any time.  To
@@ -645,7 +647,7 @@ Limits are 64 GiB per file, one million entries and 64 path components.
 Both endpoints need a build with librsync 2.3+ and OpenSSL 3. The capability
 is negotiated once as file-sync-v1. Configure with --with-librsync to require
 support, or --without-librsync for browsing only. This does not change the
-separate goblin-moshcp command protocol.
+separate goblin-skiffcp command protocol.
 .SS Adaptive link pacing
 Supporting peers negotiate independent outgoing send budgets once at setup.
 Each direction starts conservatively at 240 IP bytes/second and adjusts using
@@ -667,7 +669,7 @@ use this pacer instead of their legacy fixed 20 ms per-symbol delay.
 Feedback itself is capped to a quarter of the outgoing budget, so a fast
 incoming stream cannot crowd out keyboard input on a slow reverse path.
 The stream-bandwidth option remains a manual forwarding ceiling; otherwise
-forwarding follows its local directional estimate. The goblin-moshcp rate
+forwarding follows its local directional estimate. The goblin-skiffcp rate
 option remains an additional ceiling; rate=0 still obeys session pacing.
 Older peers retain their existing transport behavior and non-watching browser.
 
@@ -690,7 +692,7 @@ overrides this variable.
 
 .TP
 .B MOSH_TITLE_NOPREFIX
-When set, inhibits prepending "[goblin-mosh]" to window title.
+When set, inhibits prepending "[goblin-skiff]" to window title.
 
 .TP
 .B MOSH_STREAM_DELAY
@@ -706,37 +708,38 @@ Default payload-byte-per-second cap for forwarded stream traffic. The
 command-line option overrides this value.
 
 .SH FILE TRANSFER
-\fBgoblin-moshcp\fP transfers files over an active Mosh session using adjacent
+\fBgoblin-skiffcp\fP transfers files over an active Skiff session using adjacent
 bulk datagrams on the same encrypted and authenticated UDP connection.
 Bulk datagrams are lowest priority and are scheduled only when
 terminal updates and forwarded streams are idle. Oversized bulk
 datagrams are rejected instead of being handed to UDP fragmentation.
 
-Start the receiver on one side of the Mosh session and the sender on
+Start the receiver on one side of the Skiff session and the sender on
 the other:
 
 .nf
-remote$ goblin-moshcp receive .
-local$  goblin-moshcp send --rate=2k --redundancy=20% file.bin
+remote$ goblin-skiffcp receive .
+local$  goblin-skiffcp send --rate=2k --redundancy=20% file.bin
 .fi
 
 See
-.BR goblin-moshcp (1)
+.BR goblin-skiffcp (1)
 for details.
 
 .SH SEE ALSO
-.BR goblin-mosh-client (1),
-.BR goblin-mosh-server (1),
-.BR goblin-moshcp (1),
-.BR goblin-mosh-compile-dictionary (1).
+.BR mosh (1),
+.BR goblin-skiff-client (1),
+.BR goblin-skiff-server (1),
+.BR goblin-skiffcp (1),
+.BR goblin-skiff-compile-dictionary (1).
 
 Project home page:
 .I https://mosh.org
 
 .SH AUTHOR
-mosh was written by Keith Winstein <mosh-devel@mit.edu>.
+Upstream Mosh was written by Keith Winstein <mosh-devel@mit.edu>.
 .SH BUGS
-Please report bugs to \fImosh-devel@mit.edu\fP. Users may also subscribe
+For upstream Mosh discussion, users may subscribe to
 to the
 .nh
 .I mosh-users@mit.edu
