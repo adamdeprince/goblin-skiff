@@ -7,7 +7,7 @@ repository, not a Fedora, Rocky or Red Hat endorsed package. The binaries use
 each release's system libraries; do not mix Fedora and Enterprise Linux RPMs.
 Rocky builds need EPEL and CRB for dependencies. Only x86_64 is built here.
 
-Prepare a source distribution with `make distdir`. Exclude the untracked
+Prepare a source distribution with `make distdir`. Exclude
 product HTML, Git metadata, signing material and host configuration. Create
 `snapshot.tar.gz` with a single `goblin-skiff/` directory, including this spec
 and the build recipes. Copy `Containerfile`, `goblin-skiff.spec` and
