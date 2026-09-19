@@ -162,7 +162,7 @@ their own final directory and report the final basename through the chain.
 - Filesystem work runs in a separate process. A filesystem operation that does
   not respond within 30 seconds fails the transfer, without blocking the screen.
 - The existing local destination directory defaults to `$HOME/Downloads`.
-  `goblin-skiff --download-directory=DIR host` (or the local `MOSH_DOWNLOAD_DIR`
+  `goblin-skiff --download-directory=DIR host` (or the local `GOBLIN_SKIFF_DOWNLOAD_DIR`
   environment variable) selects another directory. This path is never supplied
   by the remote program. These options affect only local fallback, not a parent
   terminal's filesystem. `--no-downloads` disables the feature for a connection.

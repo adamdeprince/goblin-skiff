@@ -68,8 +68,8 @@ def session(kitty, sixel, sizing, escape_exit=False, palette_djvu=True):
     assert match, bootstrap.stdout
     server_pid = int(re.search(rb"detached, pid = (\d+)", bootstrap.stderr)[1])
     relay = module.Relay(int(match[1]))
-    env.update(MOSH_KEY=match[2].decode(), MOSH_SIXEL_STATE="1", MOSH_COMPACT_KEEPALIVE="1",
-               MOSH_MASCOT="none", MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
+    env.update(MOSH_KEY=match[2].decode(), GOBLIN_SKIFF_SIXEL_STATE="1", GOBLIN_SKIFF_COMPACT_KEEPALIVE="1",
+               GOBLIN_SKIFF_MASCOT="none", MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 640, 5120, 512))
     process = subprocess.Popen([client, "127.0.0.1", str(relay.socket.getsockname()[1])], env=env,

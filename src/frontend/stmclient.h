@@ -66,10 +66,10 @@ private:
   Terminal::TmuxControlParser tmux_parser;
   Mascot::Splash mascot;
   bool graphics_sent = false;
-  bool sixel_state = getenv( "MOSH_SIXEL_STATE" ) && !strcmp( getenv( "MOSH_SIXEL_STATE" ), "1" );
-  bool mime_negotiated = getenv( "MOSH_CLIPBOARD" ) && !strcmp( getenv( "MOSH_CLIPBOARD" ), "1" );
+  bool sixel_state = getenv( "GOBLIN_SKIFF_SIXEL_STATE" ) && !strcmp( getenv( "GOBLIN_SKIFF_SIXEL_STATE" ), "1" );
+  bool mime_negotiated = getenv( "GOBLIN_SKIFF_CLIPBOARD" ) && !strcmp( getenv( "GOBLIN_SKIFF_CLIPBOARD" ), "1" );
   bool mime_enabled = false;
-  bool downloads_enabled = getenv( "MOSH_DOWNLOADS" ) && !strcmp( getenv( "MOSH_DOWNLOADS" ), "1" );
+  bool downloads_enabled = getenv( "GOBLIN_SKIFF_DOWNLOADS" ) && !strcmp( getenv( "GOBLIN_SKIFF_DOWNLOADS" ), "1" );
   Download::Receiver downloads { Download::downloads_directory(), crypto_mode };
   Clipboard::Endpoint mime_clipboard { false };
   Terminal::Osc5522InputFilter mime_input {};
@@ -155,9 +155,9 @@ public:
     : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ), key( s_key ? s_key : "" ),
       crypto_mode( s_crypto_mode ), compact_keepalive( s_compact_keepalive ),
       tmux_control( s_tmux_control ), tmux_parser(), mascot( mascot_format, allow_kitty, allow_sixel ),
-      control_panel( getenv( "MOSH_DIRECTORY" ) && ( !strcmp( getenv( "MOSH_DIRECTORY" ), "1" ) || !strcmp( getenv( "MOSH_DIRECTORY" ), "2" ) ),
-                     getenv( "MOSH_DIRECTORY" ) && !strcmp( getenv( "MOSH_DIRECTORY" ), "2" ) ),
-      files( false, !s_tmux_control && getenv( "MOSH_FILES" ) && !strcmp( getenv( "MOSH_FILES" ), "1" ), s_crypto_mode ), escape_key( 0x1E ),
+      control_panel( getenv( "GOBLIN_SKIFF_DIRECTORY" ) && ( !strcmp( getenv( "GOBLIN_SKIFF_DIRECTORY" ), "1" ) || !strcmp( getenv( "GOBLIN_SKIFF_DIRECTORY" ), "2" ) ),
+                     getenv( "GOBLIN_SKIFF_DIRECTORY" ) && !strcmp( getenv( "GOBLIN_SKIFF_DIRECTORY" ), "2" ) ),
+      files( false, !s_tmux_control && getenv( "GOBLIN_SKIFF_FILES" ) && !strcmp( getenv( "GOBLIN_SKIFF_FILES" ), "1" ), s_crypto_mode ), escape_key( 0x1E ),
       escape_pass_key( '^' ), escape_pass_key2( '^' ), escape_requires_lf( false ), escape_key_help( L"?" ),
       saved_termios(), raw_termios(), window_size(), local_framebuffer( 1, 1 ), new_state( 1, 1 ), overlays(),
       network(), display( true, allow_kitty ) /* use TERM environment var to initialize display */,

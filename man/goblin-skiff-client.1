@@ -88,7 +88,7 @@ this option to proxy SSH startup; invoking the client alone does not do SSH.
 
 .TP
 .B \-\-udp\-relay
-Use the comma-separated independent relay keys in MOSH_RELAY_KEYS, ordered
+Use the comma-separated independent relay keys in GOBLIN_SKIFF_RELAY_KEYS, ordered
 nearest-to-farthest (one to four hops). IP and PORT name the first relay;
 MOSH_KEY remains the final destination's key. The client consumes and unsets
 the key environment variables. This option is normally supplied by the
@@ -251,12 +251,12 @@ Default zstd state dictionary file. See
 .BR goblin-skiff (1).
 
 .TP
-.B MOSH_STATE_SAMPLE_LOG
+.B GOBLIN_SKIFF_STATE_SAMPLE_LOG
 Default state sample log path. See
 .BR goblin-skiff (1).
 
 .TP
-.B MOSH_STATE_SAMPLE_MIN_SIZE
+.B GOBLIN_SKIFF_STATE_SAMPLE_MIN_SIZE
 Default minimum serialized state sample size to log. See
 .BR goblin-skiff (1).
 

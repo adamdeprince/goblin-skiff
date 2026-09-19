@@ -100,7 +100,7 @@ static void print_usage( FILE* file, const char* argv0 )
            "       --no-sixel disables local sixel graphics and detection\n"
            "       --image-codecs lists supported image transport codecs and exits\n"
            "       --connection-version reports release, build and compatibility protocol and exits\n"
-           "       --udp-relay uses MOSH_RELAY_KEYS supplied by the wrapper's -J route\n"
+           "       --udp-relay uses GOBLIN_SKIFF_RELAY_KEYS supplied by the wrapper's -J route\n"
            "       --socks5-proxy=HOST:PORT carries UDP through a SOCKS5 proxy (proxy DNS)\n"
            "       Ctrl-^ then 0 opens or resumes the local file browser\n",
            argv0,
@@ -174,14 +174,14 @@ int main( int argc, char* argv[] )
   unsigned int stream_delay_ms = uint_from_env( "MOSH_STREAM_DELAY", 75 );
   unsigned int stream_rate_bytes_per_second = uint_from_env( "MOSH_STREAM_BANDWIDTH", 0 );
   std::string state_zstd_dictionary = string_from_env( "MOSH_STATE_ZSTD_DICT" );
-  std::string state_sample_log = string_from_env( "MOSH_STATE_SAMPLE_LOG" );
-  unsigned int state_sample_min_size = uint_from_env( "MOSH_STATE_SAMPLE_MIN_SIZE", 0 );
-  bool compact_keepalive = bool_from_env( "MOSH_COMPACT_KEEPALIVE", false );
+  std::string state_sample_log = string_from_env( "GOBLIN_SKIFF_STATE_SAMPLE_LOG" );
+  unsigned int state_sample_min_size = uint_from_env( "GOBLIN_SKIFF_STATE_SAMPLE_MIN_SIZE", 0 );
+  bool compact_keepalive = bool_from_env( "GOBLIN_SKIFF_COMPACT_KEEPALIVE", false );
   bool tmux_control = false;
   bool color_count = false;
   bool udp_relay = false;
   std::string socks5_proxy;
-  std::string mascot_format = string_from_env( "MOSH_MASCOT" );
+  std::string mascot_format = string_from_env( "GOBLIN_SKIFF_MASCOT" );
   bool show_mascot = false;
   bool allow_kitty = true, allow_sixel = true;
   Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB;
@@ -369,10 +369,10 @@ int main( int argc, char* argv[] )
   /* can be NULL */
 
   std::string key( env_key );
-  std::string relay_keys = string_from_env( "MOSH_RELAY_KEYS" );
-  unsetenv( "MOSH_RELAY_KEYS" );
+  std::string relay_keys = string_from_env( "GOBLIN_SKIFF_RELAY_KEYS" );
+  unsetenv( "GOBLIN_SKIFF_RELAY_KEYS" );
   if ( udp_relay != !relay_keys.empty() ) {
-    fputs( "--udp-relay requires MOSH_RELAY_KEYS (set by the goblin-skiff wrapper).\n", stderr );
+    fputs( "--udp-relay requires GOBLIN_SKIFF_RELAY_KEYS (set by the goblin-skiff wrapper).\n", stderr );
     exit( 1 );
   }
 

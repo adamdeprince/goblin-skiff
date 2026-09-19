@@ -127,7 +127,7 @@ before launching the client. The local binary is preflighted with
 `--udp-relay -c`; the destination must acknowledge the exact hop count so an
 older binary cannot accidentally send oversized packets.
 
-The wrapper supplies `--udp-relay` and `MOSH_RELAY_KEYS=KEY1,KEY2,...` to the
+The wrapper supplies `--udp-relay` and `GOBLIN_SKIFF_RELAY_KEYS=KEY1,KEY2,...` to the
 client, ordered nearest to farthest. It keeps `MOSH_KEY` as the destination's
 end-to-end key. Keys are never command-line arguments. The client consumes
 and unsets these environment variables. Duplicate hop keys are rejected.

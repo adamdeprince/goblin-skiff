@@ -103,12 +103,12 @@ my $remote_state_zstd_dict = undef;
 my $uploaded_state_zstd_dict = 0;
 my $client_term = $ENV{ 'TERM' };
 my $tmux_control = 0;
-my $mascot = $ENV{ 'MOSH_MASCOT' } // 'auto';
+my $mascot = $ENV{ 'GOBLIN_SKIFF_MASCOT' } // 'auto';
 my $no_kitty = 0;
 my $no_sixel = 0;
 my $lossy_quality = undef;
 my $djvu_lossy = 0;
-my $clipboard_fast_threshold = $ENV{ 'MOSH_CLIPBOARD_FAST_THRESHOLD' } // 65536;
+my $clipboard_fast_threshold = $ENV{ 'GOBLIN_SKIFF_CLIPBOARD_FAST_THRESHOLD' } // 65536;
 my $no_downloads = 0;
 my $download_directory = undef;
 my $server_directory = 0;
@@ -391,10 +391,10 @@ if ( defined $port_request ) {
 }
 
 delete $ENV{ 'MOSH_PREDICTION_DISPLAY' };
-delete $ENV{ 'MOSH_COMPACT_KEEPALIVE' };
-delete $ENV{ 'MOSH_LINK_BUDGET' };
+delete $ENV{ 'GOBLIN_SKIFF_COMPACT_KEEPALIVE' };
+delete $ENV{ 'GOBLIN_SKIFF_LINK_BUDGET' };
 delete $ENV{ 'MOSH_NO_TERM_INIT' };
-delete $ENV{ 'MOSH_RELAY_KEYS' };
+delete $ENV{ 'GOBLIN_SKIFF_RELAY_KEYS' };
 delete $ENV{ 'MOSH_RELAY_HOPS' };
 
 my $userhost;
@@ -850,7 +850,7 @@ if ( $pid == 0 ) { # child
       ( $ip, $port ) = ( $relay_ip, $relay_port );
       unshift @keys, $relay_key;
     }
-    $ENV{ 'MOSH_RELAY_KEYS' } = join ',', @keys;
+    $ENV{ 'GOBLIN_SKIFF_RELAY_KEYS' } = join ',', @keys;
     warn "$0: Skiff UDP route: " . join( ' -> ', @jumps, $userhost ) . "\n";
   }
 
@@ -859,23 +859,23 @@ if ( $pid == 0 ) { # child
     die "$0: remote server did not negotiate the requested tmux control mode.\n";
   }
   $ENV{ 'MOSH_KEY' } = $key;
-  $ENV{ 'MOSH_MASCOT' } = $mascot;
-  $ENV{ 'MOSH_DIRECTORY' } = $server_directory;
-  $ENV{ 'MOSH_FILES' } = $server_files;
-  $ENV{ 'MOSH_LINK_BUDGET' } = $server_link_budget;
-  $ENV{ 'MOSH_SIXEL_STATE' } = $server_sixel_state ? '1' : '0';
-  $ENV{ 'MOSH_CLIPBOARD' } = $server_clipboard ? '1' : '0';
-  $ENV{ 'MOSH_CLIPBOARD_FAST_THRESHOLD' } = $clipboard_fast_threshold;
-  $ENV{ 'MOSH_DOWNLOADS' } = $server_downloads && !$no_downloads ? '1' : '0';
-  $ENV{ 'MOSH_DOWNLOAD_DIR' } = $download_directory if defined $download_directory;
+  $ENV{ 'GOBLIN_SKIFF_MASCOT' } = $mascot;
+  $ENV{ 'GOBLIN_SKIFF_DIRECTORY' } = $server_directory;
+  $ENV{ 'GOBLIN_SKIFF_FILES' } = $server_files;
+  $ENV{ 'GOBLIN_SKIFF_LINK_BUDGET' } = $server_link_budget;
+  $ENV{ 'GOBLIN_SKIFF_SIXEL_STATE' } = $server_sixel_state ? '1' : '0';
+  $ENV{ 'GOBLIN_SKIFF_CLIPBOARD' } = $server_clipboard ? '1' : '0';
+  $ENV{ 'GOBLIN_SKIFF_CLIPBOARD_FAST_THRESHOLD' } = $clipboard_fast_threshold;
+  $ENV{ 'GOBLIN_SKIFF_DOWNLOADS' } = $server_downloads && !$no_downloads ? '1' : '0';
+  $ENV{ 'GOBLIN_SKIFF_DOWNLOAD_DIR' } = $download_directory if defined $download_directory;
   $ENV{ 'MOSH_PREDICTION_DISPLAY' } = $predict;
   $ENV{ 'MOSH_NO_TERM_INIT' } = '1' if !$term_init;
   $ENV{ 'MOSH_STREAM_DELAY' } = $stream_delay if defined $stream_delay;
   $ENV{ 'MOSH_STREAM_BANDWIDTH' } = $stream_bandwidth if defined $stream_bandwidth;
   $ENV{ 'MOSH_STATE_ZSTD_DICT' } = $state_zstd_dict if defined $state_zstd_dict;
-  $ENV{ 'MOSH_STATE_SAMPLE_LOG' } = $state_sample_log if defined $state_sample_log;
-  $ENV{ 'MOSH_STATE_SAMPLE_MIN_SIZE' } = $state_sample_min_size if defined $state_sample_min_size;
-  $ENV{ 'MOSH_COMPACT_KEEPALIVE' } = '1' if $compact_keepalive;
+  $ENV{ 'GOBLIN_SKIFF_STATE_SAMPLE_LOG' } = $state_sample_log if defined $state_sample_log;
+  $ENV{ 'GOBLIN_SKIFF_STATE_SAMPLE_MIN_SIZE' } = $state_sample_min_size if defined $state_sample_min_size;
+  $ENV{ 'GOBLIN_SKIFF_COMPACT_KEEPALIVE' } = '1' if $compact_keepalive;
   my @client_forwarding;
   for ( @local_forwards ) {
     push @client_forwarding, ( '-L', $_ );

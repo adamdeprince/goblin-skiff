@@ -535,7 +535,7 @@ int Receiver::wait_time( uint64_t now, int pacing_wait ) const
 
 std::string downloads_directory()
 {
-  const char* configured = getenv( "MOSH_DOWNLOAD_DIR" );
+  const char* configured = getenv( "GOBLIN_SKIFF_DOWNLOAD_DIR" );
   if ( configured && *configured ) { return configured; }
   const char* user_home = getenv( "HOME" );
   if ( user_home && *user_home ) { return std::string( user_home ) + "/Downloads"; }

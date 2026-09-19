@@ -78,7 +78,7 @@ std::string runtime_dir( void )
   }
 
   char fallback[128];
-  snprintf( fallback, sizeof fallback, "/tmp/goblin-moshcp-%ld", static_cast<long>( getuid() ) );
+  snprintf( fallback, sizeof fallback, "/tmp/goblin-skiffcp-%ld", static_cast<long>( getuid() ) );
   if ( mkdir( fallback, 0700 ) < 0 && errno != EEXIST ) {
     throw std::runtime_error( std::string( "mkdir: " ) + strerror( errno ) );
   }
@@ -156,9 +156,9 @@ ControlServer::ControlServer( const std::string& role )
 {
   const std::string dir = runtime_dir();
   char pathbuf[256];
-  snprintf( pathbuf, sizeof pathbuf, "%s/goblin-moshcp-%s-%ld.sock", dir.c_str(), role.c_str(), static_cast<long>( getpid() ) );
+  snprintf( pathbuf, sizeof pathbuf, "%s/goblin-skiffcp-%s-%ld.sock", dir.c_str(), role.c_str(), static_cast<long>( getpid() ) );
   path = pathbuf;
-  latest_path = dir + "/goblin-moshcp.latest";
+  latest_path = dir + "/goblin-skiffcp.latest";
 
   listen_fd = socket( AF_UNIX, SOCK_STREAM, 0 );
   if ( listen_fd < 0 ) {
@@ -386,9 +386,9 @@ bool ControlClient::recv( Datagram& datagram )
 
 std::string Network::Bulk::discover_control_socket( void )
 {
-  const char* env = getenv( "GOBLIN_MOSHCP_SOCK" );
+  const char* env = getenv( "GOBLIN_SKIFF_CP_SOCK" );
   if ( env && *env ) {
     return env;
   }
-  return runtime_dir() + "/goblin-moshcp.latest";
+  return runtime_dir() + "/goblin-skiffcp.latest";
 }

@@ -27,7 +27,7 @@ dnf -y install "$goblin_rpm"
 /usr/bin/goblin-skiff-server --version
 mkdir -m 700 /build/installed-runtime
 export XDG_RUNTIME_DIR=/build/installed-runtime
-export GOBLIN_TEST_CLIENT=/usr/bin/goblin-skiff-client GOBLIN_TEST_SERVER=/usr/bin/goblin-skiff-server
+export GOBLIN_SKIFF_TEST_CLIENT=/usr/bin/goblin-skiff-client GOBLIN_SKIFF_TEST_SERVER=/usr/bin/goblin-skiff-server
 goblin_integration=$(find /build/rpmbuild/BUILD -path '*/src/tests/control-panel-integration.py' -type f)
 test "$(printf '%s\n' "$goblin_integration" | wc -l)" -eq 1
 cd "$(dirname "$goblin_integration")"

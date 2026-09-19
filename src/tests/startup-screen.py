@@ -19,9 +19,9 @@ import tty
 
 BUILD = Path.cwd()
 SCRIPT = Path(__file__).resolve()
-CLIENT = os.environ.get("GOBLIN_MOSH_TEST_CLIENT", str((BUILD / "../frontend/goblin-skiff-client").resolve()))
-SERVER = os.environ.get("GOBLIN_MOSH_TEST_SERVER", str((BUILD / "../frontend/goblin-skiff-server").resolve()))
-WRAPPER = os.environ.get("GOBLIN_MOSH_TEST_WRAPPER", str((BUILD / "../../scripts/goblin-skiff").resolve()))
+CLIENT = os.environ.get("GOBLIN_SKIFF_TEST_CLIENT", str((BUILD / "../frontend/goblin-skiff-client").resolve()))
+SERVER = os.environ.get("GOBLIN_SKIFF_TEST_SERVER", str((BUILD / "../frontend/goblin-skiff-server").resolve()))
+WRAPPER = os.environ.get("GOBLIN_SKIFF_TEST_WRAPPER", str((BUILD / "../../scripts/goblin-skiff").resolve()))
 KITTY_QUERY = b"\x1b_Gi=4294967294,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
 READY = b"remote-startup-ready"
 SOURCE_NOTICE = b"[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/goblin-skiff]\r\n"
@@ -53,12 +53,12 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
     rows, columns = (terminal.rows, terminal.columns) if terminal else (24, 80)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, columns * 10, rows * 20))
     env = os.environ.copy()
-    env.update(TERM="xterm-256color", MOSH_MASCOT="auto")
+    env.update(TERM="xterm-256color", GOBLIN_SKIFF_MASCOT="auto")
     env.pop("TMUX", None)
     env.pop("MOSH_ESCAPE_KEY", None)
     if escape_key is not None:
         env["MOSH_ESCAPE_KEY"] = escape_key
-    python = os.environ.get("GOBLIN_TEST_PYTHON", sys.executable)
+    python = os.environ.get("GOBLIN_SKIFF_TEST_PYTHON", sys.executable)
     argv = command(options, [python, str(SCRIPT), "--remote-graphics" if graphics else "--remote"])
     proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
                             env=env, start_new_session=True,
@@ -192,7 +192,7 @@ def kitty_layout():
         print("startup-screen: Kitty unavailable; native layout subtest skipped")
         return
     env = os.environ.copy()
-    env["GOBLIN_TEST_PYTHON"] = sys.executable
+    env["GOBLIN_SKIFF_TEST_PYTHON"] = sys.executable
     # Packaged Kitty may run Python with -O; keep assertions in this test.
     code = (f"import sys; sys.argv = [{str(SCRIPT)!r}, '--kitty-layout-inside']; "
             f"exec(compile(open({str(SCRIPT)!r}, 'rb').read(), {str(SCRIPT)!r}, 'exec', optimize=0), "

@@ -131,7 +131,7 @@ public:
     int pipefd[2];
     require( pipe( pipefd ) == 0, "relay pipe" );
     const auto port = std::to_string( target.port() );
-    const char* server = getenv( "GOBLIN_TEST_SERVER" );
+    const char* server = getenv( "GOBLIN_SKIFF_TEST_SERVER" );
     if ( !server ) { server = "../frontend/goblin-skiff-server"; }
     child = fork();
     require( child >= 0, "relay fork" );

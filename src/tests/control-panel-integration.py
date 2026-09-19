@@ -96,8 +96,8 @@ def children(pid):
 
 def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, confirm=False, udp_hops=0, socks5=False):
     build = Path.cwd()
-    client = os.environ.get("GOBLIN_TEST_CLIENT", str((build / "../frontend/goblin-skiff-client").resolve()))
-    server = os.environ.get("GOBLIN_TEST_SERVER", str((build / "../frontend/goblin-skiff-server").resolve()))
+    client = os.environ.get("GOBLIN_SKIFF_TEST_CLIENT", str((build / "../frontend/goblin-skiff-client").resolve()))
+    server = os.environ.get("GOBLIN_SKIFF_TEST_SERVER", str((build / "../frontend/goblin-skiff-server").resolve()))
     # Keep session socket paths below sockaddr_un.sun_path on macOS too.
     with tempfile.TemporaryDirectory(prefix="goblin-panel-", dir="/tmp") as root:
         directory = Path(root)
@@ -162,7 +162,7 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 assert banner[:4] == [b"MOSH", b"RELAY", b"1", b"ocb-aes128"], banner[:4]
                 port = int(banner[5])
                 jump_keys.insert(0, banner[6].decode())
-            env["MOSH_RELAY_KEYS"] = ",".join(jump_keys)
+            env["GOBLIN_SKIFF_RELAY_KEYS"] = ",".join(jump_keys)
         relay = Relay(port, fast=speed)
         proxy = None
         proxy_args = []
@@ -173,10 +173,10 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
             # workload. Malformed-packet flooding is tested independently.
             proxy = Proxy(restart=True, loss=False, noisy=False)
             proxy_args = ["--socks5-proxy=" + proxy.endpoint]
-        env.update(MOSH_KEY=match[2].decode(), MOSH_DIRECTORY="2", MOSH_COMPACT_KEEPALIVE="1",
-                   MOSH_FILES="1" if file_sync else "0",
-                   MOSH_LINK_BUDGET="1" if adaptive else "0",
-                   MOSH_MASCOT="none", MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
+        env.update(MOSH_KEY=match[2].decode(), GOBLIN_SKIFF_DIRECTORY="2", GOBLIN_SKIFF_COMPACT_KEEPALIVE="1",
+                   GOBLIN_SKIFF_FILES="1" if file_sync else "0",
+                   GOBLIN_SKIFF_LINK_BUDGET="1" if adaptive else "0",
+                   GOBLIN_SKIFF_MASCOT="none", MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 800, 480))
         proc = subprocess.Popen([client] + (["--udp-relay"] if udp_hops else []) + proxy_args

@@ -73,7 +73,7 @@ output path.
 .B \-\-socket=\fIPATH\fP
 Connect to a specific goblin-skiffcp control socket. By default,
 \fBgoblin-skiffcp\fP uses
-.B GOBLIN_MOSHCP_SOCK
+.B GOBLIN_SKIFF_CP_SOCK
 if it is set, otherwise the latest goblin-skiffcp control socket in the
 user's runtime directory.
 
@@ -153,7 +153,7 @@ Suppress periodic progress output. Errors are still reported.
 .SH DISCOVERY
 \fBgoblin-skiff-client\fP and \fBgoblin-skiff-server\fP expose a local control socket
 and set
-.B GOBLIN_MOSHCP_SOCK
+.B GOBLIN_SKIFF_CP_SOCK
 for processes they start when possible. A fallback symlink named
 \fBgoblin-skiffcp.latest\fP is also created in the user's runtime directory.
 

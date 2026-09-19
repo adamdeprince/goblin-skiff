@@ -380,7 +380,7 @@ Usage
     remote$ goblin-skiffcp receive .
     local$  goblin-skiffcp send --rate=2k --redundancy=20% ./file.bin
 
-  `goblin-skiffcp` discovers the active session through `GOBLIN_MOSHCP_SOCK` or the
+  `goblin-skiffcp` discovers the active session through `GOBLIN_SKIFF_CP_SOCK` or the
   latest `goblin-skiffcp.latest` control socket in the user's runtime directory.  This is intended
   for the normal "one active Skiff session" case; like SSH agent forwarding,
   it can point at the wrong session if a shell survives across tmux or
@@ -451,7 +451,7 @@ Usage
   outside screen-state synchronization. Local-to-remote traffic, text/plain
   clipboard content and interactive replies use the high-priority lane.
   Large, volunteered remote non-text writes use the background lane. Set
-  `MOSH_CLIPBOARD_FAST_THRESHOLD` in bytes on the client to change the default
+  `GOBLIN_SKIFF_CLIPBOARD_FAST_THRESHOLD` in bytes on the client to change the default
   64 KiB cutoff. These terminal extensions do not imply support for every
   Kitty protocol extension.
 

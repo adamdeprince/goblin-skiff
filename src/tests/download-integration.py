@@ -133,8 +133,8 @@ def session(enabled, allow=True, parent="local", actual_kitty=False):
         assert match, bootstrap.stdout
         server_pid = int(re.search(rb"detached, pid = (\d+)", bootstrap.stderr)[1])
         relay = module.Relay(int(match[1]))
-        env.update(MOSH_KEY=match[2].decode(), MOSH_SIXEL_STATE="1", MOSH_DOWNLOADS=str(int(enabled)),
-                   MOSH_DOWNLOAD_DIR=root, MOSH_COMPACT_KEEPALIVE="1", MOSH_MASCOT="none",
+        env.update(MOSH_KEY=match[2].decode(), GOBLIN_SKIFF_SIXEL_STATE="1", GOBLIN_SKIFF_DOWNLOADS=str(int(enabled)),
+                   GOBLIN_SKIFF_DOWNLOAD_DIR=root, GOBLIN_SKIFF_COMPACT_KEEPALIVE="1", GOBLIN_SKIFF_MASCOT="none",
                    MOSH_PREDICTION_DISPLAY="never", MOSH_NO_TERM_INIT="1")
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 800, 480))

@@ -101,7 +101,7 @@ It checks legacy and Kitty command keys (including press-only mode, repeats,
 releases, alternate codes and lock modifiers), custom/disabled escape prefixes,
 paste protection, literal/unknown commands and quitting with the popup open.
 Alt-0 is verified to pass through to the remote application. Set
-`GOBLIN_TEST_CLIENT` and `GOBLIN_TEST_SERVER` to test installed binaries.
+`GOBLIN_SKIFF_TEST_CLIENT` and `GOBLIN_SKIFF_TEST_SERVER` to test installed binaries.
 It needs Python 3, loopback UDP, PTYs, and permission to inspect its child
 processes with `ps`.
 
@@ -128,8 +128,8 @@ The client-local source/license notice must appear exactly once and remain
 in the startup history ahead of the mascot; it must not enter remote input.
 The generic emulation comparisons explicitly use `--no-mascot --alternate-screen`
 so their physical row coordinates match the direct-terminal reference.
-To test an installed build, set `GOBLIN_MOSH_TEST_CLIENT`,
-`GOBLIN_MOSH_TEST_SERVER`, and `GOBLIN_MOSH_TEST_WRAPPER` to its executable paths
+To test an installed build, set `GOBLIN_SKIFF_TEST_CLIENT`,
+`GOBLIN_SKIFF_TEST_SERVER`, and `GOBLIN_SKIFF_TEST_WRAPPER` to its executable paths
 and run `python3 startup-screen.py` from the tests directory.
 
 ## sixel-state
@@ -359,7 +359,7 @@ and live keyboard input. Remote-download consent is tested separately.
 `python3 control-panel-integration.py --file-speed` measures a 512 KiB
 incompressible upload and download through real encrypted loopback UDP,
 including cold-start transfer setup. This is not a 10 GbE hardware benchmark.
-Use `--file-speed-confirm` with `GOBLIN_TEST_CLIENT`/`GOBLIN_TEST_SERVER` to
+Use `--file-speed-confirm` with `GOBLIN_SKIFF_TEST_CLIENT`/`GOBLIN_SKIFF_TEST_SERVER` to
 compare an older installed version that still has the copy confirmation.
 `link-budget` also simulates clean fast links, an abrupt downgrade to
 2.4 kbit/s, and continuous foreground traffic with random loss/reordering

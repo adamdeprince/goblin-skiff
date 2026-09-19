@@ -179,7 +179,7 @@ void progress( const Options& options, const std::string& message )
             << "  " << argv0 << " send [options] SOURCE...\n"
             << "  " << argv0 << " receive [options] [DEST|DESTDIR]\n"
             << "\nOptions:\n"
-            << "  --socket=PATH          goblin-skiffcp control socket (default: GOBLIN_MOSHCP_SOCK or goblin-skiffcp.latest)\n"
+            << "  --socket=PATH          goblin-skiffcp control socket (default: GOBLIN_SKIFF_CP_SOCK or goblin-skiffcp.latest)\n"
             << "  --fec=reed-solomon|raptorq  RaptorQ requires a custom build\n"
             << "  --redundancy=PERCENT   initial repair symbols to send (default: 20)\n"
             << "  --rate=BYTES           bulk send rate, 0 for unlimited (default: 2048)\n"

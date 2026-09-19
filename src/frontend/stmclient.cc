@@ -294,7 +294,7 @@ void STMClient::main_init( void )
   network = NetworkPointer(
     new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive, crypto_mode, socks5_proxy ) );
   if ( !relay_keys.empty() ) { network->set_relay_keys( relay_keys ); relay_keys.clear(); }
-  network->enable_link_budget( compact_keepalive && getenv( "MOSH_LINK_BUDGET" ) && !strcmp( getenv( "MOSH_LINK_BUDGET" ), "1" ) );
+  network->enable_link_budget( compact_keepalive && getenv( "GOBLIN_SKIFF_LINK_BUDGET" ) && !strcmp( getenv( "GOBLIN_SKIFF_LINK_BUDGET" ), "1" ) );
 
   if ( !state_sample_log.empty() ) {
     network->set_state_sample_log( state_sample_log, state_sample_min_size );
@@ -350,7 +350,7 @@ void STMClient::main_init( void )
     exit( 1 );
   }
 
-  setenv( "GOBLIN_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true );
+  setenv( "GOBLIN_SKIFF_CP_SOCK", bulk_control.socket_path().c_str(), true );
   if ( verbose ) {
     fprintf( stderr, "goblin-skiffcp control socket: %s\n", bulk_control.socket_path().c_str() );
   }
@@ -797,7 +797,7 @@ bool STMClient::main( void )
       if ( !graphics_sent && mascot.probe_ready( timestamp() ) ) {
         Terminal::ClientGraphics caps( mascot.supports_kitty(), mascot.supports_sixel(), mascot.supports_keyboard(),
                                         mascot.supports_text_sizing(), mime_negotiated && mascot.supports_clipboard() );
-        if ( const char* cutoff = getenv( "MOSH_CLIPBOARD_FAST_THRESHOLD" ) ) {
+        if ( const char* cutoff = getenv( "GOBLIN_SKIFF_CLIPBOARD_FAST_THRESHOLD" ) ) {
           char* end = NULL;
           const unsigned long value = strtoul( cutoff, &end, 10 );
           if ( *cutoff && !*end && value <= Terminal::OSC5522_MAX_TRANSFER ) { caps.clipboard_fast_threshold = value; }

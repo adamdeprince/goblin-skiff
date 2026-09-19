@@ -29,7 +29,7 @@ apt-get install -y --no-install-recommends "$goblin_deb"
 sh packaging/check-prebuilt-fec.sh /usr/bin/goblin-skiffcp > /out/prebuilt-fec.log 2>&1
 mkdir -m 700 /build/installed-runtime
 export XDG_RUNTIME_DIR=/build/installed-runtime
-export GOBLIN_TEST_CLIENT=/usr/bin/goblin-skiff-client GOBLIN_TEST_SERVER=/usr/bin/goblin-skiff-server
+export GOBLIN_SKIFF_TEST_CLIENT=/usr/bin/goblin-skiff-client GOBLIN_SKIFF_TEST_SERVER=/usr/bin/goblin-skiff-server
 cd src/tests
 python3 control-panel-integration.py --files > /out/installed-transfer.log 2>&1
 python3 control-panel-integration.py --udp-relay > /out/installed-relay.log 2>&1

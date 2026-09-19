@@ -11,7 +11,7 @@ import tempfile
 
 
 def log(kind, **values):
-    with open(os.environ["GOBLIN_JUMP_TEST_LOG"], "a") as output:
+    with open(os.environ["GOBLIN_SKIFF_JUMP_TEST_LOG"], "a") as output:
         output.write(json.dumps(dict(kind=kind, **values)) + "\n")
 
 
@@ -22,8 +22,8 @@ def key(host):
 def fake_ssh(args):
     if "-G" in args:
         log("config", args=args)
-        jump = os.environ.get("GOBLIN_JUMP_CONFIG", "none") if args[-1] == "destination" else "none"
-        if args[-1] == "jump-b" and os.environ.get("GOBLIN_JUMP_NESTED") == "1":
+        jump = os.environ.get("GOBLIN_SKIFF_JUMP_CONFIG", "none") if args[-1] == "destination" else "none"
+        if args[-1] == "jump-b" and os.environ.get("GOBLIN_SKIFF_JUMP_NESTED") == "1":
             jump = "jump-a"
         for index, arg in enumerate(args):
             if arg == "-J":
@@ -40,7 +40,7 @@ def fake_ssh(args):
     if words[-3:-1] == ["sh", "-c"]:
         words = shlex.split(words[-1])  # uploaded-dictionary cleanup wrapper
     log("ssh", args=args, host=host, command=command)
-    failure = os.environ.get("GOBLIN_JUMP_FAILURE", "")
+    failure = os.environ.get("GOBLIN_SKIFF_JUMP_FAILURE", "")
     proxy_command = next((arg for arg in args if arg.startswith("ProxyCommand=")), "")
     socks_proxy = "--socks5-proxy=" in proxy_command
     if "MOSH DICT" in command:
@@ -76,7 +76,7 @@ def fake_ssh(args):
             elif any(word.startswith("--lossy=") for word in words):
                 print("MOSH IMAGE webp")
         if failure != "unversioned-server":
-            version = os.environ.get("GOBLIN_TEST_SERVER_VERSION", "1 1.4.0-goblin20260915.1 server-build")
+            version = os.environ.get("GOBLIN_SKIFF_TEST_SERVER_VERSION", "1 1.4.0-goblin20260915.1 server-build")
             print("MOSH VERSION " + version)
             if failure == "duplicate-version":
                 print("MOSH VERSION " + version)
@@ -86,22 +86,22 @@ def fake_ssh(args):
 
 def fake_client(args):
     if "--connection-version" in args:
-        if os.environ.get("GOBLIN_JUMP_FAILURE") == "unversioned-client":
+        if os.environ.get("GOBLIN_SKIFF_JUMP_FAILURE") == "unversioned-client":
             return 1
-        print("MOSH VERSION " + os.environ.get("GOBLIN_TEST_CLIENT_VERSION", "1 1.4.0-goblin20260915.1 client-build"))
+        print("MOSH VERSION " + os.environ.get("GOBLIN_SKIFF_TEST_CLIENT_VERSION", "1 1.4.0-goblin20260915.1 client-build"))
         return 0
     if "--image-codecs" in args:
-        if os.environ.get("GOBLIN_JUMP_FAILURE") == "old-image-client":
+        if os.environ.get("GOBLIN_SKIFF_JUMP_FAILURE") == "old-image-client":
             return 1
         print("webp palette-djvu-v1")
         return 0
     if "-c" in args:
         log("preflight", args=args)
-        if os.environ.get("GOBLIN_JUMP_FAILURE") == "old-client" and ("--udp-relay" in args or any(arg.startswith("--socks5-proxy=") for arg in args)):
+        if os.environ.get("GOBLIN_SKIFF_JUMP_FAILURE") == "old-client" and ("--udp-relay" in args or any(arg.startswith("--socks5-proxy=") for arg in args)):
             return 1
         print("256")
         return 0
-    log("client", args=args, relay_keys=os.environ.get("MOSH_RELAY_KEYS"), key=os.environ.get("MOSH_KEY"))
+    log("client", args=args, relay_keys=os.environ.get("GOBLIN_SKIFF_RELAY_KEYS"), key=os.environ.get("MOSH_KEY"))
     return 0
 
 
@@ -117,14 +117,14 @@ def test():
             path.chmod(0o700)
         logfile = root / "calls.jsonl"
         env = os.environ.copy()
-        env.update(TERM="xterm-256color", GOBLIN_JUMP_TEST_LOG=str(logfile))
-        for name in ("MOSH_RELAY_KEYS", "MOSH_RELAY_HOPS", "GOBLIN_JUMP_CONFIG", "GOBLIN_JUMP_FAILURE", "GOBLIN_JUMP_NESTED",
-                     "GOBLIN_TEST_CLIENT_VERSION", "GOBLIN_TEST_SERVER_VERSION"):
+        env.update(TERM="xterm-256color", GOBLIN_SKIFF_JUMP_TEST_LOG=str(logfile))
+        for name in ("GOBLIN_SKIFF_RELAY_KEYS", "MOSH_RELAY_HOPS", "GOBLIN_SKIFF_JUMP_CONFIG", "GOBLIN_SKIFF_JUMP_FAILURE", "GOBLIN_SKIFF_JUMP_NESTED",
+                     "GOBLIN_SKIFF_TEST_CLIENT_VERSION", "GOBLIN_SKIFF_TEST_SERVER_VERSION"):
             env.pop(name, None)
 
         def run(extra=(), config="none", failure="", ssh_options=(), success=True, diagnostic=None):
             logfile.write_text("")
-            case_env = dict(env, GOBLIN_JUMP_CONFIG=config, GOBLIN_JUMP_FAILURE=failure)
+            case_env = dict(env, GOBLIN_SKIFF_JUMP_CONFIG=config, GOBLIN_SKIFF_JUMP_FAILURE=failure)
             args = [str(wrapper), "--no-mascot", "--client=" + str(root / "client"),
                     "--ssh=" + shlex.join([str(root / "ssh")] + list(ssh_options))]
             proc = subprocess.run(args + list(extra) + ["destination"], env=case_env, capture_output=True, timeout=10)
@@ -156,9 +156,9 @@ def test():
 
         check_chain(run(["-J", "jump-a,jump-b"]))
         check_chain(run(config="jump-a,jump-b"))
-        env["GOBLIN_JUMP_NESTED"] = "1"
+        env["GOBLIN_SKIFF_JUMP_NESTED"] = "1"
         check_chain(run(config="jump-b"))
-        del env["GOBLIN_JUMP_NESTED"]
+        del env["GOBLIN_SKIFF_JUMP_NESTED"]
         check_chain(run(ssh_options=["-J", "jump-a,jump-b"]))
         check_chain(run(ssh_options=["-oProxyJump=jump-a,jump-b"]))
         ssh = check_chain(run(["--fips-crypto", "-J", "jump-a,jump-b", "--jump-port=60100:60200"],
@@ -245,23 +245,23 @@ def test():
         calls = run(["--djvu-lossy"], failure="old-image-client", success=False)
         assert not any(call["kind"] == "ssh" for call in calls)
         # Releases differ freely; protocol and the actual selected binary decide compatibility.
-        env["GOBLIN_TEST_SERVER_VERSION"] = "1 1.4.0-goblin20270101.1 future-build"
+        env["GOBLIN_SKIFF_TEST_SERVER_VERSION"] = "1 1.4.0-goblin20270101.1 future-build"
         run(diagnostic="server 1.4.0-goblin20270101.1; protocol 1")
         run(failure="unversioned-server", diagnostic="server unversioned")
         run(failure="unversioned-client", diagnostic="client unversioned")
-        env["GOBLIN_TEST_SERVER_VERSION"] = "2 2.0.0 future-build"
+        env["GOBLIN_SKIFF_TEST_SERVER_VERSION"] = "2 2.0.0 future-build"
         calls = run(["-J", "jump-a"], success=False, diagnostic="Incompatible Goblin Skiff protocols")
         assert len([call for call in calls if call["kind"] == "ssh"]) == 1, "incompatible session started relays"
-        env["GOBLIN_TEST_CLIENT_VERSION"] = "2 2.0.1 newer-client"
+        env["GOBLIN_SKIFF_TEST_CLIENT_VERSION"] = "2 2.0.1 newer-client"
         run(diagnostic="protocol 2")  # wrapper must not compare its own protocol
-        del env["GOBLIN_TEST_CLIENT_VERSION"]
+        del env["GOBLIN_SKIFF_TEST_CLIENT_VERSION"]
         for version in ("0 release build", "4294967296 release build", "1 release", "1 release bad\x1b[2J",
                         "1 " + "x" * 129 + " build"):
-            env["GOBLIN_TEST_SERVER_VERSION"] = version
+            env["GOBLIN_SKIFF_TEST_SERVER_VERSION"] = version
             run(success=False, diagnostic="Invalid MOSH VERSION")
-        del env["GOBLIN_TEST_SERVER_VERSION"]
+        del env["GOBLIN_SKIFF_TEST_SERVER_VERSION"]
         run(failure="duplicate-version", success=False, diagnostic="Duplicate MOSH VERSION")
-        env["GOBLIN_TEST_CLIENT_VERSION"] = "malformed"
+        env["GOBLIN_SKIFF_TEST_CLIENT_VERSION"] = "malformed"
         calls = run(success=False, diagnostic="Invalid MOSH VERSION")
         assert not any(call["kind"] == "ssh" for call in calls), "invalid client identity started SSH"
         print("PASS: connection versions, mixed releases, unversioned peers and protocol mismatch before relay setup")

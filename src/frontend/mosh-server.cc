@@ -897,7 +897,7 @@ static int run_server( const char* desired_ip,
       }
     }
 
-    if ( setenv( "GOBLIN_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true ) < 0 ) {
+    if ( setenv( "GOBLIN_SKIFF_CP_SOCK", bulk_control.socket_path().c_str(), true ) < 0 ) {
       perror( "setenv" );
       exit( 1 );
     }
