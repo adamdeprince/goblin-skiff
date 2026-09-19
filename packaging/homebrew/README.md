@@ -13,7 +13,7 @@ included in the source; its SHA-256 placeholder avoids a self-referential
 archive hash. Render it after archiving with:
 
 ```sh
-sh packaging/homebrew/render-formula.sh goblin-skiff-1.4.0-goblin20260919.1.tar.gz
+sh packaging/homebrew/render-formula.sh goblin-skiff-1.4.0-goblin20260919.2.tar.gz
 ```
 
 The formula uses Homebrew's dynamically linked dependencies, runs 28 core

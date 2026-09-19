@@ -56,13 +56,13 @@ else:
 
 
 def blackhole(timeout=None):
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+    with tempfile.TemporaryDirectory(prefix='gct-', dir=os.environ.get('TMPDIR', '/tmp')) as runtime, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
         udp.bind(('127.0.0.1', 0))
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
         args = [CLIENT, '--no-kitty', '--no-sixel', '--mascot=none']
         if timeout is not None: args += ['--connect-timeout=' + str(timeout)]
-        env = dict(os.environ, TERM='xterm-256color', MOSH_KEY='AAAAAAAAAAAAAAAAAAAAAA', GOBLIN_SKIFF_COMPACT_KEEPALIVE='0', GOBLIN_SKIFF_LINK_BUDGET='0')
+        env = dict(os.environ, XDG_RUNTIME_DIR=runtime, TERM='xterm-256color', MOSH_KEY='AAAAAAAAAAAAAAAAAAAAAA', GOBLIN_SKIFF_COMPACT_KEEPALIVE='0', GOBLIN_SKIFF_LINK_BUDGET='0')
         proc = subprocess.Popen(args + ['127.0.0.1', str(udp.getsockname()[1])], stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
         os.close(slave)
         output = bytearray(); start = time.monotonic()

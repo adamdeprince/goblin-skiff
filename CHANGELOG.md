@@ -1,7 +1,7 @@
 <!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin Skiff changes
 
-## 1.4.0-goblin20260919.1 — 2026-09-19
+## 1.4.0-goblin20260919.2 — 2026-09-19
 
 - Name the product Goblin Skiff and install the `goblin-skiff` commands.
   Preserve upstream protocol framing, startup banners and server-facing
@@ -12,7 +12,8 @@
   packet airtime pacing and adaptive retransmission waits.
 - Rebuild APT, RPM and Homebrew packages with the new name. Keep Homebrew
   test sockets in its temporary directory and allow the established
-  300-second observation window for lossy four-hop transfer tests.
+  300-second observation window for lossy four-hop transfer tests. Keep
+  startup-test runtime paths short in deeply nested RPM build directories.
 
 ## 1.4.0-goblin20260915.1 — 2026-09-15
 

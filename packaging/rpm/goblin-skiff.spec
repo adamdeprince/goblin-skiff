@@ -3,11 +3,11 @@
 
 Name:           goblin-skiff
 Version:        1.4.0
-Release:        20260919.1%{?dist}
+Release:        20260919.2%{?dist}
 Summary:        Mobile shell optimized for low-bandwidth links
 License:        GPL-3.0-or-later AND ISC
 URL:            https://skiff.goblinreactor.com/
-Source0:        goblin-skiff-1.4.0-goblin20260919.1.tar.gz
+Source0:        goblin-skiff-1.4.0-goblin20260919.2.tar.gz
 
 # Preserve the source-file OpenSSL linking exceptions and all upstream notices.
 BuildRequires:  gcc-c++, make, autoconf, automake, pkgconf-pkg-config
@@ -68,6 +68,9 @@ install -m 0644 README.md GOBLIN_DOWNLOAD_PROTOCOL.md SIXEL_STATE.md AUDIO.md UD
 %{_docdir}/%{name}/
 
 %changelog
+* Sat Sep 19 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260919.2
+- Keep startup-timeout test sockets independent of the RPM build path.
+
 * Sat Sep 19 2026 Adam DePrince <adam.deprince@gmail.com> - 1.4.0-20260919.1
 - Release Goblin Skiff with slow-link startup deadlines and negotiated radio pacing.
 

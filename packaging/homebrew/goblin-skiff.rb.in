@@ -2,8 +2,8 @@
 class GoblinSkiff < Formula
   desc "Fork of Mosh optimized for bandwidth-constrained links"
   homepage "https://skiff.goblinreactor.com/"
-  url "https://brew.goblinreactor.com/sources/goblin-skiff-1.4.0-goblin20260919.1.tar.gz"
-  version "1.4.0-goblin20260919.1"
+  url "https://brew.goblinreactor.com/sources/goblin-skiff-1.4.0-goblin20260919.2.tar.gz"
+  version "1.4.0-goblin20260919.2"
   sha256 "@SOURCE_SHA256@"
   license all_of: ["GPL-3.0-or-later", "ISC"]
 

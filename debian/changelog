@@ -1,3 +1,10 @@
+goblin-skiff (1.4.0+goblin20260919.2) stable; urgency=medium
+
+  * Release Goblin Skiff with negotiated radio pacing and configurable startup.
+  * Keep release-test socket paths independent of the build directory.
+
+ -- Adam DePrince <adam.deprince@gmail.com>  Sat, 19 Sep 2026 18:00:00 -0400
+
 goblin-skiff (1.4.0+goblin20260919.1) stable; urgency=medium
 
   * Rename goblin-mosh to Goblin Skiff, with goblin-skiff package and commands.
