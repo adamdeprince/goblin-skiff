@@ -1,4 +1,4 @@
-"""Exercise tmux passthrough through two real goblin-mosh endpoints and PTYs."""
+"""Exercise tmux passthrough through two real goblin-skiff endpoints and PTYs."""
 import errno
 import fcntl
 import os
@@ -60,9 +60,9 @@ class Session:
         self.master, slave = pty.openpty()
         os.set_blocking(self.master, False)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 800, 480))
-        argv = [str(build / "../../scripts/goblin-mosh"),
-                "--client=" + str(build / "../frontend/goblin-mosh-client"),
-                "--server=" + str(build / "../frontend/goblin-mosh-server"),
+        argv = [str(build / "../../scripts/goblin-skiff"),
+                "--client=" + str(build / "../frontend/goblin-skiff-client"),
+                "--server=" + str(build / "../frontend/goblin-skiff-server"),
                 "--tmux-control", "--predict=always", "--local",
                 "--bind-server=127.0.0.1", "127.0.0.1", "--", *command]
         env = os.environ.copy()
@@ -123,7 +123,7 @@ class Session:
                     self.proc.wait(timeout=8)
 
     def finish(self):
-        self.until(b"[goblin-mosh is exiting.]")
+        self.until(b"[goblin-skiff is exiting.]")
         self.close()
         assert self.proc.returncode == 0, "unclean mosh shutdown"
 
@@ -181,8 +181,8 @@ def old_peer_test():
     build = Path.cwd()
     # A bootstrap-only stub, with a dummy key and no UDP server, represents
     # an older endpoint which does not confirm the new capability.
-    command = [str(build / "../../scripts/goblin-mosh"),
-               "--client=" + str(build / "../frontend/goblin-mosh-client"),
+    command = [str(build / "../../scripts/goblin-skiff"),
+               "--client=" + str(build / "../frontend/goblin-skiff-client"),
                "--server=printf 'MOSH CONNECT 60000 AAAAAAAAAAAAAAAAAAAAAA\\n'; true",
                "--tmux-control", "--local", "127.0.0.1"]
     env = os.environ.copy()

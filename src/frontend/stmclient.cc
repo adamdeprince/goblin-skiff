@@ -104,7 +104,7 @@ void STMClient::init( void )
     std::string native_charset( locale_charset() );
 
     fprintf( stderr,
-             "goblin-mosh-client needs a UTF-8 native locale to run.\n\n"
+             "goblin-skiff-client needs a UTF-8 native locale to run.\n\n"
              "Unfortunately, the client's environment (%s) specifies\n"
              "the character set \"%s\".\n\n",
              native_ctype.str().c_str(),
@@ -142,7 +142,7 @@ void STMClient::init( void )
 
   /* Add our name to window title */
   if ( !getenv( "MOSH_TITLE_NOPREFIX" ) ) {
-    overlays.set_title_prefix( std::wstring( L"[goblin-mosh] " ) );
+    overlays.set_title_prefix( std::wstring( L"[goblin-skiff] " ) );
   }
 
   /* Set terminal escape key. */
@@ -253,14 +253,14 @@ void STMClient::shutdown( void )
     fprintf( stderr,
              "\nmosh did not make a successful connection to %s:%s.\n"
              "Please verify that UDP port %s is not firewalled and can reach the server.\n\n"
-             "(By default, goblin-mosh uses a UDP port between 60000 and 61000. The -p option\n"
+             "(By default, goblin-skiff uses a UDP port between 60000 and 61000. The -p option\n"
              "selects a specific UDP port number.)\n",
              ip.c_str(),
              port.c_str(),
              port.c_str() );
   } else if ( network && !clean_shutdown ) {
     fputs( "\n\nmosh did not shut down cleanly. Please note that the\n"
-           "goblin-mosh-server process may still be running on the server.\n",
+           "goblin-skiff-server process may still be running on the server.\n",
            stderr );
   }
 }
@@ -316,7 +316,7 @@ void STMClient::main_init( void )
   // Local, once per client process: never sent to the remote PTY or repeated
   // after a network reconnect/SIGCONT. The project page links release sources
   // and license information; packages still need the actual license files.
-  swrite( STDOUT_FILENO, "[goblin-mosh GPLv3+ | https://github.com/adamdeprince/mosh]\r\n" );
+  swrite( STDOUT_FILENO, "[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/mosh]\r\n" );
   std::string panel_notice;
   if ( tmux_control ) {
     panel_notice = "Control panel shortcuts are unavailable in tmux control mode.";
@@ -352,7 +352,7 @@ void STMClient::main_init( void )
 
   setenv( "GOBLIN_MOSHCP_SOCK", bulk_control.socket_path().c_str(), true );
   if ( verbose ) {
-    fprintf( stderr, "goblin-moshcp control socket: %s\n", bulk_control.socket_path().c_str() );
+    fprintf( stderr, "goblin-skiffcp control socket: %s\n", bulk_control.socket_path().c_str() );
   }
 }
 
@@ -681,7 +681,7 @@ bool STMClient::process_user_keys( const std::string& bytes, bool paste )
           exit( 1 );
         }
 
-        fputs( "\n\033[37;44m[goblin-mosh is suspended.]\033[m\n", stdout );
+        fputs( "\n\033[37;44m[goblin-skiff is suspended.]\033[m\n", stdout );
 
         fflush( NULL );
 

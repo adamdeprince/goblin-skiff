@@ -1,4 +1,0 @@
-[goblin-mosh]
-title=goblin-mosh (mobile shell)
-description=Mobile shell that supports roaming and intelligent local echo
-ports=60000:61000/udp

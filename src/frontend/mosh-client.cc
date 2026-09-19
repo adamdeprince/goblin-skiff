@@ -79,7 +79,7 @@
 
 static void print_version( FILE* file )
 {
-  fputs( "goblin-mosh-client " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "goblin-skiff-client " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -372,7 +372,7 @@ int main( int argc, char* argv[] )
   std::string relay_keys = string_from_env( "MOSH_RELAY_KEYS" );
   unsetenv( "MOSH_RELAY_KEYS" );
   if ( udp_relay != !relay_keys.empty() ) {
-    fputs( "--udp-relay requires MOSH_RELAY_KEYS (set by the goblin-mosh wrapper).\n", stderr );
+    fputs( "--udp-relay requires MOSH_RELAY_KEYS (set by the goblin-skiff wrapper).\n", stderr );
     exit( 1 );
   }
 
@@ -433,7 +433,7 @@ int main( int argc, char* argv[] )
     success = false;
   }
 
-  printf( "[goblin-mosh is exiting.]\n" );
+  printf( "[goblin-skiff is exiting.]\n" );
 
   return !success;
 }

@@ -2,9 +2,9 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.61])
-AC_INIT([mosh], [1.4.0], [mosh-devel@mit.edu])
+AC_INIT([goblin-skiff], [1.4.0], [mosh-devel@mit.edu])
 AC_SUBST([GOBLIN_VERSION], [m4_normalize(m4_include([GOBLIN_VERSION]))])
-AC_DEFINE_UNQUOTED([GOBLIN_VERSION], ["$GOBLIN_VERSION"], [Goblin Mosh release version.])
+AC_DEFINE_UNQUOTED([GOBLIN_VERSION], ["$GOBLIN_VERSION"], [Goblin Skiff release version.])
 AM_INIT_AUTOMAKE([foreign std-options -Wall -Werror -Wno-portability])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_CONFIG_SRCDIR([src/frontend/mosh-client.cc])
@@ -171,13 +171,13 @@ CXX="$saved_CXX"
 LD="$saved_LD"
 
 AC_ARG_ENABLE([client],
-  [AS_HELP_STRING([--enable-client], [Build the goblin-mosh-client program @<:@yes@:>@])],
+  [AS_HELP_STRING([--enable-client], [Build the goblin-skiff-client program @<:@yes@:>@])],
   [build_client="$enableval"],
   [build_client="yes"])
 AM_CONDITIONAL([BUILD_CLIENT], [test x"$build_client" != xno])
 
 AC_ARG_ENABLE([server],
-  [AS_HELP_STRING([--enable-server], [Build the goblin-mosh-server program @<:@yes@:>@])],
+  [AS_HELP_STRING([--enable-server], [Build the goblin-skiff-server program @<:@yes@:>@])],
   [build_server="$enableval"],
   [build_server="yes"])
 AM_CONDITIONAL([BUILD_SERVER], [test x"$build_server" != xno])
@@ -201,7 +201,7 @@ AC_ARG_ENABLE([completion],
 AM_CONDITIONAL([INSTALL_COMPLETION], [test x"$install_completion" != xno])
 
 AC_ARG_ENABLE([syslog],
-  [AS_HELP_STRING([--enable-syslog], [Enable connection logging in mosh-server @<:@no@:>@])],
+  [AS_HELP_STRING([--enable-syslog], [Enable connection logging in goblin-skiff-server @<:@no@:>@])],
   [enable_syslog="$enableval"],
   [enable_syslog="no"])
 AS_IF([test x"$enable_syslog" != xno],
@@ -272,7 +272,7 @@ CPPFLAGS="$CPPFLAGS $WEBP_CFLAGS $PNG_CFLAGS $DJVU_CFLAGS"
 LIBS="$WEBP_LIBS $PNG_LIBS $DJVU_LIBS $LIBS"
 
 AC_ARG_WITH([zstd],
-  [AS_HELP_STRING([--with-zstd], [Enable zstd compression for moshcp and transport state @<:@check@:>@])],
+  [AS_HELP_STRING([--with-zstd], [Enable zstd compression for goblin-skiffcp and transport state @<:@check@:>@])],
   [with_zstd="$withval"],
   [with_zstd="check"])
 have_zstd=no
@@ -707,7 +707,7 @@ PKG_CHECK_MODULES([protobuf], [protobuf])
 # On Debian Sid 2016-03-16ish at least, "pkgconfig --libs protobuf"
 # gives us the bogus "-lprotobuf -pthread -lpthread"; remove
 # "-lpthread" which misconfigures compile, causing a segfault in
-# goblin-mosh-server.
+# goblin-skiff-server.
 AS_IF([echo "$protobuf_LIBS" | grep -q -- -pthread],
   [protobuf_LIBS="`echo $protobuf_LIBS | sed 's/-lpthread//g'`"])
 
@@ -782,7 +782,7 @@ AC_MSG_NOTICE([Cryptography:        $human_readable_cryptography_description])
 AC_MSG_NOTICE([FIPS crypto mode:    $have_fips_crypto (OpenSSL FIPS provider required at runtime)])
 AC_MSG_NOTICE([FEC Reed-Solomon:    yes])
 AC_MSG_NOTICE([FEC RFC6330:         $have_libraptorq])
-AC_MSG_NOTICE([moshcp zstd:         $have_zstd])
+AC_MSG_NOTICE([Skiff file-transfer zstd:         $have_zstd])
 AC_MSG_NOTICE([File-menu librsync:  $have_file_sync])
 AC_MSG_NOTICE([Kitty WebP state:    yes])
 AC_MSG_NOTICE([Palette DjVu state: yes (cjb2)])

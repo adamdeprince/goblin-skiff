@@ -1,6 +1,6 @@
-# Bash completions for goblin-mosh, the mobile shell.       -*- shell-script -*-
+# Bash completions for goblin-skiff, the mobile shell.       -*- shell-script -*-
 
-__mosh_init_completion()
+__goblin_skiff_init_completion()
 {
     if declare -F _init_completions >/dev/null 2>&1; then
         _init_completion
@@ -10,13 +10,13 @@ __mosh_init_completion()
     fi
 }
 
-_mosh () {
+_goblin_skiff () {
     local cur
 
-    __mosh_init_completion || return
+    __goblin_skiff_init_completion || return
 
     local simple_flags="-a -b -4 -6 -p -J"
-    local flags="--client= --server= --predict= --family= --port= 
+    local flags="--client= --server= --predict= --family= --port=
     --bind-server= --ssh= --fips-crypto --tmux-control --native-scroll --alternate-screen
     --jump= --jump-server= --jump-port= --jump-idle-timeout=
     --mascot= --no-mascot --no-kitty --no-sixel
@@ -32,4 +32,4 @@ _mosh () {
     fi
 }
 
-complete -o nospace -F _mosh goblin-mosh
+complete -o nospace -F _goblin_skiff goblin-skiff

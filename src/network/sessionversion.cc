@@ -44,17 +44,17 @@ bool SessionVersion::observe( const TransportBuffers::Instruction& instruction )
   }
   if ( !instruction.has_goblin_protocol() || instruction.goblin_protocol() == 0
        || !valid_text( instruction.goblin_release(), false ) || !valid_text( instruction.goblin_build(), true ) ) {
-    throw std::runtime_error( "Invalid Goblin Mosh peer version metadata" );
+    throw std::runtime_error( "Invalid Goblin Skiff peer version metadata" );
   }
   if ( instruction.goblin_protocol() != GOBLIN_PROTOCOL_VERSION ) {
-    throw std::runtime_error( "Incompatible Goblin Mosh protocols: local " + local().release + " uses "
+    throw std::runtime_error( "Incompatible Goblin Skiff protocols: local " + local().release + " uses "
                               + std::to_string( GOBLIN_PROTOCOL_VERSION ) + "; peer " + instruction.goblin_release()
                               + " uses " + std::to_string( instruction.goblin_protocol() ) );
   }
   if ( protocol ) {
     if ( release != instruction.goblin_release() || build != instruction.goblin_build()
          || protocol != instruction.goblin_protocol() ) {
-      throw std::runtime_error( "Goblin Mosh peer changed version during a session" );
+      throw std::runtime_error( "Goblin Skiff peer changed version during a session" );
     }
     return false;
   }

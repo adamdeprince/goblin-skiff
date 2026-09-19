@@ -91,7 +91,7 @@ void announce( const FD& listener, const Crypto::Base64Key& key, Crypto::Mode mo
     throw std::runtime_error( "Cannot identify UDP relay listener" );
   }
   printf( "MOSH RELAY 1 %s %s %s %s\n", Crypto::mode_name( mode ), host, port, key.printable_key().c_str() );
-  fprintf( stderr, "[goblin-mosh UDP relay, pid = %ld]\n", static_cast<long>( pid ) );
+  fprintf( stderr, "[goblin-skiff UDP relay, pid = %ld]\n", static_cast<long>( pid ) );
   fflush( nullptr );
 }
 
@@ -177,9 +177,9 @@ int relay_server_main( int argc, char* argv[] )
         case 's': startup_timeout = positive_number( optarg ); break;
         case 't': idle_timeout = positive_number( optarg ); break;
         case 'h':
-          puts( "Usage: goblin-mosh-server relay [--bind=IP] [--port=PORT[:PORT2]] [--fips-crypto]\n"
+          puts( "Usage: goblin-skiff-server relay [--bind=IP] [--port=PORT[:PORT2]] [--fips-crypto]\n"
                 "       [--foreground] [--idle-timeout=SECONDS] [--startup-timeout=SECONDS] TARGET_IP TARGET_PORT\n"
-                "       goblin-mosh-server relay --check [--fips-crypto]" );
+                "       goblin-skiff-server relay --check [--fips-crypto]" );
           return 0;
         default: throw std::invalid_argument( "Invalid relay option (see relay --help)" );
       }
@@ -231,7 +231,7 @@ int relay_server_main( int argc, char* argv[] )
     serve( ingress, egress, cipher, startup_timeout, idle_timeout );
     return 0;
   } catch ( const std::exception& error ) {
-    fprintf( stderr, "goblin-mosh UDP relay: %s\n", error.what() );
+    fprintf( stderr, "goblin-skiff UDP relay: %s\n", error.what() );
     return 1;
   }
 }

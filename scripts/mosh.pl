@@ -65,8 +65,8 @@ my $have_ipv6 = eval {
 
 $|=1;
 
-my $client = 'goblin-mosh-client';
-my $server = 'goblin-mosh-server';
+my $client = 'goblin-skiff-client';
+my $server = 'goblin-skiff-server';
 
 my $predict = undef;
 
@@ -85,7 +85,7 @@ my $proxy_report = 1; # internal ProxyCommand: report the destination, not the p
 my $jump = undef;
 my @jumps;
 my @jump_ssh;
-my $jump_server = 'goblin-mosh-server';
+my $jump_server = 'goblin-skiff-server';
 my $jump_port = undef;
 my $jump_idle_timeout = 86400;
 my @local_forwards;
@@ -130,10 +130,10 @@ my @cmdline = @ARGV;
 
 my $usage =
 qq{Usage: $0 [options] [--] [user@]host [command...]
-        --client=PATH        goblin-mosh client on local machine
-                                (default: "goblin-mosh-client")
-        --server=COMMAND     goblin-mosh server on remote machine
-                                (default: "goblin-mosh-server")
+        --client=PATH        goblin-skiff client on local machine
+                                (default: "goblin-skiff-client")
+        --server=COMMAND     goblin-skiff server on remote machine
+                                (default: "goblin-skiff-server")
 
         --predict=adaptive      local echo for slower links [default]
 -a      --predict=always        use local echo even on fast links
@@ -157,10 +157,10 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
                             forward a remote TCP port to the local side
 -D [BIND:]PORT             open a local SOCKS5 dynamic forward
 -J [USER@]HOST[:PORT][,...]
-        --jump=HOSTS       relay the Mosh UDP session through 1-4 jump hosts
+        --jump=HOSTS       relay the Skiff UDP session through 1-4 jump hosts
                                 (also discovers OpenSSH ProxyJump configuration)
         --jump-server=COMMAND   server command on each jump host
-                                (default: "goblin-mosh-server")
+                                (default: "goblin-skiff-server")
         --jump-port=PORT[:PORT2] UDP listener range on each jump (default: 60001:60999)
         --jump-idle-timeout=SEC  relay lease without authenticated client traffic
                                 (default: 86400; range: 1800..604800)
@@ -212,10 +212,10 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
         --alternate-screen   isolate the session in the alternate screen
         --no-init            compatibility alias for --native-scroll
 
-        --local              run goblin-mosh-server locally without using ssh
+        --local              run goblin-skiff-server locally without using ssh
 
         --experimental-remote-ip=(local|remote|proxy)  select the method for
-                             discovering the remote IP address to use for mosh
+                             discovering the remote IP address to use for Skiff
                              (default: "proxy")
 
         --help               this message
@@ -224,7 +224,7 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 Please report bugs to mosh-devel\@mit.edu.
 Mosh home page: https://mosh.org\n};
 
-my $version_message = 'goblin-mosh @GOBLIN_VERSION@ (@PACKAGE_STRING@) [build @VERSION@]' . qq{
+my $version_message = 'goblin-skiff @GOBLIN_VERSION@ (@PACKAGE_STRING@) [build @VERSION@]' . qq{
 Copyright 2012 Keith Winstein <mosh-devel\@mit.edu>
 License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.
@@ -570,7 +570,7 @@ if ( !$codec_pid ) {
   my $codecs = <$codec_output> // '';
   $client_palette_djvu = close( $codec_output ) && $codecs =~ /(?:\A|\s)palette-djvu-v1(?:\s|\z)/;
 }
-die "$0: --djvu-lossy requires a client supporting palette-djvu-v1; update goblin-mosh-client.\n"
+die "$0: --djvu-lossy requires a client supporting palette-djvu-v1; update goblin-skiff-client.\n"
   if $djvu_lossy && !$client_palette_djvu;
 
 # Query the actual selected binary, which may differ from this wrapper's build.
@@ -816,30 +816,30 @@ if ( $pid == 0 ) { # child
     if ( $bad_udp_port_warning ) {
       die "$0: Server does not support UDP port range option.\n";
     }
-    die "$0: Did not find goblin-mosh server startup message. (Have you installed goblin-mosh on your server?)\n";
+    die "$0: Did not find goblin-skiff server startup message. (Have you installed goblin-skiff on your server?)\n";
   }
 
   if ( $fips_crypto and ( not defined $server_crypto or $server_crypto ne 'aes128-gcm-v1' ) ) {
     die "$0: remote server did not confirm the requested FIPS crypto suite.\n";
   }
   if ( ( defined $lossy_quality || $djvu_lossy ) && !$server_image_encoding ) {
-    die "$0: remote server does not support the requested image encoding options; update goblin-mosh-server.\n";
+    die "$0: remote server does not support the requested image encoding options; update goblin-skiff-server.\n";
   }
   if ( not $fips_crypto and defined $server_crypto ) {
     die "$0: remote server selected a crypto suite that was not requested.\n";
   }
 
   if ( $server_relay_hops != scalar @jumps ) {
-    die "$0: destination did not confirm the UDP relay MTU budget; update goblin-mosh-server.\n";
+    die "$0: destination did not confirm the UDP relay MTU budget; update goblin-skiff-server.\n";
   }
   if ( @client_version && @server_version && $client_version[0] != $server_version[0] ) {
-    die "$0: Incompatible Goblin Mosh protocols: client $client_version[1] uses $client_version[0]; " .
+    die "$0: Incompatible Goblin Skiff protocols: client $client_version[1] uses $client_version[0]; " .
       "server $server_version[1] uses $server_version[0].\n";
   }
   my $client_release = @client_version ? $client_version[1] : 'unversioned';
   my $server_release = @server_version ? $server_version[1] : 'unversioned';
   my $protocol = @client_version && @server_version ? $client_version[0] : 'unversioned peer';
-  print STDERR "[goblin-mosh client $client_release; server $server_release; protocol $protocol]\n";
+  print STDERR "[goblin-skiff client $client_release; server $server_release; protocol $protocol]\n";
   if ( @jumps ) {
     # An explicit bind address supersedes the SSH interface on a multihomed
     # destination. Relays resolve no destination names and cannot be retargeted.
@@ -851,10 +851,10 @@ if ( $pid == 0 ) { # child
       unshift @keys, $relay_key;
     }
     $ENV{ 'MOSH_RELAY_KEYS' } = join ',', @keys;
-    warn "$0: Mosh UDP route: " . join( ' -> ', @jumps, $userhost ) . "\n";
+    warn "$0: Skiff UDP route: " . join( ' -> ', @jumps, $userhost ) . "\n";
   }
 
-  # Now start real goblin-mosh client
+  # Now start real goblin-skiff client
   if ( $tmux_control != $server_tmux_control ) {
     die "$0: remote server did not negotiate the requested tmux control mode.\n";
   }
@@ -1041,7 +1041,7 @@ sub start_udp_relay {
     } else { print; }
   }
   close $relay or die "$0: jump $jumps[$hop] failed to start its UDP relay.\n";
-  die "$0: jump $jumps[$hop] needs an updated goblin-mosh-server with UDP relay support.\n" unless defined $key;
+  die "$0: jump $jumps[$hop] needs an updated goblin-skiff-server with UDP relay support.\n" unless defined $key;
   die "$0: could not discover the client-facing jump IP.\n" if !$hop && !defined $external_ip;
   return ( $hop ? $ip : $external_ip, $port, $key );
 }
@@ -1072,7 +1072,7 @@ sub upload_state_dictionary {
       '-o', 'ProxyCommand=' . socks_proxy_command( scalar @jumps, 0 );
   }
 
-  my $script = 'tmp=$(mktemp "${TMPDIR:-/tmp}/goblin-mosh-zstd-dict.XXXXXX") || exit 1; '
+  my $script = 'tmp=$(mktemp "${TMPDIR:-/tmp}/goblin-skiff-zstd-dict.XXXXXX") || exit 1; '
     . 'chmod 600 "$tmp" || exit 1; '
     . 'cat > "$tmp" || exit 1; '
     . 'printf "MOSH DICT %s\n" "$tmp"';

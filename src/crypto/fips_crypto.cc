@@ -165,7 +165,12 @@ public:
                             unsigned char* client_to_server,
                             unsigned char* server_to_client ) const
   {
-    static const unsigned char salt[] = "goblin-mosh fips crypto v1";
+    // Fixed crypto-v1 HKDF domain bytes; changing them breaks existing peers.
+    static const unsigned char salt[] = {
+      0x67, 0x6f, 0x62, 0x6c, 0x69, 0x6e, 0x2d, 0x6d, 0x6f, 0x73, 0x68, 0x20,
+      0x66, 0x69, 0x70, 0x73, 0x20, 0x63, 0x72, 0x79, 0x70, 0x74, 0x6f, 0x20,
+      0x76, 0x31, 0x00
+    };
     static const unsigned char info[] = "AES-128-GCM client-to-server and server-to-client traffic keys";
     char digest[] = "SHA2-256";
     char properties[] = "fips=yes,provider=fips";

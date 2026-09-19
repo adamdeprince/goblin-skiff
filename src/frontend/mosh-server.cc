@@ -142,7 +142,7 @@ static int run_server( const char* desired_ip,
 
 static void print_version( FILE* file )
 {
-  fputs( "goblin-mosh-server " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+  fputs( "goblin-skiff-server " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
          "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
          "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
          "This is free software: you are free to change and redistribute it.\n"
@@ -155,7 +155,7 @@ static void print_usage( FILE* stream, const char* argv0 )
   fprintf( stream,
            "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [--fips-crypto] [-- COMMAND...]\n",
            argv0 );
-  fputs( "       goblin-mosh-server relay --help  (authenticated UDP jump relay)\n", stream );
+  fputs( "       goblin-skiff-server relay --help  (authenticated UDP jump relay)\n", stream );
   fputs( "       --lossy=QUALITY  WebP quality 0-100 (higher is better; default lossless)\n"
          "       --djvu-lossy     allow cjb2 symbol substitution for two-color images\n", stream );
 }
@@ -322,7 +322,7 @@ int main( int argc, char* argv[] )
   bool tmux_control = has_capability( client_capabilities, "tmux-control-v1" );
   bool client_supports_fips_crypto = has_capability( client_capabilities, "fips-aes128-gcm-v1" );
   Crypto::Mode crypto_mode = Crypto::Mode::LegacyOCB;
-  /* Will cause goblin-mosh-server not to correctly detach on old versions of sshd. */
+  /* Will cause goblin-skiff-server not to correctly detach on old versions of sshd. */
   std::list<std::string> locale_vars;
 
   /* strip off command */
@@ -359,9 +359,9 @@ int main( int argc, char* argv[] )
           /*
            * This undocumented option does nothing but eat its argument.
            * Useful in scripting where you prepend something to a
-           * goblin-mosh-server argv, and might end up with something like
-           * "goblin-mosh-server new -v new -c 256", now you can say
-           * "goblin-mosh-server new -v -@ new -c 256" to discard the second
+           * goblin-skiff-server argv, and might end up with something like
+           * "goblin-skiff-server new -v new -c 256", now you can say
+           * "goblin-skiff-server new -v -@ new -c 256" to discard the second
            * "new".
            */
         case '@':
@@ -536,7 +536,7 @@ int main( int argc, char* argv[] )
       std::string client_charset( locale_charset() );
 
       fprintf( stderr,
-               "goblin-mosh-server needs a UTF-8 native locale to run.\n\n"
+               "goblin-skiff-server needs a UTF-8 native locale to run.\n\n"
                "Unfortunately, the local environment (%s) specifies\n"
                "the character set \"%s\",\n\n"
                "The client-supplied environment (%s) specifies\n"
@@ -695,7 +695,7 @@ static int run_server( const char* desired_ip,
   Select::set_verbose( verbose );
 
   /*
-   * If goblin-mosh-server is run on a pty, then typeahead may echo and break goblin-mosh's
+   * If goblin-skiff-server is run on a pty, then typeahead may echo and break goblin-skiff's
    * detection of the MOSH CONNECT message.  Print it on a new line to bodge
    * around that.
    */
@@ -745,14 +745,14 @@ static int run_server( const char* desired_ip,
   if ( the_pid < 0 ) {
     perror( "fork" );
   } else if ( the_pid > 0 ) {
-    fputs( "\ngoblin-mosh-server " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
+    fputs( "\ngoblin-skiff-server " GOBLIN_VERSION " (" PACKAGE_STRING ") [build " BUILD_VERSION "]\n"
            "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n"
            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
            "This is free software: you are free to change and redistribute it.\n"
            "There is NO WARRANTY, to the extent permitted by law.\n\n",
            stderr );
 
-    fprintf( stderr, "[goblin-mosh-server detached, pid = %d]\n", static_cast<int>( the_pid ) );
+    fprintf( stderr, "[goblin-skiff-server detached, pid = %d]\n", static_cast<int>( the_pid ) );
 #ifndef HAVE_IUTF8
     fputs( "\nWarning: termios IUTF8 flag not defined.\n"
            "Character-erase of multibyte character sequence\n"
@@ -798,7 +798,7 @@ static int run_server( const char* desired_ip,
   Network::Bulk::ControlServer bulk_control( "server" );
 
   char utmp_entry[64] = { 0 };
-  snprintf( utmp_entry, 64, "goblin-mosh [%ld]", static_cast<long int>( getpid() ) );
+  snprintf( utmp_entry, 64, "goblin-skiff [%ld]", static_cast<long int>( getpid() ) );
 
   /* Fork child process */
   int pipes[2];
@@ -915,7 +915,7 @@ static int run_server( const char* desired_ip,
 #ifndef __sun
       // For Ubuntu, try and print one of {,/var}/run/motd.dynamic.
       // This file is only updated when pam_motd is run, but when
-      // goblin-mosh-server is run in the usual way with ssh via the script,
+      // goblin-skiff-server is run in the usual way with ssh via the script,
       // this always happens.
       // XXX Hackish knowledge of Ubuntu PAM configuration.
       // But this seems less awful than build-time detection with autoconf.
@@ -991,7 +991,7 @@ static int run_server( const char* desired_ip,
     }
   }
 
-  fputs( "\n[goblin-mosh-server is exiting.]\n", stdout );
+  fputs( "\n[goblin-skiff-server is exiting.]\n", stdout );
 
   return 0;
 }
@@ -1308,7 +1308,7 @@ static void serve( int host_fd,
 #ifdef HAVE_UTEMPTER
             utempter_remove_record( host_fd );
             char tmp[64 + NI_MAXHOST];
-            snprintf( tmp, 64 + NI_MAXHOST, "%s via goblin-mosh [%ld]", host, static_cast<long int>( getpid() ) );
+            snprintf( tmp, 64 + NI_MAXHOST, "%s via goblin-skiff [%ld]", host, static_cast<long int>( getpid() ) );
             utempter_add_record( host_fd, tmp );
 
             connected_utmp = true;
@@ -1441,7 +1441,7 @@ static void serve( int host_fd,
         utempter_remove_record( host_fd );
 
         char tmp[64];
-        snprintf( tmp, 64, "goblin-mosh [%ld]", static_cast<long int>( getpid() ) );
+        snprintf( tmp, 64, "goblin-skiff [%ld]", static_cast<long int>( getpid() ) );
         utempter_add_record( host_fd, tmp );
 
         connected_utmp = false;
@@ -1491,7 +1491,7 @@ static void serve( int host_fd,
            && !forwarder.has_pending_network_data() && !network.bulk_wait_time() ) {
         if ( mime_enabled && mime_clipboard.channel.take_packet( Clipboard::Priority::Background, now, network.get_SRTT(), bulk ) ) { network.send_bulk( bulk ); }
         else {
-          // Share idle bulk opportunities with goblin-moshcp. Neither class
+          // Share idle bulk opportunities with goblin-skiffcp. Neither class
           // can consume an opportunity reserved for terminal/socket traffic.
           bool sent = false;
           const unsigned first = bulk_turn++ % 3;
@@ -1602,9 +1602,10 @@ static void warn_unattached( const std::string& ignore_entry )
 
   while ( struct utmpx* entry = getutxent() ) {
     if ( ( entry->ut_type == USER_PROCESS ) && ( username == std::string( entry->ut_user ) ) ) {
-      /* does line show unattached goblin-mosh session */
+      /* does line show unattached goblin-skiff session */
       std::string text( entry->ut_host );
-      if ( ( text.size() >= 10 ) && ( text.substr( 0, 10 ) == "goblin-mosh " ) && ( text[text.size() - 1] == ']' )
+      if ( ( text.size() >= sizeof( "goblin-skiff " ) )
+           && ( text.compare( 0, sizeof( "goblin-skiff " ) - 1, "goblin-skiff " ) == 0 ) && ( text[text.size() - 1] == ']' )
            && ( text != ignore_entry ) && device_exists( entry->ut_line ) ) {
         unattached_mosh_servers.push_back( text );
       }

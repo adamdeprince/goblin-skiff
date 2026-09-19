@@ -115,8 +115,8 @@ def session(enabled, allow=True, parent="local", actual_kitty=False):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     build = Path.cwd()
-    server = str((build / "../frontend/goblin-mosh-server").resolve())
-    client = str((build / "../frontend/goblin-mosh-client").resolve())
+    server = str((build / "../frontend/goblin-skiff-server").resolve())
+    client = str((build / "../frontend/goblin-skiff-client").resolve())
     with tempfile.TemporaryDirectory(prefix="goblin-download-live-") as root, \
             tempfile.TemporaryDirectory(prefix="goblin-download-parent-") as parent_root:
         destination = Path(root)
@@ -313,7 +313,7 @@ def session(enabled, allow=True, parent="local", actual_kitty=False):
                             assert saved.read_bytes() == blob() and saved.stat().st_mode & 0o777 == 0o600
                         assert (Path(parent_root) / "alpine.bin").read_bytes() == b"existing file"
                     os.write(master, b"q")
-                    until(b"[goblin-mosh is exiting.]")
+                    until(b"[goblin-skiff is exiting.]")
                     process.wait(timeout=5)
                     assert process.returncode == 0
                     print(f"Live parent={parent}, actual_engine={actual_kitty}, allow={allow}: exact bytes/status across encrypted loss relay; no intermediate popup, worker or file")
@@ -341,7 +341,7 @@ def session(enabled, allow=True, parent="local", actual_kitty=False):
                     assert not module.children(process.pid), "declined download created a worker"
                     assert set(p.name for p in destination.iterdir()) == {"alpine.bin"}, "declined download touched disk"
                     os.write(master, b"q")
-                    until(b"[goblin-mosh is exiting.]")
+                    until(b"[goblin-skiff is exiting.]")
                     process.wait(timeout=5)
                     assert process.returncode == 0
                     print("Live download decline: no worker, no disk writes, remote error delivered")
@@ -377,7 +377,7 @@ def session(enabled, allow=True, parent="local", actual_kitty=False):
                 assert not module.children(process.pid), "disabled feature started disk worker"
             assert all("op=query" in frame or frame.startswith("5113;") for frame in parent_frames), "file payload leaked into local terminal fallback"
             os.write(master, b"q")
-            until(b"[goblin-mosh is exiting.]")
+            until(b"[goblin-skiff is exiting.]")
             process.wait(timeout=5)
             assert process.returncode == 0
             print(f"Live download enabled={enabled}: encrypted loss relay, clipboard/graphics independence, file safety passed ({relay.dropped} dropped)")

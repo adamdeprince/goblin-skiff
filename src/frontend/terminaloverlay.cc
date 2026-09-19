@@ -231,16 +231,16 @@ void NotificationEngine::apply( Framebuffer& fb ) const
   if ( message.empty() && time_expired ) {
     swprintf( tmp,
               128,
-              L"mosh: Last %s %s ago.%s",
+              L"Skiff: Last %s %s ago.%s",
               explanation,
               human_readable_duration( static_cast<int>( time_elapsed ), "seconds" ).c_str(),
               keystroke_str );
   } else if ( ( !message.empty() ) && ( !time_expired ) ) {
-    swprintf( tmp, 128, L"mosh: %ls%s", message.c_str(), keystroke_str );
+    swprintf( tmp, 128, L"Skiff: %ls%s", message.c_str(), keystroke_str );
   } else {
     swprintf( tmp,
               128,
-              L"mosh: %ls (%s without %s.)%s",
+              L"Skiff: %ls (%s without %s.)%s",
               message.c_str(),
               human_readable_duration( static_cast<int>( time_elapsed ), "s" ).c_str(),
               explanation,

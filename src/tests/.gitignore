@@ -13,7 +13,7 @@
 /bulk-loss-sim
 /fec-codecs
 /kitty-graphics
-/moshcp-protocol
+/skiffcp-protocol
 /osc52-parse
 /state-samples
 /terminal-geometry

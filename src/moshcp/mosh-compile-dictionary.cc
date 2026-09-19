@@ -125,7 +125,7 @@ int main( int argc, char* argv[] )
     const std::string dictionary = Network::train_state_dictionary( samples, dictionary_size );
     const std::string compressed_dictionary = Network::compress_state_dictionary_file( dictionary );
     write_file( output_path, compressed_dictionary );
-    std::cerr << "goblin-mosh-compile-dictionary: wrote " << compressed_dictionary.size() << " compressed bytes to "
+    std::cerr << "goblin-skiff-compile-dictionary: wrote " << compressed_dictionary.size() << " compressed bytes to "
               << output_path << " from " << dictionary.size() << " raw dictionary bytes and " << samples.size()
               << " samples, id " << Network::state_dictionary_id( dictionary ) << "\n";
   } catch ( const std::exception& e ) {

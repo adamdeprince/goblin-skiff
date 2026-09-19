@@ -38,7 +38,7 @@ src/include/stamp-h1
 /VERSION
 /VERSION.stamp
 /scripts/mosh
-/scripts/goblin-mosh
+/scripts/goblin-skiff
 src/include/version.h
 
 # Track the product page and its artwork; ignore local site artifacts.

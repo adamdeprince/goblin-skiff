@@ -288,7 +288,7 @@ std::string Splash::paint( uint64_t now, bool finish )
     return {};
   }
   displayed = selected();
-  return "\033[0m\r\n" + render( displayed, size ) + "goblin-mosh\r\n"
+  return "\033[0m\r\n" + render( displayed, size ) + "Goblin Skiff\r\n"
          + ( finish ? std::string() : query_cursor( now ) );
 }
 

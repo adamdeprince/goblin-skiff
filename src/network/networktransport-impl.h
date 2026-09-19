@@ -110,7 +110,7 @@ void Transport<MyState, RemoteState>::recv( void )
     }
 
     if ( peer_version.observe( inst ) && verbose ) {
-      fprintf( stderr, "Goblin Mosh peer: %s [build %s], protocol %u\n", peer_version.release.c_str(),
+      fprintf( stderr, "Goblin Skiff peer: %s [build %s], protocol %u\n", peer_version.release.c_str(),
                peer_version.build.c_str(), peer_version.protocol );
     }
 

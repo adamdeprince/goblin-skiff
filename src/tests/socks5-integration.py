@@ -200,7 +200,7 @@ def proxy(**kwargs):
 
 def test():
     driver = Path.cwd() / "socks5-proxy"
-    wrapper = (Path.cwd() / "../../scripts/goblin-mosh").resolve()
+    wrapper = (Path.cwd() / "../../scripts/goblin-skiff").resolve()
     env = dict(os.environ, TERM="xterm-256color")
     for ipv6, target in ((False, "127.0.0.1"), (False, "only-in-tailnet.invalid"), (True, "::1")):
         with proxy(ipv6=ipv6, restart=True, wildcard=True) as server:

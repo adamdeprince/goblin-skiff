@@ -191,7 +191,7 @@ bool decode_palette_djvu( const std::string& palette, const std::string& djvu,
   const auto release_document = []( ddjvu_document_t* p ) { ddjvu_document_release( p ); };
   const auto release_page = []( ddjvu_page_t* p ) { ddjvu_page_release( p ); };
   std::unique_ptr<ddjvu_context_t, decltype( &ddjvu_context_release )> context(
-    ddjvu_context_create( "goblin-mosh" ), ddjvu_context_release );
+    ddjvu_context_create( "goblin_skiff" ), ddjvu_context_release );
   if ( !context ) { return false; }
   std::unique_ptr<ddjvu_document_t, decltype( release_document )> document(
     ddjvu_document_create( context.get(), NULL, false ), release_document );

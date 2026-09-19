@@ -96,8 +96,8 @@ def children(pid):
 
 def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, confirm=False, udp_hops=0, socks5=False):
     build = Path.cwd()
-    client = os.environ.get("GOBLIN_TEST_CLIENT", str((build / "../frontend/goblin-mosh-client").resolve()))
-    server = os.environ.get("GOBLIN_TEST_SERVER", str((build / "../frontend/goblin-mosh-server").resolve()))
+    client = os.environ.get("GOBLIN_TEST_CLIENT", str((build / "../frontend/goblin-skiff-client").resolve()))
+    server = os.environ.get("GOBLIN_TEST_SERVER", str((build / "../frontend/goblin-skiff-server").resolve()))
     # Keep session socket paths below sockaddr_un.sun_path on macOS too.
     with tempfile.TemporaryDirectory(prefix="goblin-panel-", dir="/tmp") as root:
         directory = Path(root)
@@ -305,7 +305,7 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 relay.loss = False
                 collect(0.3)
                 os.write(master, b"\x1e.")
-                until(b"[goblin-mosh is exiting.]")
+                until(b"[goblin-skiff is exiting.]")
                 proc.wait(timeout=5)
                 collect(0.2)
                 assert proc.returncode == 0, ("file-menu shutdown", proc.returncode, output[-3000:])
@@ -359,7 +359,7 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 relay.loss = False  # Do not drop the server's one-shot final shutdown ACK.
                 collect(0.3)
                 os.write(master, b"q")
-                until(b"[goblin-mosh is exiting.]")
+                until(b"[goblin-skiff is exiting.]")
                 proc.wait(timeout=5)
                 assert proc.returncode == 0
                 print("PASS: configured Mosh prefix %r" % prefix, flush=True)
@@ -421,7 +421,7 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
             relay.loss = False
             collect(0.3)
             os.write(master, b"\x1e.")
-            until(b"[goblin-mosh is exiting.]")
+            until(b"[goblin-skiff is exiting.]")
             proc.wait(timeout=5)
             collect(0.2)
             os.close(master)

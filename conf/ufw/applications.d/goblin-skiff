@@ -1,0 +1,4 @@
+[goblin-skiff]
+title=Goblin Skiff
+description=Fork of Mosh optimized for bandwidth-constrained links
+ports=60000:61000/udp

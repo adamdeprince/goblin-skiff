@@ -19,12 +19,12 @@ import tty
 
 BUILD = Path.cwd()
 SCRIPT = Path(__file__).resolve()
-CLIENT = os.environ.get("GOBLIN_MOSH_TEST_CLIENT", str((BUILD / "../frontend/goblin-mosh-client").resolve()))
-SERVER = os.environ.get("GOBLIN_MOSH_TEST_SERVER", str((BUILD / "../frontend/goblin-mosh-server").resolve()))
-WRAPPER = os.environ.get("GOBLIN_MOSH_TEST_WRAPPER", str((BUILD / "../../scripts/goblin-mosh").resolve()))
+CLIENT = os.environ.get("GOBLIN_MOSH_TEST_CLIENT", str((BUILD / "../frontend/goblin-skiff-client").resolve()))
+SERVER = os.environ.get("GOBLIN_MOSH_TEST_SERVER", str((BUILD / "../frontend/goblin-skiff-server").resolve()))
+WRAPPER = os.environ.get("GOBLIN_MOSH_TEST_WRAPPER", str((BUILD / "../../scripts/goblin-skiff").resolve()))
 KITTY_QUERY = b"\x1b_Gi=4294967294,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
 READY = b"remote-startup-ready"
-SOURCE_NOTICE = b"[goblin-mosh GPLv3+ | https://github.com/adamdeprince/mosh]\r\n"
+SOURCE_NOTICE = b"[Goblin Skiff GPLv3+ | https://github.com/adamdeprince/mosh]\r\n"
 PANEL_NOTICE = b"Control panel: Ctrl-^ then 0 (Kitty: Ctrl-6, release, then 0).\r\n"
 
 
@@ -111,8 +111,8 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
         assert (b"\x1bP0;0;0q" in output) == sixel, "sixel output override: " + repr(options)
         assert (KITTY_QUERY in output, b"\x1b[c" in output) == probes, "disabled probe was sent"
         assert b"\x1b[2J" not in output and b"\x1b[3J" not in output, "startup erased screen/history"
-        assert output.count(b"goblin-mosh\r\n") == int(show_mascot), "mascot banner was repeated or missing"
-        banner = output.index(b"goblin-mosh\r\n") if show_mascot else output.index(notice)
+        assert output.count(b"Goblin Skiff\r\n") == int(show_mascot), "mascot banner was repeated or missing"
+        banner = output.index(b"Goblin Skiff\r\n") if show_mascot else output.index(notice)
         # Attachment metadata may produce an empty first frame while the
         # login child waits for capability discovery. Incremental allocation
         # must reserve the same total number of rows, not necessarily all in
@@ -173,7 +173,7 @@ def kitty_layout_inside():
             lines = [str(self.screen.line(row)).rstrip() for row in range(self.rows)]
             ready = lines.index(READY.decode())
             if show_mascot:
-                banner = lines.index("goblin-mosh")
+                banner = lines.index("Goblin Skiff")
                 assert ready == banner + 1, ("blank gap after mascot", banner, ready, lines)
                 assert banner >= 8, ("mascot scrolled off a short session", lines)
             if not self.start_row:
@@ -236,7 +236,7 @@ def history():
             notice = capture.index(SOURCE_NOTICE.rstrip(b"\r\n"))
             panel_notice = capture.index(PANEL_NOTICE.rstrip(b"\r\n"))
             chicken = capture.index(b".+%%%%#=.")
-            banner = capture.index(b"goblin-mosh\n")
+            banner = capture.index(b"Goblin Skiff\n")
             after = capture.index(b"REMOTE-HISTORY-AFTER-MOSH")
             assert before < chicken < banner < after, "local output and chicken not retained in history"
             assert before < notice < panel_notice < chicken, "startup notices not retained ahead of the mascot"

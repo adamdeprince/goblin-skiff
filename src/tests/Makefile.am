@@ -39,8 +39,8 @@ displaytests = \
 	unicode-later-combining.test \
 	window-resize.test
 
-check_PROGRAMS = ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control
-TESTS = ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram moshcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control tmux-control-integration.test local.test $(displaytests)
+check_PROGRAMS = ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr inpty is-utf8-locale fec-codecs bulk-datagram skiffcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control
+TESTS = ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs bulk-datagram skiffcp-protocol bulk-loss-sim transport-compression state-samples osc52-parse kitty-graphics terminal-geometry terminal-display tmux-control tmux-control-integration.test local.test $(displaytests)
 XFAIL_TESTS = \
 	e2e-failure.test \
 	emulation-attributes-256color8.test
@@ -85,9 +85,9 @@ bulk_datagram_SOURCES = bulk-datagram.cc
 bulk_datagram_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network
 bulk_datagram_LDADD = ../network/libmoshnetwork.a ../crypto/libmoshcrypto.a ../util/libmoshutil.a $(CRYPTO_LIBS)
 
-moshcp_protocol_SOURCES = moshcp-protocol.cc
-moshcp_protocol_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../moshcp -I$(srcdir)/../fec
-moshcp_protocol_LDADD = ../moshcp/libmoshcp.a ../fec/libmoshfec.a
+skiffcp_protocol_SOURCES = moshcp-protocol.cc
+skiffcp_protocol_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../moshcp -I$(srcdir)/../fec
+skiffcp_protocol_LDADD = ../moshcp/libmoshcp.a ../fec/libmoshfec.a
 
 bulk_loss_sim_SOURCES = bulk-loss-sim.cc
 bulk_loss_sim_CPPFLAGS = -I$(top_srcdir) -I$(srcdir)/../network -I$(srcdir)/../fec

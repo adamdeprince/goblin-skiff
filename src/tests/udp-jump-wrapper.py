@@ -106,7 +106,7 @@ def fake_client(args):
 
 
 def test():
-    wrapper = (Path.cwd() / "../../scripts/goblin-mosh").resolve()
+    wrapper = (Path.cwd() / "../../scripts/goblin-skiff").resolve()
     source = Path(__file__).resolve()
     with tempfile.TemporaryDirectory(prefix="goblin-jump-wrapper-", dir="/tmp") as root:
         root = Path(root)
@@ -250,7 +250,7 @@ def test():
         run(failure="unversioned-server", diagnostic="server unversioned")
         run(failure="unversioned-client", diagnostic="client unversioned")
         env["GOBLIN_TEST_SERVER_VERSION"] = "2 2.0.0 future-build"
-        calls = run(["-J", "jump-a"], success=False, diagnostic="Incompatible Goblin Mosh protocols")
+        calls = run(["-J", "jump-a"], success=False, diagnostic="Incompatible Goblin Skiff protocols")
         assert len([call for call in calls if call["kind"] == "ssh"]) == 1, "incompatible session started relays"
         env["GOBLIN_TEST_CLIENT_VERSION"] = "2 2.0.1 newer-client"
         run(diagnostic="protocol 2")  # wrapper must not compare its own protocol

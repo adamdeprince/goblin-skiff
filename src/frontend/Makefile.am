@@ -6,11 +6,11 @@ LDADD = ../crypto/libmoshcrypto.a ../network/libmoshnetwork.a ../statesync/libmo
 bin_PROGRAMS =
 
 if BUILD_CLIENT
-  bin_PROGRAMS += goblin-mosh-client
+  bin_PROGRAMS += goblin-skiff-client
 endif
 
 if BUILD_SERVER
-  bin_PROGRAMS += goblin-mosh-server
+  bin_PROGRAMS += goblin-skiff-server
 endif
 
 noinst_LIBRARIES = libmoshcontrol.a libmoshmascot.a
@@ -20,10 +20,10 @@ libmoshcontrol_a_SOURCES += download.cc download.h
 libmoshcontrol_a_SOURCES += downloadforward.cc downloadforward.h
 libmoshcontrol_a_SOURCES += filetransfer.cc filetransfer.h
 libmoshmascot_a_SOURCES = mascot.cc mascot.h
-goblin_mosh_client_SOURCES = mosh-client.cc stmclient.cc stmclient.h streamforward.cc streamforward.h terminaloverlay.cc terminaloverlay.h
-goblin_mosh_server_SOURCES = mosh-server.cc streamforward.cc streamforward.h relay-server.cc relay-server.h
-goblin_mosh_client_LDADD = libmoshcontrol.a libmoshmascot.a $(LDADD) ../fec/libmoshfec.a $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
-goblin_mosh_server_LDADD = libmoshcontrol.a $(LDADD) ../fec/libmoshfec.a $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
+goblin_skiff_client_SOURCES = mosh-client.cc stmclient.cc stmclient.h streamforward.cc streamforward.h terminaloverlay.cc terminaloverlay.h
+goblin_skiff_server_SOURCES = mosh-server.cc streamforward.cc streamforward.h relay-server.cc relay-server.h
+goblin_skiff_client_LDADD = libmoshcontrol.a libmoshmascot.a $(LDADD) ../fec/libmoshfec.a $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
+goblin_skiff_server_LDADD = libmoshcontrol.a $(LDADD) ../fec/libmoshfec.a $(LIBRSYNC_LIBS) $(FILECRYPTO_LIBS)
 
 EXTRA_DIST = goblin.webp embed-mascot.pl
 BUILT_SOURCES = goblin-webp.inc
