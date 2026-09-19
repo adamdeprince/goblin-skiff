@@ -611,3 +611,4 @@ Goblin Skiff is derived from Mosh, originally written by Keith Winstein and
 contributors listed in [AUTHORS](AUTHORS). Upstream copyright notices are
 preserved. Skiff is distributed under the [GNU GPL version 3 or later](COPYING),
 with the same OpenSSL and [iOS exceptions](COPYING.iOS) as upstream Mosh.
+See the [trademark notice](TRADEMARKS.md).
