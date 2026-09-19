@@ -100,7 +100,7 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
     client = os.environ.get("GOBLIN_SKIFF_TEST_CLIENT", str((build / "../frontend/goblin-skiff-client").resolve()))
     server = os.environ.get("GOBLIN_SKIFF_TEST_SERVER", str((build / "../frontend/goblin-skiff-server").resolve()))
     # Keep session socket paths below sockaddr_un.sun_path on macOS too.
-    with tempfile.TemporaryDirectory(prefix="goblin-panel-", dir="/tmp") as root:
+    with tempfile.TemporaryDirectory(prefix="gp-", dir=os.environ.get("TMPDIR", "/tmp")) as root:
         directory = Path(root)
         runtime = directory / "runtime"
         runtime.mkdir(mode=0o700)
@@ -258,7 +258,9 @@ def integration(prefix="\x1e", adaptive=False, file_sync=False, speed=False, con
                 send_through(b"\x1e0", b"")  # Underlying keyboard stays live during copy.
 
                 def copied(path, expected):
-                    deadline = time.monotonic() + (300 if speed else 60)
+                    # Four encrypted hops need a longer observation window
+                    # under loss; keep all integrity and responsiveness checks.
+                    deadline = time.monotonic() + (300 if speed or udp_hops else 60)
                     while not path.exists() or path.read_bytes() != expected:
                         assert proc.poll() is None, output[-1200:]
                         if time.monotonic() >= deadline:

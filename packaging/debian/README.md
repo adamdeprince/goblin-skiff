@@ -23,11 +23,11 @@ podman build --build-arg BASE_IMAGE=docker.io/library/debian:12 \
   -f Containerfile -t goblin-skiff-build:bookworm .
 mkdir -p artifacts/bookworm
 podman run --rm -v "$PWD/artifacts/bookworm:/out" \
-  goblin-skiff-build:bookworm bookworm '1.4.0+goblin20260909.1+bookworm1'
+  goblin-skiff-build:bookworm bookworm '1.4.0+goblin20260919.1+bookworm1'
 ```
 
 The container builds the binary and complete matching native source package,
-runs 24 core tests, installs its package, and runs an encrypted UDP/PTY
+runs 28 core tests, installs its package, and runs an encrypted UDP/PTY
 file-transfer integration test. `/out` contains the `.deb`, `.dsc`, source
 archive, build information, changes, and verification logs. No HTML product
 page, Git metadata, signing key, or host configuration belongs in the source

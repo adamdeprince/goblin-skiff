@@ -22,7 +22,7 @@ podman run --rm -v "$PWD/artifacts/fedora44:/out" \
 ```
 
 Pin the resolved image digest for a release build. The build produces an RPM
-and its complete matching SRPM, runs 24 core tests, installs its RPM, and
+and its complete matching SRPM, runs 28 core tests, installs its RPM, and
 exercises encrypted UDP/PTY file transfers with a private runtime directory.
 The optional FIPS-provider test skips when the OS has no FIPS provider; the
 package is not a validated FIPS module. Audio codecs are not vendored.

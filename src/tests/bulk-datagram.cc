@@ -1,3 +1,4 @@
+// Modified for Goblin Skiff on 2026-09-19.
 /*
     Mosh: the mobile shell
     Copyright 2026
@@ -36,11 +37,11 @@ void require( bool condition, const char* message )
 void backpressure_test()
 {
   struct Runtime {
-    char path[40] = "/tmp/goblin-bulk-queue.XXXXXX";
+    std::string path = std::string( getenv( "TMPDIR" ) ? getenv( "TMPDIR" ) : "/tmp" ) + "/gbq.XXXXXX";
     bool existed = getenv( "XDG_RUNTIME_DIR" );
     std::string previous = existed ? getenv( "XDG_RUNTIME_DIR" ) : "";
-    Runtime() { require( mkdtemp( path ), "queue-test runtime directory" ); setenv( "XDG_RUNTIME_DIR", path, 1 ); }
-    ~Runtime() { if ( existed ) { setenv( "XDG_RUNTIME_DIR", previous.c_str(), 1 ); } else { unsetenv( "XDG_RUNTIME_DIR" ); } rmdir( path ); }
+    Runtime() { require( mkdtemp( &path[0] ), "queue-test runtime directory" ); setenv( "XDG_RUNTIME_DIR", path.c_str(), 1 ); }
+    ~Runtime() { if ( existed ) { setenv( "XDG_RUNTIME_DIR", previous.c_str(), 1 ); } else { unsetenv( "XDG_RUNTIME_DIR" ); } rmdir( path.c_str() ); }
   } runtime;
   Network::Bulk::ControlServer server( "test" );
   Network::Bulk::ControlClient client( server.socket_path() );

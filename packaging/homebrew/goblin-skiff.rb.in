@@ -2,8 +2,8 @@
 class GoblinSkiff < Formula
   desc "Fork of Mosh optimized for bandwidth-constrained links"
   homepage "https://skiff.goblinreactor.com/"
-  url "https://brew.goblinreactor.com/sources/goblin-skiff-1.4.0-goblin20260911.2.tar.gz"
-  version "1.4.0-goblin20260911.2"
+  url "https://brew.goblinreactor.com/sources/goblin-skiff-1.4.0-goblin20260919.1.tar.gz"
+  version "1.4.0-goblin20260919.1"
   sha256 "@SOURCE_SHA256@"
   license all_of: ["GPL-3.0-or-later", "ISC"]
 
@@ -43,7 +43,7 @@ class GoblinSkiff < Formula
     system "sh", "packaging/check-prebuilt-fec.sh", "./src/moshcp/goblin-skiffcp"
     # Keep Unix socket paths short on macOS and never share a live session's
     # runtime directory. Tests use local Unix sockets and loopback UDP.
-    Dir.mktmpdir("goblin-check-", "/tmp") do |runtime|
+    Dir.mktmpdir("gc-", ENV.fetch("TMPDIR", "/tmp")) do |runtime|
       ENV["XDG_RUNTIME_DIR"] = runtime
       tests = %w[
         ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs
@@ -51,7 +51,7 @@ class GoblinSkiff < Formula
         state-samples osc52-parse kitty-graphics terminal-geometry
         terminal-display tmux-control control-panel mascot file-transfer
         link-budget sixel-state terminal-extensions download download-forward
-        udp-relay udp-jump-wrapper.test
+        udp-relay udp-jump-wrapper.test connect-timeout.test
       ]
       system "make", "check", "TESTS=#{tests.join(" ")}"
     end
@@ -87,13 +87,7 @@ class GoblinSkiff < Formula
     ENV["GOBLIN_SKIFF_TEST_SERVER"] = bin/"goblin-skiff-server"
     system formula_opt_bin("python@3.14")/"python3.14",
            pkgshare/"tests/control-panel-integration.py", "--files"
-    # Four independently authenticated hops add substantial overhead at the
-    # simulated lossy link's conservative startup rate. Keep all loss, input
-    # responsiveness and integrity assertions; allow longer file completion.
-    # Copy the fixture so testing never modifies files in the installed keg.
-    relay_test = testpath/"relay-integration.py"
-    cp pkgshare/"tests/control-panel-integration.py", relay_test
-    inreplace relay_test, "(300 if speed else 60)", "(300 if speed or udp_hops else 60)"
-    system formula_opt_bin("python@3.14")/"python3.14", relay_test, "--udp-relay"
+    system formula_opt_bin("python@3.14")/"python3.14",
+           pkgshare/"tests/control-panel-integration.py", "--udp-relay"
   end
 end

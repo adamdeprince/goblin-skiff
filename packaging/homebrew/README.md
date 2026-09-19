@@ -13,10 +13,10 @@ included in the source; its SHA-256 placeholder avoids a self-referential
 archive hash. Render it after archiving with:
 
 ```sh
-sh packaging/homebrew/render-formula.sh goblin-skiff-1.4.0-goblin20260910.2.tar.gz
+sh packaging/homebrew/render-formula.sh goblin-skiff-1.4.0-goblin20260919.1.tar.gz
 ```
 
-The formula uses Homebrew's dynamically linked dependencies, runs 24 core
+The formula uses Homebrew's dynamically linked dependencies, runs 28 core
 tests, installs the five goblin-prefixed tools and man pages, and supplies a
 loopback encrypted file-transfer test for `brew test`. The test uses an
 isolated runtime directory and never reuses a real session's sockets.
