@@ -23,6 +23,7 @@ EXTRA_DIST += debian/control debian/rules debian/changelog debian/copyright debi
 EXTRA_DIST += packaging/debian/Containerfile packaging/debian/build-release.sh packaging/debian/README.md
 EXTRA_DIST += packaging/rpm/Containerfile packaging/rpm/build-release.sh packaging/rpm/goblin-skiff.spec packaging/rpm/README.md
 EXTRA_DIST += packaging/homebrew/goblin-skiff.rb.in packaging/homebrew/render-formula.sh packaging/homebrew/README.md
+EXTRA_DIST += packaging/inkline/build-rm2.sh packaging/inkline/README.md
 dist_doc_DATA = TRADEMARKS.md COPYING THIRD_PARTY.md COMPATIBILITY.md CHANGELOG.md GOBLIN_VERSION USERSPACE_NETWORKING.md
 BUILT_SOURCES = VERSION.stamp
 AM_DISTCHECK_CONFIGURE_FLAGS += --enable-compile-warnings=distcheck --enable-examples --enable-syslog
