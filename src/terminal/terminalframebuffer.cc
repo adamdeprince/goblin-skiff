@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "src/terminal/colorspace.h"
 #include "src/terminal/terminalframebuffer.h"
 
 using namespace Terminal;
@@ -415,6 +416,7 @@ void Framebuffer::reset( void )
 
 void Framebuffer::soft_reset( void )
 {
+  ds.pointer_mode = false;
   ds.insert_mode = false;
   ds.origin_mode = false;
   ds.cursor_visible = true; /* per xterm and gnome-terminal */
@@ -499,8 +501,30 @@ void DrawState::resize( int s_width, int s_height )
 }
 
 Renditions::Renditions( color_type s_background )
-  : foreground_color( 0 ), background_color( s_background ), attributes( 0 )
+  : foreground_color( 0 ), background_color( s_background & 0x1ffffff ), attributes( 0 ), foreground_brightness( 0 ),
+    background_brightness( ( s_background >> 32 ) & 0x7f ), foreground_gamut( 0 ),
+    background_gamut( ( s_background >> 39 ) & 3 ), background_alpha( ( s_background >> 41 ) & 0x3f )
 {}
+
+void Renditions::set_brightness( bool background, int percent )
+{
+  /* Rounded to quarter steps, and at most 1675 percent. */
+  int steps = percent <= 100 ? 0 : std::min( 67, ( percent + 12 ) / 25 );
+  if ( steps <= 4 ) {
+    steps = 0;
+  }
+  if ( background ) {
+    background_brightness = steps;
+  } else {
+    foreground_brightness = steps;
+  }
+}
+
+void Renditions::set_background_alpha( int percent )
+{
+  /* Rounded down to an even percent. */
+  background_alpha = percent < 0 || percent >= 100 ? 0 : ( percent - percent % 2 ) / 2 + 1;
+}
 
 /* This routine cannot be used to set a color beyond the 16-color set. */
 void Renditions::set_rendition( color_type num )
@@ -508,28 +532,42 @@ void Renditions::set_rendition( color_type num )
   if ( num == 0 ) {
     clear_attributes();
     foreground_color = background_color = 0;
+    foreground_brightness = background_brightness = foreground_gamut = background_gamut = background_alpha = 0;
     return;
   }
 
+  /* A color that is not RGB is sRGB. */
   if ( num == 39 ) {
     foreground_color = 0;
+    foreground_gamut = 0;
     return;
   } else if ( num == 49 ) {
     background_color = 0;
+    background_gamut = 0;
     return;
   }
 
   if ( ( 30 <= num ) && ( num <= 37 ) ) { /* foreground color in 8-color set */
     foreground_color = num;
+    foreground_gamut = 0;
     return;
   } else if ( ( 40 <= num ) && ( num <= 47 ) ) { /* background color in 8-color set */
     background_color = num;
+    background_gamut = 0;
     return;
   } else if ( ( 90 <= num ) && ( num <= 97 ) ) { /* foreground color in 16-color set */
     foreground_color = num - 90 + 38;
+    foreground_gamut = 0;
     return;
   } else if ( ( 100 <= num ) && ( num <= 107 ) ) { /* background color in 16-color set */
     background_color = num - 100 + 48;
+    background_gamut = 0;
+    return;
+  } else if ( num == 56 || num == 57 ) { /* without a percent: SDR */
+    set_brightness( num == 57, 0 );
+    return;
+  } else if ( num == 70 ) { /* without a percent: opaque */
+    background_alpha = 0;
     return;
   }
 
@@ -568,8 +606,10 @@ void Renditions::set_foreground_color( int num )
 {
   if ( ( 0 <= num ) && ( num <= 255 ) ) {
     foreground_color = 30 + num;
+    foreground_gamut = 0;
   } else if ( is_true_color( num ) ) {
     foreground_color = num;
+    foreground_gamut = 0;
   }
 }
 
@@ -577,12 +617,14 @@ void Renditions::set_background_color( int num )
 {
   if ( ( 0 <= num ) && ( num <= 255 ) ) {
     background_color = 40 + num;
+    background_gamut = 0;
   } else if ( is_true_color( num ) ) {
     background_color = num;
+    background_gamut = 0;
   }
 }
 
-std::string Renditions::sgr( void ) const
+std::string Renditions::sgr( bool extended ) const
 {
   std::string ret;
   char col[64];
@@ -601,6 +643,18 @@ std::string Renditions::sgr( void ) const
   if ( get_attribute( invisible ) )
     ret.append( ";8" );
 
+  /* A terminal that is not given gamuts is given the nearest sRGB color. */
+  const auto plain = [&]( uint64_t color, unsigned gamut ) {
+    if ( extended || !gamut || !is_true_color( color ) ) {
+      return color;
+    }
+    uint8_t r = ( color >> 16 ) & 0xff, g = ( color >> 8 ) & 0xff, b = color & 0xff;
+    gamut_to_srgb( gamut, r, g, b );
+    return uint64_t( make_true_color( r, g, b ) );
+  };
+  const uint64_t foreground = plain( foreground_color, foreground_gamut );
+  const uint64_t background = plain( background_color, background_gamut );
+
   if ( foreground_color ) {
     // Since foreground_color is a 25-bit field, it is promoted to an int when
     // manipulated. (See [conv.prom] in various C++ standards, e.g.,
@@ -610,9 +664,9 @@ std::string Renditions::sgr( void ) const
       snprintf( col,
                 sizeof( col ),
                 ";38;2;%d;%d;%d",
-                ( foreground_color >> 16 ) & 0xff,
-                ( foreground_color >> 8 ) & 0xff,
-                foreground_color & 0xff );
+                int( ( foreground >> 16 ) & 0xff ),
+                int( ( foreground >> 8 ) & 0xff ),
+                int( foreground & 0xff ) );
     } else if ( foreground_color > 37 ) { /* use 256-color set */
       snprintf( col, sizeof( col ), ";38;5;%d", foreground_color - 30 );
     } else { /* ANSI foreground color */
@@ -631,9 +685,9 @@ std::string Renditions::sgr( void ) const
       snprintf( col,
                 sizeof( col ),
                 ";48;2;%d;%d;%d",
-                ( background_color >> 16 ) & 0xff,
-                ( background_color >> 8 ) & 0xff,
-                background_color & 0xff );
+                int( ( background >> 16 ) & 0xff ),
+                int( ( background >> 8 ) & 0xff ),
+                int( background & 0xff ) );
     } else if ( background_color > 47 ) { /* use 256-color set */
       snprintf( col, sizeof( col ), ";48;5;%d", background_color - 40 );
     } else { /* ANSI background color */
@@ -644,6 +698,31 @@ std::string Renditions::sgr( void ) const
     ret.append( col );
   }
   ret.append( "m" );
+
+  if ( extended && has_extended() ) {
+    std::string ext;
+    const auto add = [&]( const std::string& param ) { ext += ( ext.empty() ? "" : ";" ) + param; };
+    const auto rgb = [&]( int color ) {
+      return std::to_string( ( color >> 16 ) & 0xff ) + ":" + std::to_string( ( color >> 8 ) & 0xff ) + ":"
+             + std::to_string( color & 0xff );
+    };
+    if ( foreground_gamut && is_true_color( foreground_color ) ) {
+      add( "38:2:" + std::to_string( foreground_gamut ) + ":" + rgb( foreground_color ) );
+    }
+    if ( background_gamut && is_true_color( background_color ) ) {
+      add( "48:2:" + std::to_string( background_gamut ) + ":" + rgb( background_color ) );
+    }
+    if ( foreground_brightness ) {
+      add( "56:" + std::to_string( get_brightness( false ) ) );
+    }
+    if ( background_brightness ) {
+      add( "57:" + std::to_string( get_brightness( true ) ) );
+    }
+    if ( background_alpha ) {
+      add( "70:" + std::to_string( get_background_alpha() ) );
+    }
+    ret += "\033[" + ext + "m";
+  }
 
   return ret;
 }
@@ -779,8 +858,7 @@ uint32_t Framebuffer::allocate_kitty_id( void )
 
 uint32_t Framebuffer::put_kitty_image( const KittyImage& image )
 {
-  if ( !image.data || image.palette.size() > GRAPHICS_MAX_PALETTE * 4
-       || image.data->size() > KITTY_ENCODED_QUOTA - image.palette.size() ) { return 0; }
+  if ( !image.data || image.palette.size() > GRAPHICS_MAX_PALETTE * 4 ) { return 0; }
   KittyImage stored = image;
   if ( stored.id == 0 ) {
     stored.id = allocate_kitty_id();
@@ -799,7 +877,6 @@ uint32_t Framebuffer::put_kitty_image( const KittyImage& image )
   }
 
   kitty_images[stored.id] = stored;
-  evict_kitty_images( stored.id );
   return stored.id;
 }
 
@@ -836,6 +913,36 @@ void Framebuffer::erase_kitty_image( uint32_t id )
     }
   }
   kitty_placements.swap( kept );
+}
+
+bool Framebuffer::edit_vector_image( uint32_t id, const Vector::Step& step, std::string& error )
+{
+  const auto it = kitty_images.find( id );
+  if ( it == kitty_images.end() || it->second.format != KITTY_FORMAT_VECTOR || !it->second.vector ) {
+    error = "ENOENT: no such vector image";
+    return false;
+  }
+  it->second.vector = Vector::edit_doc( it->second.vector, step, error );
+  return true;
+}
+
+void Framebuffer::replace_vector_doc( uint32_t id, std::shared_ptr<const Vector::Doc> doc )
+{
+  const auto it = kitty_images.find( id );
+  if ( it != kitty_images.end() && it->second.format == KITTY_FORMAT_VECTOR ) {
+    it->second.vector = std::move( doc );
+  }
+}
+
+bool Framebuffer::refresh_kitty_image( const KittyImage& image )
+{
+  const auto it = kitty_images.find( image.id );
+  if ( it == kitty_images.end() ) {
+    return false;
+  }
+  it->second = image;
+  it->second.serial = kitty_serial++;
+  return true;
 }
 
 void Framebuffer::put_kitty_placement( const KittyPlacement& placement )
@@ -970,65 +1077,4 @@ void Framebuffer::scroll_kitty_placements( int first_row, int count, bool insert
     }
   }
   kitty_placements.swap( kept );
-}
-
-static size_t kitty_image_cost( const KittyImage& image )
-{
-  const size_t encoded = ( image.data ? image.data->size() : 0 ) + image.palette.size();
-  if ( image.width == 0 || image.width > KITTY_IMAGE_QUOTA / 4
-       || image.height > KITTY_IMAGE_QUOTA / ( static_cast<size_t>( image.width ) * 4 ) ) {
-    return KITTY_IMAGE_QUOTA + 1;
-  }
-  const size_t decoded = static_cast<size_t>( image.width ) * static_cast<size_t>( image.height ) * 4;
-  return encoded > decoded ? encoded : decoded;
-}
-
-void Framebuffer::evict_kitty_images( uint32_t preserve_id )
-{
-  uint64_t total = 0, encoded = 0;
-  for ( std::map<uint32_t, KittyImage>::const_iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
-    total += kitty_image_cost( it->second );
-    encoded += ( it->second.data ? it->second.data->size() : 0 ) + it->second.palette.size();
-  }
-  if ( total <= KITTY_IMAGE_QUOTA && encoded <= KITTY_ENCODED_QUOTA ) {
-    return;
-  }
-
-  std::map<uint32_t, int> referenced;
-  for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
-    referenced[kitty_placements[i].image_id]++;
-  }
-
-  while ( ( total > KITTY_IMAGE_QUOTA || encoded > KITTY_ENCODED_QUOTA ) && !kitty_images.empty() ) {
-    std::map<uint32_t, KittyImage>::iterator victim = kitty_images.end();
-    for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
-      if ( ( it->first == preserve_id && kitty_images.size() > 1 )
-           || referenced.find( it->first ) != referenced.end() ) {
-        continue;
-      }
-      if ( victim == kitty_images.end() || it->second.serial < victim->second.serial ) {
-        victim = it;
-      }
-    }
-    if ( victim == kitty_images.end() ) {
-      for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ++it ) {
-        if ( it->first != preserve_id || kitty_images.size() == 1 ) {
-          if ( victim == kitty_images.end() || it->second.serial < victim->second.serial ) {
-            victim = it;
-          }
-        }
-      }
-    }
-    assert( victim != kitty_images.end() );
-    total -= kitty_image_cost( victim->second );
-    encoded -= ( victim->second.data ? victim->second.data->size() : 0 ) + victim->second.palette.size();
-    std::vector<KittyPlacement> kept;
-    for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
-      if ( kitty_placements[i].image_id != victim->first ) {
-        kept.push_back( kitty_placements[i] );
-      }
-    }
-    kitty_placements.swap( kept );
-    kitty_images.erase( victim );
-  }
 }

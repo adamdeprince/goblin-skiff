@@ -1,5 +1,6 @@
 /* Distributed under the GNU GPL, version 3 or later. */
 #include "sixel.h"
+#include "src/terminal/inputlimits.h"
 
 #include <algorithm>
 #include <array>
@@ -282,7 +283,7 @@ bool decode( const std::string& dcs, Bitmap& output, std::string& error, uint32_
 {
   output = Bitmap();
   error.clear();
-  if ( dcs.size() > MAX_ENCODED_BYTES ) {
+  if ( escape_byte_limit && dcs.size() > escape_byte_limit ) {
     return reject( error, "Sixel encoded size limit exceeded" );
   }
   size_t start = dcs.compare( 0, 2, "\033P" ) == 0 ? 2 : !dcs.empty() && uint8_t( dcs[0] ) == 0x90 ? 1 : 0;
@@ -403,7 +404,7 @@ bool encode( const Bitmap& input, std::string& dcs, std::string& error, unsigned
         repeat( output, char( '?' + mask ), count );
       }
       output += '$';
-      if ( output.size() > MAX_ENCODED_BYTES - 2 ) {
+      if ( escape_byte_limit && output.size() > escape_byte_limit ) {
         return reject( error, "Sixel output size limit exceeded" );
       }
     }
@@ -412,7 +413,7 @@ bool encode( const Bitmap& input, std::string& dcs, std::string& error, unsigned
     }
   }
   output += "\033\\";
-  if ( output.size() > MAX_ENCODED_BYTES ) {
+  if ( escape_byte_limit && output.size() > escape_byte_limit ) {
     return reject( error, "Sixel output size limit exceeded" );
   }
   dcs.swap( output );

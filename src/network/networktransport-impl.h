@@ -117,6 +117,7 @@ void Transport<MyState, RemoteState>::recv( void )
 
     sender.set_peer_zstd_capabilities( inst.has_zstd_supported() && inst.zstd_supported(),
                                        inst.has_zstd_dict_id() ? inst.zstd_dict_id() : "" );
+    sender.set_peer_large_fragments_supported( inst.large_fragments_supported() );
 
     sender.process_acknowledgment_through( inst.ack_num() );
 

@@ -12,9 +12,8 @@
 
 namespace Terminal {
 namespace Sixel {
-constexpr size_t MAX_ENCODED_BYTES = 64 * 1024 * 1024;
-constexpr size_t MAX_PIXELS = GRAPHICS_MAX_PIXELS;
-constexpr uint32_t MAX_DIMENSION = GRAPHICS_MAX_DIMENSION;
+constexpr size_t MAX_PIXELS = 32 * 1024 * 1024;
+constexpr uint32_t MAX_DIMENSION = 16383;
 constexpr unsigned MAX_COLORS = 1024;
 constexpr size_t MAX_PLACEMENTS = 8192;
 

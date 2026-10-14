@@ -33,6 +33,7 @@
 #include "src/include/config.h"
 
 #include <limits>
+#include <algorithm>
 #include <stdexcept>
 
 #include <zlib.h>
@@ -52,7 +53,7 @@ const int STATE_ZSTD_LEVEL = 22;
 
 std::string zlib_compress_str( const std::string& input )
 {
-  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
+  if ( input.size() > std::numeric_limits<uLong>::max() ) { throw std::length_error( "transport state cannot be represented by zlib" ); }
   uLongf len = compressBound( input.size() );
   std::string output( len, '\0' );
   dos_assert( Z_OK == compress( reinterpret_cast<Bytef*>( &output[0] ), &len,
@@ -63,8 +64,8 @@ std::string zlib_compress_str( const std::string& input )
 
 std::string zlib_uncompress_str( const std::string& input )
 {
-  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport frame exceeds size limit" ); }
-  // zlib frames do not advertise their decoded size. Grow a bounded output
+  if ( input.size() > std::numeric_limits<uLong>::max() ) { throw std::length_error( "transport frame cannot be represented by zlib" ); }
+  // zlib frames do not advertise their decoded size. Grow an output
   // buffer; ordinary text screens still need only a few KiB.
   size_t capacity = 4096;
   for ( ;; ) {
@@ -74,8 +75,9 @@ std::string zlib_uncompress_str( const std::string& input )
                                     reinterpret_cast<const Bytef*>( input.data() ), input.size() );
     if ( status == Z_OK ) { output.resize( len ); return output; }
     if ( status != Z_BUF_ERROR ) { throw std::runtime_error( "invalid zlib transport frame" ); }
-    if ( capacity == Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
-    capacity *= 2;
+    const size_t maximum = std::min<size_t>( output.max_size(), std::numeric_limits<uLongf>::max() );
+    if ( capacity == maximum ) { throw std::length_error( "transport state cannot be represented" ); }
+    capacity = capacity > maximum / 2 ? maximum : capacity * 2;
   }
 }
 
@@ -89,7 +91,6 @@ bool looks_like_zstd_frame( const std::string& input )
 #ifdef HAVE_ZSTD
 std::string zstd_compress_str( const std::string& input )
 {
-  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
   const size_t bound = ZSTD_compressBound( input.size() );
   std::string compressed( bound, '\0' );
   const size_t written
@@ -105,7 +106,6 @@ std::string zstd_compress_str( const std::string& input,
                                const std::string& dictionary,
                                void*& cached_cdict )
 {
-  if ( input.size() > Compressor::MAX_STATE_SIZE ) { throw std::length_error( "transport state exceeds size limit" ); }
   if ( dictionary.empty() ) {
     return zstd_compress_str( input );
   }
@@ -139,8 +139,8 @@ std::string zstd_uncompress_str( const std::string& input, void* zstd_ddict )
   if ( frame_size == ZSTD_CONTENTSIZE_ERROR || frame_size == ZSTD_CONTENTSIZE_UNKNOWN ) {
     throw std::runtime_error( "zstd transport frame has no usable content size" );
   }
-  if ( frame_size > Compressor::MAX_STATE_SIZE ) {
-    throw std::runtime_error( "zstd transport frame exceeds decompression limit" );
+  if ( frame_size > std::string().max_size() ) {
+    throw std::length_error( "zstd transport frame cannot be represented" );
   }
 
   std::string decompressed( static_cast<size_t>( frame_size ), '\0' );

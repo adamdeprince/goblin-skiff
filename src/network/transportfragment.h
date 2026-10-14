@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -49,19 +50,21 @@ class Fragment
 {
 public:
   static const size_t frag_header_len = sizeof( uint64_t ) + sizeof( uint16_t );
+  static const size_t large_frag_header_len = 2 * sizeof( uint64_t );
 
   uint64_t id;
-  uint16_t fragment_num;
+  uint64_t fragment_num;
   bool final;
+  bool large;
 
   bool initialized;
 
   std::string contents;
 
-  Fragment() : id( -1 ), fragment_num( -1 ), final( false ), initialized( false ), contents() {}
+  Fragment() : id( -1 ), fragment_num( -1 ), final( false ), large( false ), initialized( false ), contents() {}
 
-  Fragment( uint64_t s_id, uint16_t s_fragment_num, bool s_final, const std::string& s_contents )
-    : id( s_id ), fragment_num( s_fragment_num ), final( s_final ), initialized( true ), contents( s_contents )
+  Fragment( uint64_t s_id, uint64_t s_fragment_num, bool s_final, const std::string& s_contents, bool s_large = false )
+    : id( s_id ), fragment_num( s_fragment_num ), final( s_final ), large( s_large ), initialized( true ), contents( s_contents )
   {}
 
   Fragment( const std::string& x );
@@ -74,12 +77,12 @@ public:
 class FragmentAssembly
 {
 private:
-  std::vector<Fragment> fragments;
+  std::map<uint64_t, Fragment> fragments;
   uint64_t current_id;
-  int fragments_arrived, fragments_total;
+  uint64_t fragments_total;
 
 public:
-  FragmentAssembly() : fragments(), current_id( -1 ), fragments_arrived( 0 ), fragments_total( -1 ) {}
+  FragmentAssembly() : fragments(), current_id( -1 ), fragments_total( 0 ) {}
   bool add_fragment( Fragment& inst );
   Instruction get_assembly( StateSampleWriter* sample_writer = NULL );
 };
@@ -92,6 +95,7 @@ private:
   size_t last_MTU;
   bool last_allow_zstd;
   bool last_allow_zstd_dictionary;
+  bool last_allow_large_fragments = false;
   std::string last_zstd_dictionary_id;
 
 public:
@@ -106,7 +110,8 @@ public:
                                         size_t MTU,
                                         bool allow_zstd = false,
                                         bool allow_zstd_dictionary = false,
-                                        const std::string& zstd_dictionary_id = "" );
+                                        const std::string& zstd_dictionary_id = "",
+                                        bool allow_large_fragments = false );
   uint64_t last_ack_sent( void ) const { return last_instruction.ack_num(); }
 };
 

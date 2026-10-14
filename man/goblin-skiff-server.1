@@ -92,6 +92,32 @@ The argument "new" must be first on the command line to use
 command-line options.
 
 .TP
+.B \-\-csi\-limit=\fIBYTES\fP
+Maximum number of bytes in one CSI sequence
+.RB ( ESC\ [
+up to and including its final byte) from the program.
+.B 0
+means no limit. A longer sequence is ignored.
+.B MOSH_CSI_LIMIT
+sets the same number when this flag is absent.
+.TP
+.B \-\-escape\-limit=\fIBYTES\fP
+Maximum number of bytes in one OSC, APC or DCS payload from the program,
+not counting the introducer and terminator.
+.B 0
+means no limit. A longer sequence is discarded. Sixel text uses this same
+bound.
+.B MOSH_ESCAPE_LIMIT
+sets the same number when this flag is absent.
+.TP
+.B \-\-vector\-depth\-limit=\fIN\fP
+Maximum number of groups a vector element may be nested inside. Deeper
+elements are not followed.
+.B 0
+means any depth. A cycle in the parent chain is rejected either way.
+.B MOSH_VECTOR_DEPTH_LIMIT
+sets the same number when this flag is absent.
+.TP
 .B \-s
 bind to the local interface used for an incoming SSH connection, given
 in the \fBSSH_CONNECTION\fP environment variable (for multihomed
@@ -176,6 +202,23 @@ They may be set by administrators in system login/rc files,
 login/rc files.  \fBgoblin-skiff-server\fP passes these variables to the login
 session and shell that it starts, but changing them there will have no
 effect.
+
+.TP
+.B MOSH_CSI_LIMIT
+.TQ
+.B MOSH_ESCAPE_LIMIT
+.TQ
+.B MOSH_VECTOR_DEPTH_LIMIT
+The same optional bounds as
+.BR \-\-csi\-limit ,
+.B \-\-escape\-limit
+and
+.BR \-\-vector\-depth\-limit .
+Each is a non-negative integer read in this process.
+.B 0
+or an unset variable means no limit. A value that is not an integer is ignored.
+A flag on the command line wins, because the server applies it by setting
+the variable before reading these.
 
 .TP
 .B MOSH_SERVER_NETWORK_TMOUT

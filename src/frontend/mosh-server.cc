@@ -32,6 +32,7 @@
 */
 
 #include "src/include/config.h"
+#include "src/terminal/inputlimits.h"
 #include "src/include/version.h"
 
 #include <cerrno>
@@ -87,6 +88,7 @@
 
 #include "src/statesync/clipboard.h"
 #include "src/statesync/completeterminal.h"
+#include "src/terminal/gpusurface.h"
 #include "src/statesync/user.h"
 #include "src/util/fatal_assert.h"
 #include "src/util/locale_utils.h"
@@ -110,6 +112,11 @@
 #include "relay-server.h"
 
 using ServerConnection = Network::Transport<Terminal::Complete, Network::UserStream>;
+
+/* How long the client may be silent, at least, before what it was doing
+   with a pen, a finger or a gesture is taken to be over. While anything is in
+   progress it sends a heartbeat every ExtensionClient::HEARTBEAT_MS. */
+static const uint64_t EXTENSION_CLIENT_SILENCE_MS = 8000;
 
 static void serve( int host_fd,
                    int pipe_fd,
@@ -154,11 +161,16 @@ static void print_version( FILE* file )
 static void print_usage( FILE* stream, const char* argv0 )
 {
   fprintf( stream,
-           "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [--fips-crypto] [-- COMMAND...]\n",
+           "Usage: %s new [-s] [-v] [-i LOCALADDR] [-p PORT[:PORT2]] [-c COLORS] [-l NAME=VALUE] [-A] [-X] [-R SPEC] [-t MS] [-b BPS] [--fips-crypto] [--csi-limit=BYTES] [--escape-limit=BYTES] [--vector-depth-limit=N] [-- COMMAND...]\n",
            argv0 );
   fputs( "       goblin-skiff-server relay --help  (authenticated UDP jump relay)\n", stream );
   fputs( "       --lossy=QUALITY  WebP quality 0-100 (higher is better; default lossless)\n"
-         "       --djvu-lossy     allow cjb2 symbol substitution for two-color images\n", stream );
+         "       --djvu-lossy     allow cjb2 symbol substitution for two-color images\n"
+         "       --csi-limit=BYTES       max bytes of one CSI (ESC [); 0 means no limit\n"
+         "       --escape-limit=BYTES    max bytes of one OSC, APC or DCS; 0 means no limit\n"
+         "       --vector-depth-limit=N  max vector-group nesting; 0 means no limit\n"
+         "                        A sequence past its bound is ignored. A parent cycle is always rejected.\n"
+         "                        Also MOSH_CSI_LIMIT, MOSH_ESCAPE_LIMIT, MOSH_VECTOR_DEPTH_LIMIT.\n", stream );
 }
 
 static bool print_motd( const char* filename );
@@ -319,6 +331,7 @@ int main( int argc, char* argv[] )
   const char* client_capabilities = getenv( "MOSH_CLIENT_CAPS" );
   Terminal::ImageEncoding image_encoding;
   image_encoding.palette_djvu = has_capability( client_capabilities, "palette-djvu-v1" );
+  image_encoding.png = has_capability( client_capabilities, "png-state-v1" );
   bool compact_keepalive = has_capability( client_capabilities, "keepalive-v1" );
   bool tmux_control = has_capability( client_capabilities, "tmux-control-v1" );
   bool client_supports_fips_crypto = has_capability( client_capabilities, "fips-aes128-gcm-v1" );
@@ -353,6 +366,9 @@ int main( int argc, char* argv[] )
       { "fips-crypto", no_argument, NULL, 256 },
       { "lossy", required_argument, NULL, 257 },
       { "djvu-lossy", no_argument, NULL, 258 },
+      { "csi-limit", required_argument, NULL, 259 },
+      { "escape-limit", required_argument, NULL, 260 },
+      { "vector-depth-limit", required_argument, NULL, 261 },
       { 0, 0, 0, 0 },
     };
     while ( ( opt = getopt_long( argc - 1, argv + 1, "@:i:p:c:svl:R:AXt:b:", long_options, NULL ) ) != -1 ) {
@@ -429,6 +445,15 @@ int main( int argc, char* argv[] )
         case 258:
           image_encoding.djvu_lossy = true;
           break;
+        case 259:
+          setenv( "MOSH_CSI_LIMIT", optarg, 1 );
+          break;
+        case 260:
+          setenv( "MOSH_ESCAPE_LIMIT", optarg, 1 );
+          break;
+        case 261:
+          setenv( "MOSH_VECTOR_DEPTH_LIMIT", optarg, 1 );
+          break;
         case '?':
           print_usage( stderr, argv[0] );
           return 1;
@@ -450,6 +475,9 @@ int main( int argc, char* argv[] )
     print_usage( stderr, argv[0] );
     exit( 1 );
   }
+
+  /* 0 from the environment means no limit. Flags above overrode the variables. */
+  Terminal::load_input_limits_from_env();
 
   /* Sanity-check arguments */
   int dpl, dph;
@@ -960,6 +988,9 @@ static int run_server( const char* desired_ip,
       perror( "parent read pipe close" );
       exit( 1 );
     }
+    /* forkpty() made the shell a session leader: its session is the one
+       whose processes may hand this window their GPU buffers. */
+    Terminal::set_gpu_surface_session( child );
 
     /* Drop unnecessary privileges */
 #ifdef HAVE_PLEDGE
@@ -1190,11 +1221,25 @@ static void serve( int host_fd,
               downloads.set_enabled( downloads_enabled );
               mime_enabled = mime_negotiated && caps.clipboard && !tmux_control;
               terminal.set_mime_clipboard_enabled( mime_enabled );
+              terminal.set_pointer_available( caps.pointer && !tmux_control );
               mime_clipboard.set_threshold( caps.clipboard_fast_threshold );
               terminal.set_sixel_enabled( sixel_state && ( caps.sixel || caps.kitty ) );
               terminal.set_keyboard_enabled( sixel_state && caps.keyboard );
               terminal.set_text_sizing_enabled( sixel_state );
               graphics_ready = true;
+              continue;
+            }
+            if ( us.is_extensions_event( i ) ) {
+              if ( !tmux_control ) {
+                terminal_to_host += terminal.set_client_extensions( us.get_extensions_event( i ) );
+              }
+              continue;
+            }
+            if ( us.is_extension_input( i ) ) {
+              /* A report from the client's terminal: never keystrokes. */
+              if ( !tmux_control ) {
+                terminal_to_host += terminal.extension_input( us.get_extension_input( i ) );
+              }
               continue;
             }
             if ( us.is_tmux_event( i ) ) {
@@ -1369,6 +1414,7 @@ static void serve( int host_fd,
           } else {
             terminal_to_host += terminal.act( std::string( buf, bytes_read ), &client_geometry );
           }
+          terminal.extension_output_written();
 
           /* update client with new state of terminal */
           for ( const auto& body : terminal.take_parser_mime_clipboard_events() ) { mime_clipboard.submit( body, now ); }
@@ -1387,6 +1433,30 @@ static void serve( int host_fd,
           }
         }
       }
+
+      /* Silkie's extensions: frames for the client's terminal, written once.
+         (The client drops haptic feedback that reaches it after it lost
+         contact, rather than play it late.) */
+      /* While something is in progress the client is heard from every two
+         seconds; a few missed beats, allowing for the link, mean it has gone. */
+      const uint64_t silence_limit
+        = std::max<uint64_t>( EXTENSION_CLIENT_SILENCE_MS, uint64_t( 4 * network.get_SRTT() ) + 4000 );
+      const bool client_listening = network.get_remote_state_num()
+                                    && Network::timestamp() - network.get_latest_remote_state().timestamp
+                                         < silence_limit;
+      for ( const auto& frame : terminal.take_extension_outputs() ) {
+        if ( !network.shutdown_in_progress() ) {
+          network.get_current_state().push_extension_output( frame );
+        }
+      }
+      /* A client that has gone quiet leaves no contact open in the program. */
+      if ( !client_listening && terminal.extension_contacts_live() && !network.shutdown_in_progress() ) {
+        terminal_to_host += terminal.extension_detach();
+        network.get_current_state().replace_terminal_state( terminal );
+      }
+      network.set_low_latency( terminal.get_fb().ds.ext.latency );
+      terminal.set_relay_timing( uint64_t( network.send_mindelay() ) * 1000, uint64_t( network.send_interval() ) * 1000,
+                                 uint64_t( network.get_SRTT() ) );
 
       /* write user input and terminal writeback to the host */
       std::string mime_body;
@@ -1434,9 +1504,16 @@ static void serve( int host_fd,
         break;
       }
 
-      /* quit if we received and acknowledged a shutdown request */
+      /* quit if we received and acknowledged a shutdown request; but the
+         acknowledgement is a single datagram, so, as TCP's TIME_WAIT does,
+         linger a moment while the transport sends it again each interval.
+         Exiting at once left a client whose acknowledgement was lost
+         retrying into a closed port until it reported an unclean shutdown. */
       if ( network.counterparty_shutdown_ack_sent() ) {
-        break;
+        const uint64_t linger_deadline = now + 1000;
+        if ( !idle_cleanup_deadline || idle_cleanup_deadline > linger_deadline ) {
+          idle_cleanup_deadline = linger_deadline;
+        }
       }
 
 #ifdef HAVE_UTEMPTER

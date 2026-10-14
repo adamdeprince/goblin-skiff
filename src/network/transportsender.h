@@ -34,6 +34,7 @@
 #define TRANSPORT_SENDER_HPP
 
 #include <cstddef>
+#include <algorithm>
 #include <list>
 #include <string>
 
@@ -51,6 +52,7 @@ const int SEND_INTERVAL_MIN = 100;      /* ms between frames: at most 10 frames/
 const int SEND_INTERVAL_MAX = 250;      /* ms between frames: at least 4 frames/s */
 const int ACK_INTERVAL = 3000;          /* ms between legacy empty acks */
 const int ACK_DELAY = 100;              /* ms before delayed ack */
+const int LOW_LATENCY_SEND_INTERVAL = 4; /* ms between frames while a program asks for low latency */
 const int SHUTDOWN_RETRIES = 16;        /* number of shutdown packets to send before giving up */
 const int ACTIVE_RETRY_TIMEOUT = 10000; /* attempt to resend at frame rate */
 
@@ -114,8 +116,11 @@ private:
 
   bool peer_zstd_supported;
   std::string peer_zstd_dictionary_id;
+  bool peer_large_fragments_supported = false;
+  bool low_latency = false; /* a program asked for its output as soon as it is written */
 
 public:
+  void set_peer_large_fragments_supported( bool supported ) { peer_large_fragments_supported = supported; }
   /* constructor */
   TransportSender( Connection* s_connection, MyState& initial_state, bool s_compact_keepalive = false );
 
@@ -178,6 +183,8 @@ public:
   bool shutdown_ack_timed_out( void ) const;
 
   void set_send_delay( int new_delay ) { SEND_MINDELAY = new_delay; }
+  void set_low_latency( bool enabled ) { low_latency = enabled; }
+  unsigned int send_mindelay( void ) const { return low_latency ? std::min( SEND_MINDELAY, 1U ) : SEND_MINDELAY; }
   void request_immediate_send( void ) { immediate_send_requested = true; }
 
   unsigned int send_interval( void ) const;

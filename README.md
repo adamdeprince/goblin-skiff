@@ -415,17 +415,29 @@ Usage
 
   Static Kitty graphics sent as RGB, RGBA, or PNG are normalized once and
   synchronized as image and placement state. Images with at most 16 distinct
-  RGBA colors use an exact palette plus a DjVu image encoded by DjVuLibre's
-  `cjb2`; other images use lossless WebP by default. The palette includes alpha.
+  RGBA colors and at least 1024 pixels use an exact palette plus a DjVu image
+  encoded by DjVuLibre's `cjb2`; other images use lossless WebP by default.
+  The palette includes alpha.
   DjVu carries palette-index bitplanes and is enabled only for peers advertising
   `palette-djvu-v1`; older peers receive WebP. If cjb2 fails or exceeds its
   five-second limit, the server falls back to lossless WebP for that image.
+  Smaller palette images use exact lossless WebP to avoid a process launch
+  and threaded DjVu decode for each cell in a tiled desktop viewer.
   Placement-only changes do not resend pixels. The client decodes the image and emits standard
   Kitty RGBA commands to the local terminal.  The wrapper also exposes the
   local terminal type to the remote login session, so a client running with
   `TERM=xterm-ghostty` advertises Ghostty's Kitty graphics support to remote
   applications.  The corresponding terminfo entry must be installed on the
   remote host.
+
+  Kitty image state has no configured image-count, per-image byte/pixel, or
+  aggregate storage quota, and images are retained until the application deletes
+  them or resets the terminal. This supports desktop viewers with one image per
+  character cell. When both endpoints support `png-state-v1`, images beyond
+  WebP's dimension range use lossless PNG. Large state snapshots use negotiated
+  extended fragment indices. Available memory and the native image/protobuf
+  formats still determine what can be represented; update both endpoints to
+  receive the new large-image and large-snapshot formats.
 
   Use `--lossy=QUALITY` to encode WebP images with a quality from 0 to 100;
   higher values preserve more detail and generally use more bandwidth. Even
@@ -617,7 +629,7 @@ Goblin radio integration
 -----------------------
 
 The radio integration from `goblin-modem` negotiates `radio-v1` and invokes
-`goblin-skiff-client --radio` automatically. The goTenna profile uses 128-byte
+`goblin-skiff-client --radio` automatically. The profile for goTenna Mesh radios uses 128-byte
 encrypted datagrams, packet airtime pacing including ACKs/keepalives, and
 6–60-second adaptive retransmission waits (18 seconds initially). It keeps
 pacing active while slow capability feedback is in flight. The server confirms
@@ -633,3 +645,35 @@ contributors listed in [AUTHORS](AUTHORS). Upstream copyright notices are
 preserved. Skiff is distributed under the [GNU GPL version 3 or later](COPYING),
 with the same OpenSSL and [iOS exceptions](COPYING.iOS) as upstream Mosh.
 See the [trademark notice](TRADEMARKS.md).
+
+
+### Pen and touch applications
+
+Skiff transports the open [Goblin pointer v1 extension](GOBLIN_POINTER_PROTOCOL.md).
+An application selects enhanced input; Skiff probes the attached terminal, retains
+that mode with terminal state, restores it on reconnect, and clears it on detach.
+Pressure, tilt, barrel rotation when available, eraser identity, independent
+finger contacts and gestures pass through without local keystroke prediction or
+control-panel shortcut interpretation. An unsupported host is reported as such,
+so applications can keep their SGR mouse fallback. SGR pixel mouse mode 1016 is
+also retained and advertised. Upgrade both client and server to use the extension.
+
+### Silkie's extensions
+
+Skiff relays the terminal extensions of [Silkie](https://github.com/adamdeprince/silkie/tree/silkie),
+a kitty fork, when the client runs in it. These cover tablets, touch and pads;
+scroll deltas and trackpad gestures; frame presentation and low-latency
+reports; display information and haptic feedback; ink drawn by the terminal
+into vector images (`f=200`); HDR and wide-gamut colors for text and images;
+translucent cell backgrounds; GPU surfaces; and image pointers. The server
+answers each extension's queries from what the client learnt of its terminal.
+It keeps each mode with the terminal state and cancels strokes when needed.
+A vector image changes over the link as small patches. CSI sequences, OSC,
+APC and DCS payloads, and vector-group nesting have no fixed cap. `0`, the
+default of `--csi-limit`, `--escape-limit` and `--vector-depth-limit` (also
+`MOSH_CSI_LIMIT`, `MOSH_ESCAPE_LIMIT` and `MOSH_VECTOR_DEPTH_LIMIT`), means
+no limit. See
+[SILKIE_EXTENSIONS.md](SILKIE_EXTENSIONS.md) and `man goblin-skiff`. Upgrade both client and server.
+
+Inkline's `tools/goblin-draw/goblin_draw.py` is a portable client: its Kitty images
+are individual character-cell tiles, and a stroke retransmits only dirty tiles.

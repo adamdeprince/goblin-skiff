@@ -268,7 +268,7 @@ void test_webp_reduces_repetitive_state( void )
   require( webp.size() < raw.size(), "lossless WebP reduces repetitive state" );
 }
 
-void test_webp_quota_counts_decoded_pixels( void )
+void test_images_are_not_evicted( void )
 {
   const uint32_t width = 1024, height = 1024;
   const std::string raw( static_cast<size_t>( width ) * height * 3, static_cast<char>( 37 ) );
@@ -279,7 +279,7 @@ void test_webp_quota_counts_decoded_pixels( void )
            "normalize quota test image" );
 
   Terminal::Framebuffer framebuffer( 80, 24 );
-  const uint32_t capacity = Terminal::KITTY_IMAGE_QUOTA / ( width * height * 4 );
+  const uint32_t capacity = 256 * 1024 * 1024 / ( width * height * 4 );
   for ( uint32_t id = 1; id <= capacity + 1; id++ ) {
     Terminal::KittyImage image;
     image.id = id;
@@ -292,9 +292,72 @@ void test_webp_quota_counts_decoded_pixels( void )
     placement.placement_id = id;
     framebuffer.put_kitty_placement( placement );
   }
-  require( framebuffer.find_kitty_image( 1 ) == NULL, "decoded-state quota evicts the oldest image" );
-  require( framebuffer.find_kitty_image( capacity + 1 ) != NULL, "decoded-state quota preserves the new upload" );
-  require( framebuffer.get_kitty_images().size() == capacity, "decoded-state quota caps aggregate pixels" );
+  require( framebuffer.find_kitty_image( 1 ) != NULL, "oldest image survives former aggregate quota" );
+  require( framebuffer.find_kitty_image( capacity + 1 ) != NULL, "new upload retained" );
+  require( framebuffer.get_kitty_images().size() == capacity + 1, "aggregate pixels have no storage quota" );
+}
+
+void test_large_kitty_command_and_dimensions()
+{
+  Terminal::Complete term( 80, 24 );
+  const std::string pixels( 80 * 40 * 3, char( 37 ) );
+  const std::string command = "\033_Ga=T,f=24,s=80,v=40,i=1,C=1;"
+                              + Terminal::base64_encode_osc52( pixels ) + "\033\\";
+  require( command.size() > 8192, "fixture exceeds former APC limit" );
+  require( term.act( command ).find( "OK" ) != std::string::npos, "large unchunked Kitty command accepted" );
+  require( term.get_fb().find_kitty_image( 1 ) != NULL, "large command retained" );
+
+  size_t size = 0;
+  require( Terminal::graphics_pixel_size( 16383, 16383, 4, size ) && size > 256 * 1024 * 1024,
+           "large decoded image has no pixel/byte quota" );
+  require( !Terminal::graphics_pixel_size( UINT32_MAX, UINT32_MAX, 4, size ), "pixel arithmetic overflow rejected" );
+
+  const uint32_t width = 32768;
+  const std::string wide_pixels( width * 4, char( 87 ) );
+  Terminal::ImageEncoding encoding;
+  encoding.png = true;
+  Terminal::KittyImage image;
+  image.id = 72;
+  std::string error, decoded;
+  require( Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_RGBA, width, 1, wide_pixels, image, encoding, error ),
+           "image beyond WebP dimensions accepted" );
+  require( image.format == Terminal::KITTY_FORMAT_PNG && Terminal::kitty_image_to_rgba( image, decoded )
+             && decoded == wide_pixels, "PNG fallback preserves wide-image pixels" );
+  Terminal::Framebuffer source( 80, 24 ), blank( 80, 24 ), received( 80, 24 );
+  source.put_kitty_image( image );
+  KittyBuffers::StateDelta delta;
+  Terminal::kitty_state_delta_to_proto( blank, source, &delta );
+  require( delta.image_size() == 1 && delta.image( 0 ).has_png(), "wide image uses negotiated PNG state" );
+  Terminal::apply_kitty_state_delta( delta, received );
+  const auto* restored = received.find_kitty_image( image.id );
+  require( restored && Terminal::kitty_image_to_rgba( *restored, decoded ) && decoded == wide_pixels,
+           "wide image survives state synchronization" );
+  encoding.png = false;
+  require( !Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_RGBA, width, 1, wide_pixels, image, encoding, error )
+             && error.find( "png-state-v1" ) != std::string::npos, "old peer receives a codec capability error" );
+}
+
+void test_large_encoded_image()
+{
+  const uint32_t width = 2304, height = 2048;
+  std::string pixels( size_t( width ) * height * 4, '\0' );
+  uint32_t random = 0x953badU;
+  for ( auto& c : pixels ) { random ^= random << 13; random ^= random >> 17; random ^= random << 5; c = char( random ); }
+  for ( size_t i = 3; i < pixels.size(); i += 4 ) { pixels[i] = char( 255 ); }
+  Terminal::KittyImage image;
+  image.id = 1;
+  std::string error, decoded;
+  require( Terminal::kitty_normalize_image( Terminal::KITTY_FORMAT_RGBA, width, height, pixels, image,
+                                          Terminal::ImageEncoding(), error ), "encode large image" );
+  require( image.data->size() > 12 * 1024 * 1024, "fixture exceeds former encoded quota" );
+  Terminal::Framebuffer blank( 80, 24 ), source( 80, 24 ), received( 80, 24 );
+  require( source.put_kitty_image( image ) == 1, "large encoded image stored" );
+  KittyBuffers::StateDelta delta;
+  Terminal::kitty_state_delta_to_proto( blank, source, &delta );
+  Terminal::apply_kitty_state_delta( delta, received );
+  const auto* restored = received.find_kitty_image( 1 );
+  require( restored && Terminal::kitty_image_to_rgba( *restored, decoded ) && decoded == pixels,
+           "large encoded image survives synchronization exactly" );
 }
 
 void test_invalid_dimensions( void )
@@ -699,6 +762,50 @@ void test_lossy_webp_quality()
   }
 }
 
+void test_cell_image_codec()
+{
+  auto encoding = djvu_encoding();
+  for ( int quality : { -1, 0, 100 } ) {
+    encoding.quality = quality;
+    for ( unsigned colors : { 1, 2, 16 } ) {
+      const auto pixels = palette_pixels( colors, 14, 25 );
+      const auto image = normalize_image( 14, 25, pixels, encoding );
+      std::string decoded;
+      require( image.format == Terminal::KITTY_FORMAT_WEBP && image.palette.empty(),
+               "cell-sized images bypass external DjVu encoding" );
+      require( Terminal::kitty_image_to_rgba( image, decoded ) && decoded == pixels,
+               "cell palette fallback preserves exact RGBA, including hidden RGB, at every quality" );
+    }
+  }
+}
+
+void test_rebased_image_revisions()
+{
+  Terminal::Complete blank( 80, 24 ), server( 80, 24 ), first( 80, 24 ), rebased( 80, 24 );
+  const std::string old_pixels = rgb_cell( 0, 0, 0 );
+  const std::string new_pixels = rgb_cell( 17, 83, 149 );
+  const std::string controls = "a=T,C=1,i=55,p=1,c=1,r=1,f=24,s=1,v=1";
+  server.act( Terminal::encode_kitty_chunks( controls, old_pixels ) );
+  first.apply_string( server.diff_from( blank ) );
+  server.act( Terminal::encode_kitty_chunks( controls, new_pixels ) );
+  // A delayed acknowledgement makes the sender diff against the old base
+  // again. Each receiver branch starts its own image serial counter there.
+  rebased.apply_string( server.diff_from( blank ) );
+  require( first.get_fb().find_kitty_image( 55 )->serial == rebased.get_fb().find_kitty_image( 55 )->serial,
+           "rebased states reproduce a local image revision collision" );
+  Terminal::Display display( false );
+  display.set_graphics( Terminal::ClientGraphics( true ), true );
+  Terminal::Complete terminal( 80, 24 );
+  terminal.act( display.new_frame( true, blank.get_fb(), first.get_fb() ) );
+  const auto update = display.new_frame( true, first.get_fb(), rebased.get_fb() );
+  require( update.find( "\033_Ga=t" ) != std::string::npos && update.find( "\033_Ga=p" ) != std::string::npos,
+           "changed image with a reused revision is uploaded and placed again" );
+  terminal.act( update );
+  std::string decoded;
+  require( Terminal::kitty_image_to_rgba( *terminal.get_fb().find_kitty_image( 55 ), decoded )
+             && decoded == new_pixels + char( 255 ), "rebased image displays the latest pixels" );
+}
+
 void test_djvu_lossy_opt_in()
 {
   const unsigned width = 128, height = 128;
@@ -755,14 +862,14 @@ void test_djvu_state_and_rendering()
   delta = find_kitty_delta( src.diff_from( previous ), message );
   require( delta && delta->image_size() == 0 && delta->replace_placements(), "DjVu placement updates omit pixels" );
   src.act( "\033c" );
-  src.act( transmit_rgb( 99 ) );
+  src.act( Terminal::encode_kitty_chunks( "a=T,C=1,i=99,f=32,s=37,v=29", pixels ) );
   require( src.get_fb().find_kitty_image( 99 )->format == Terminal::KITTY_FORMAT_DJVU,
            "image encoding policy survives terminal reset" );
 
   Terminal::Complete sixel( 80, 24 ), sixel_received( 80, 24 );
   sixel.set_image_encoding( djvu_encoding() );
   sixel.set_sixel_enabled( true );
-  sixel.act( "\033P0;1q\"1;1;8;16#1;2;100;0;0!8~\033\\" );
+  sixel.act( "\033P0;1q\"1;1;64;32#1;2;100;0;0!64~\033\\" );
   require( !sixel.get_fb().get_kitty_images().empty(), "sixel creates image state" );
   require( sixel.get_fb().get_kitty_images().begin()->second.format == Terminal::KITTY_FORMAT_DJVU,
            "sixel shares palette transport" );
@@ -797,11 +904,52 @@ void test_invalid_djvu_state()
   Terminal::apply_kitty_state_delta( delta, fb );
   require( fb.get_kitty_images().empty(), "missing palette rejected" );
 }
+
+void test_djvu_tile_stream()
+{
+  // A desktop viewer sends one image per character cell, including many
+  // tiny solid-color tiles. Exercise the decoder through state application
+  // and local rendering, both of which decode every incoming tile.
+  const auto pixels = palette_pixels( 2, 8, 16 );
+  Terminal::KittyImage image;
+  image.width = 8;
+  image.height = 16;
+  image.format = Terminal::KITTY_FORMAT_DJVU;
+  require( Terminal::encode_palette_djvu( reinterpret_cast<const unsigned char*>( pixels.data() ),
+                                         8, 16, true, false, image.palette, *image.data ),
+           "encode legacy cell-sized DjVu fixture" );
+  Terminal::Framebuffer source( 120, 75 ), blank( 120, 75 ), received( 120, 75 );
+  for ( uint32_t id = 1; id <= 120 * 75; id++ ) {
+    image.id = id;
+    source.put_kitty_image( image );
+    Terminal::KittyPlacement placement;
+    placement.image_id = id;
+    placement.placement_id = 1;
+    placement.row = ( id - 1 ) / 120;
+    placement.col = ( id - 1 ) % 120;
+    placement.columns = placement.rows = 1;
+    source.put_kitty_placement( placement );
+  }
+  KittyBuffers::StateDelta delta;
+  Terminal::kitty_state_delta_to_proto( blank, source, &delta );
+  Terminal::apply_kitty_state_delta( delta, received );
+  require( received.get_kitty_images().size() == 120 * 75, "all desktop tiles synchronized beyond 8192 images" );
+  Terminal::Display display( false );
+  display.set_graphics( Terminal::ClientGraphics( true ), true );
+  const auto output = display.new_frame( true, blank, received );
+  require( !output.empty(), "desktop tiles rendered" );
+  const auto unchanged = display.new_frame( true, received, received );
+  require( unchanged.find( "\033_Ga=t" ) == std::string::npos, "unchanged desktop does not resend images" );
+}
 }
 
 int main( int argc, char* argv[] )
 {
   try {
+    if ( argc == 2 && std::string( argv[1] ) == "--djvu-tile-stress" ) {
+      test_djvu_tile_stream();
+      return 0;
+    }
     if ( argc == 2 && std::string( argv[1] ) == "--kittycairo" ) {
       const std::string input( ( std::istreambuf_iterator<char>( std::cin ) ), std::istreambuf_iterator<char>() );
       check_kittycairo_output( input );
@@ -810,9 +958,12 @@ int main( int argc, char* argv[] )
     test_parse_command();
     test_palette_djvu();
     test_lossy_webp_quality();
+    test_cell_image_codec();
+    test_rebased_image_revisions();
     test_djvu_lossy_opt_in();
     test_djvu_state_and_rendering();
     test_invalid_djvu_state();
+    test_djvu_tile_stream();
     test_file_media();
     test_query_reply();
     test_transmit_and_place();
@@ -821,7 +972,9 @@ int main( int argc, char* argv[] )
     test_zlib_transmit();
     test_zlib_high_compression_ratio();
     test_webp_reduces_repetitive_state();
-    test_webp_quota_counts_decoded_pixels();
+    test_images_are_not_evicted();
+    test_large_kitty_command_and_dimensions();
+    test_large_encoded_image();
     test_invalid_dimensions();
     test_delete();
     test_scroll_removes_offscreen_placement();

@@ -378,6 +378,23 @@ AC_SEARCH_LIBS([socket], [socket network])
 AC_SEARCH_LIBS([inet_addr], [nsl])
 
 AC_SEARCH_LIBS([clock_gettime], [rt])
+# Kitty images in shared memory; librt before glibc 2.34.
+AC_SEARCH_LIBS([shm_open], [rt])
+# std::filesystem, in the file transfer tests, is a library of its own before GCC 9.
+AC_MSG_CHECKING([for the library std::filesystem needs])
+STDCXXFS_LIBS=
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <filesystem>]], [[return std::filesystem::exists( "/" ) ? 0 : 1;]])],
+  [AC_MSG_RESULT([none required])],
+  [save_LIBS="$LIBS"
+   LIBS="$LIBS -lstdc++fs"
+   AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <filesystem>]], [[return std::filesystem::exists( "/" ) ? 0 : 1;]])],
+     [AC_MSG_RESULT([-lstdc++fs])
+      STDCXXFS_LIBS=-lstdc++fs],
+     [AC_MSG_RESULT([not found])])
+   LIBS="$save_LIBS"])
+AC_SUBST([STDCXXFS_LIBS])
+# GPU surfaces load IOSurface or libgbm at run time, never at link time.
+AC_SEARCH_LIBS([dlopen], [dl])
 
 # Checks for header files.
 AC_CHECK_HEADERS(m4_normalize([

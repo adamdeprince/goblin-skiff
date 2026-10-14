@@ -40,6 +40,7 @@
 
 #include "src/statesync/stream.h"
 #include "src/statesync/tmux.h"
+#include "src/terminal/extensions.h"
 #include "src/terminal/osc52.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalgeometry.h"
@@ -53,7 +54,9 @@ enum UserEventType
   UserClipboardEventType = 3,
   UserClientGeometryEventType = 4,
   UserTmuxEventType = 5,
-  UserGraphicsEventType = 6
+  UserGraphicsEventType = 6,
+  UserExtensionsEventType = 7,
+  UserExtensionInputType = 8
 };
 
 class UserEvent
@@ -67,6 +70,8 @@ public:
   Terminal::ClientGeometry client_geometry;
   Terminal::TmuxBytes tmux;
   Terminal::ClientGraphics graphics {};
+  Terminal::ClientExtensions extensions {};
+  Terminal::ExtensionInput ext_input {};
 
   UserEvent( const Parser::UserByte& s_userbyte )
     : type( UserByteType ), userbyte( s_userbyte ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
@@ -95,6 +100,14 @@ public:
     : type( UserGraphicsEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
       tmux(), graphics( s_graphics )
   {}
+  UserEvent( const Terminal::ClientExtensions& s_extensions )
+    : type( UserExtensionsEventType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
+      tmux(), extensions( s_extensions )
+  {}
+  UserEvent( const Terminal::ExtensionInput& s_input )
+    : type( UserExtensionInputType ), userbyte( 0 ), resize( -1, -1 ), stream(), clipboard(), client_geometry(),
+      tmux(), ext_input( s_input )
+  {}
 
 private:
   UserEvent();
@@ -104,7 +117,7 @@ public:
   {
     return ( type == x.type ) && ( userbyte == x.userbyte ) && ( resize == x.resize ) && ( stream == x.stream )
            && ( clipboard == x.clipboard ) && ( client_geometry == x.client_geometry ) && ( tmux == x.tmux )
-           && ( graphics == x.graphics );
+           && ( graphics == x.graphics ) && ( extensions == x.extensions ) && ( ext_input == x.ext_input );
   }
 };
 
@@ -123,6 +136,12 @@ public:
   void push_back( const Terminal::ClientGeometry& s_geometry ) { actions.push_back( UserEvent( s_geometry ) ); }
   void push_back( const Terminal::TmuxBytes& bytes ) { actions.push_back( UserEvent( bytes ) ); }
   void push_back( const Terminal::ClientGraphics& caps ) { actions.push_back( UserEvent( caps ) ); }
+  void push_back( const Terminal::ClientExtensions& info ) { actions.push_back( UserEvent( info ) ); }
+  void push_back( const Terminal::ExtensionInput& input ) { actions.push_back( UserEvent( input ) ); }
+  bool is_extensions_event( unsigned int i ) const { return actions[i].type == UserExtensionsEventType; }
+  const Terminal::ClientExtensions& get_extensions_event( unsigned int i ) const { return actions[i].extensions; }
+  bool is_extension_input( unsigned int i ) const { return actions[i].type == UserExtensionInputType; }
+  const Terminal::ExtensionInput& get_extension_input( unsigned int i ) const { return actions[i].ext_input; }
   bool is_graphics_event( unsigned int i ) const { return actions[i].type == UserGraphicsEventType; }
   const Terminal::ClientGraphics& get_graphics_event( unsigned int i ) const { return actions[i].graphics; }
   bool is_tmux_event( unsigned int i ) const { return actions[i].type == UserTmuxEventType; }

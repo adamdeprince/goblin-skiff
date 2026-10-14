@@ -58,12 +58,14 @@ std::vector<ClipboardEvent> Emulator::take_clipboard_events( void )
 void Emulator::execute( const Parser::Execute* act )
 {
   dispatch.finish_download( false );
+  dispatch.finish_st_frame( false, &fb );
   dispatch.dispatch( CONTROL, act, &fb );
 }
 
 void Emulator::print( const Parser::Print* act )
 {
   dispatch.finish_download( false );
+  dispatch.finish_st_frame( false, &fb );
   dispatch.DCS_escape_end( 0, &fb );
   assert( act->char_present );
 
@@ -162,6 +164,7 @@ void Emulator::print( const Parser::Print* act )
 void Emulator::CSI_dispatch( const Parser::CSI_Dispatch* act )
 {
   dispatch.finish_download( false );
+  dispatch.finish_st_frame( false, &fb );
   dispatch.DCS_escape_end( 0, &fb );
   dispatch.dispatch( CSI, act, &fb );
 }
@@ -179,6 +182,7 @@ void Emulator::APC_end( const Parser::APC_End* act )
 void Emulator::Esc_dispatch( const Parser::Esc_Dispatch* act )
 {
   dispatch.finish_download( act->ch == '\\' && dispatch.get_dispatch_chars().empty() );
+  dispatch.finish_st_frame( act->ch == '\\' && dispatch.get_dispatch_chars().empty(), &fb );
   dispatch.DCS_escape_end( act->ch, &fb );
   // ST terminates an OSC/DCS, it is not a cursor operation. In particular,
   // OSC 66 may have just filled the last column and armed delayed wrap.
@@ -202,4 +206,22 @@ bool Emulator::operator==( Emulator const& x ) const
 {
   /* dispatcher and user are irrelevant for us */
   return fb == x.fb;
+}
+
+std::string Emulator::extension_input( const ExtensionInput& input )
+{
+  dispatch.ext_relay.input_frame( input, fb, dispatch.terminal_to_host );
+  return read_octets_to_host();
+}
+
+std::string Emulator::set_client_extensions( const ClientExtensions& info )
+{
+  dispatch.ext_relay.set_client( info, fb, dispatch.terminal_to_host );
+  return read_octets_to_host();
+}
+
+std::string Emulator::extension_detach( void )
+{
+  dispatch.ext_relay.detach( fb, dispatch.terminal_to_host );
+  return read_octets_to_host();
 }

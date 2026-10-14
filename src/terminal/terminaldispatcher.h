@@ -32,11 +32,13 @@
 
 #ifndef TERMINALDISPATCHER_HPP
 #define TERMINALDISPATCHER_HPP
+#include "goblin_pointer.hpp"
 
 #include <map>
 #include <string>
 #include <vector>
 
+#include "src/terminal/extensions.h"
 #include "src/terminal/kittygraphics.h"
 #include "src/terminal/osc52.h"
 #include "src/terminal/terminalgeometry.h"
@@ -100,35 +102,51 @@ class Dispatcher
 private:
   std::string params;
   std::vector<int> parsed_params;
+  std::vector<std::vector<int>> parsed_subparams;
   bool parsed;
 
   std::string dispatch_chars;
   std::vector<wchar_t> OSC_string;
   bool OSC_overflow;
+  bool csi_overflow = false;
+  bool APC_overflow = false;
   std::vector<ClipboardEvent> clipboard_events;
   std::string APC_string;
-  bool APC_overflow;
   bool kitty_uploading;
+  bool kitty_chunked = false;
   KittyCommand kitty_partial;
   std::string kitty_payload;
   const ClientGeometry* client_geometry;
   std::string DCS_string {};
   bool DCS_active = false, DCS_escape = false, DCS_just_escaped = false;
+  bool DCS_termcap = false; /* collecting an XTGETTCAP request, not sixel */
   Sixel::Palette sixel_palette {};
 
   void parse_params( void );
   void finish_kitty_upload( Framebuffer* fb );
+  void finish_vector_edit( const KittyCommand& cmd, const std::string& data, Framebuffer* fb );
+  void refresh_gpu_surface( const KittyCommand& cmd, Framebuffer* fb );
   void finish_sixel( Framebuffer* fb );
+  void finish_dcs( Framebuffer* fb );
+  void finish_termcap();
 
 public:
   bool sixel_enabled = false;
   bool mime_clipboard_enabled = false;
+  bool pointer_available = false;
+  std::string pending_pointer {};
+  void pointer_dispatch( const std::string& body, Framebuffer* fb );
+  /* OSC frames that are acted on only once ST completes them: the pointer
+     protocol and Silkie's extensions. */
+  void finish_st_frame( bool complete, Framebuffer* fb );
+  std::string pending_extension {};
+  ExtensionRelay ext_relay;
   std::vector<std::string> mime_clipboard_events {};
   std::vector<std::string> download_events {};
   std::string pending_download {};
   void finish_download( bool complete )
   {
-    if ( complete && !pending_download.empty() && download_events.size() < 512 ) { download_events.push_back( pending_download ); }
+    if ( complete && !pending_download.empty() ) { download_events.push_back( pending_download ); }
     pending_download.clear();
   }
   bool text_sizing_enabled = true; // state decoder always understands OSC 66
@@ -143,14 +161,18 @@ public:
   void DCS_end( wchar_t ch, Framebuffer* fb );
   void DCS_escape_end( wchar_t ch, Framebuffer* fb );
   void reset_sixel();
-  static const int PARAM_MAX = 65535;
-  /* prevent evil escape sequences from causing long loops */
+  /* A CSI or OSC/APC/DCS longer than csi_byte_limit / escape_byte_limit
+     (when those are not zero) is ignored. Zero means no limit. */
 
   std::string terminal_to_host; /* this is the reply string */
 
   Dispatcher();
   int getparam( size_t N, int defaultval );
   int param_count( void );
+  bool has_subparams( void );
+  int subparam_count( size_t N );
+  /* Sub-parameter K of parameter N; an empty one is defaultval. */
+  int getsubparam( size_t N, size_t K, int defaultval );
 
   void newparamchar( const Parser::Param* act );
   void collect( const Parser::Collect* act );

@@ -25,6 +25,35 @@ message ResizeMessage {
   optional int32 height = 6;
 }
 
+message InkBrush {
+  optional uint32 image = 1;
+  optional uint32 group = 2;
+  optional uint32 next = 3;
+  optional uint32 remaining = 4;
+  optional uint32 tools = 5;
+  optional double w0 = 6;
+  optional double w1 = 7;
+  optional double exponent = 8;
+  optional string fill = 9;
+}
+
+// The modes of Silkie's OSC 777 extensions and the OSC 22 pointer shapes.
+message ExtensionState {
+  optional uint32 tablet = 1;
+  optional uint32 gesture = 2;
+  optional bool scroll = 3;
+  optional bool frame = 4;
+  optional bool latency = 5;
+  optional bool display = 6;
+  optional bool ink = 7;
+  optional InkBrush brush = 8;
+  optional uint32 brush_gen = 9;
+  optional uint32 frame_output = 10;
+  repeated string pointer_main = 11;
+  repeated string pointer_alternate = 12;
+  optional bool alternate = 13;
+}
+
 message EchoAck {
   optional uint64 echo_ack_num = 8;
 }
@@ -38,4 +67,7 @@ extend Instruction {
   optional KittyBuffers.StateDelta kitty = 11;
   // Ordered bytes from tmux -CC, including its DCS entry and exit markers.
   optional bytes tmux_output = 12;
+  // A frame for the client's terminal, written once (haptics, pad labels).
+  optional bytes ext_output = 13;
+  optional ExtensionState ext_state = 14;
 }

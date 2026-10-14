@@ -40,18 +40,23 @@ void tests()
              "graphics reserve inline space and restore relative cursor, never home or erase" );
   }
   require( Mascot::render( Mascot::Format::None, {} ).empty(), "opt out" );
-  const std::string replies = "\033_Gi=4294967294;OK\033\\\033[?62;4c\033[6;32;16t\033[?0u\033[?5522;2$y"
-                              "\033[20;1R\033[20;3R\033[20;5R";
+  const std::string pointer_reply = "\033]777;goblin-pointer;v=1:op=cap:id=17349521:caps=7:"
+                                    "w=1280:h=768:cw=16:ch=32\033\\";
+  const std::string legacy_replies = "\033_Gi=4294967294;OK\033\\\033[?62;4c\033[6;32;16t\033[?0u\033[?5522;2$y"
+                                     "\033[20;1R\033[20;3R\033[20;5R";
+  const std::string replies = legacy_replies + pointer_reply;
   for ( size_t split = 0; split <= replies.size(); split++ ) {
     Mascot::Splash splash;
-    require( !splash.start( {}, true ).empty(), "local capability query" );
+    const auto queries = splash.start( {}, true );
+    require( queries.find( "\033]777;goblin-pointer;v=1:op=query:id=17349521\033\\" ) != std::string::npos,
+             "local pointer capability query" );
     require( splash.paint( 0 ).empty(), "no ASCII flash before capability replies" );
     auto first = splash.filter( "before" + replies.substr( 0, split ), 0 );
     auto second = splash.filter( replies.substr( split ) + "after", 1 );
     require( first + second == "beforeafter", "capability replies never reach remote" );
     require( splash.selected() == Mascot::Format::Kitty, "Kitty preferred over sixel" );
     require( splash.probe_ready( 1 ) && splash.supports_keyboard() && splash.supports_text_sizing() == 2
-               && splash.supports_clipboard(),
+               && splash.supports_clipboard() && splash.supports_pointer(),
              "all local capabilities discovered across arbitrary byte splits" );
     const auto banner = splash.paint( 1 );
     require( banner.find( "\033_G" ) != std::string::npos && banner.find( "\033[2J" ) == std::string::npos,
@@ -63,6 +68,22 @@ void tests()
     require( splash.paint( 100 ).empty(), "never redraw a printed banner" );
     require( splash.dismiss().empty() && !splash.active(), "dismiss leaves banner in scrollback" );
   }
+  Mascot::Splash no_pointer;
+  no_pointer.start( {}, true, 100 );
+  require( no_pointer.filter( legacy_replies, 101 ).empty(), "legacy terminal replies stay local" );
+  require( !no_pointer.probe_ready( 349 ) && no_pointer.probe_ready( 350 ) && !no_pointer.supports_pointer(),
+           "unsupported pointer probe completes at its bounded timeout" );
+  require( !no_pointer.paint( 350 ).empty(), "missing pointer reply does not prevent mascot rendering" );
+  require( no_pointer.filter( pointer_reply, 351 ).empty() && no_pointer.paint( 352 ).empty(),
+           "late pointer reply stays local without repainting history" );
+
+  const std::string no_pointer_reply = "\033]777;goblin-pointer;v=1:op=cap:id=17349521:caps=0:"
+                                       "w=1280:h=768:cw=16:ch=32\a";
+  Mascot::Splash declined_pointer;
+  declined_pointer.start( {}, true );
+  require( declined_pointer.filter( legacy_replies + no_pointer_reply, 1 ).empty()
+             && declined_pointer.probe_ready( 1 ) && !declined_pointer.supports_pointer(),
+           "negative BEL-terminated pointer reply completes the probe without enabling support" );
   Mascot::Splash splash;
   splash.start( {}, true );
   require( splash.filter( "\033", 0 ).empty(), "partial local reply" );

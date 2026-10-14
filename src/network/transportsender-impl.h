@@ -69,6 +69,9 @@ TransportSender<MyState>::TransportSender( Connection* s_connection,
 template<class MyState>
 unsigned int TransportSender<MyState>::send_interval( void ) const
 {
+  if ( low_latency ) {
+    return LOW_LATENCY_SEND_INTERVAL;
+  }
   int SEND_INTERVAL = lrint( ceil( connection->get_SRTT() / 2.0 ) );
   if ( SEND_INTERVAL < SEND_INTERVAL_MIN ) {
     SEND_INTERVAL = SEND_INTERVAL_MIN;
@@ -100,11 +103,11 @@ void TransportSender<MyState>::calculate_timers( void )
       mindelay_clock = now;
     }
 
-    next_send_time = std::max( mindelay_clock + SEND_MINDELAY, sent_states.back().timestamp + send_interval() );
+    next_send_time = std::max( mindelay_clock + send_mindelay(), sent_states.back().timestamp + send_interval() );
   } else if ( !( current_state == assumed_receiver_state->state ) && ( last_heard + connection->active_retry_timeout() > now ) ) {
     next_send_time = sent_states.back().timestamp + send_interval();
     if ( mindelay_clock != uint64_t( -1 ) ) {
-      next_send_time = std::max( next_send_time, mindelay_clock + SEND_MINDELAY );
+      next_send_time = std::max( next_send_time, mindelay_clock + send_mindelay() );
     }
   } else if ( !( current_state == sent_states.front().state ) && ( last_heard + connection->active_retry_timeout() > now ) ) {
     next_send_time = sent_states.back().timestamp + connection->timeout() + ACK_DELAY;
@@ -343,6 +346,7 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
   inst.set_chaff( make_chaff() );
   const bool advertise_zstd = get_compressor().zstd_available();
   inst.set_zstd_supported( advertise_zstd );
+  inst.set_large_fragments_supported( true );
   const std::string local_dictionary_id = get_compressor().zstd_dictionary_id();
   if ( advertise_zstd && !local_dictionary_id.empty() ) {
     inst.set_zstd_dict_id( local_dictionary_id );
@@ -359,7 +363,8 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
                                                                connection->get_MTU() - connection->packet_overhead(),
                                                                advertise_zstd && peer_zstd_supported,
                                                                allow_zstd_dictionary,
-                                                               local_dictionary_id );
+                                                               local_dictionary_id,
+                                                               peer_large_fragments_supported );
   for ( std::vector<Fragment>::iterator i = fragments.begin(); i != fragments.end(); i++ ) {
     pending_fragments.push_back( *i );
 

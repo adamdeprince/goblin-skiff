@@ -382,13 +382,16 @@ static void CSI_DECSM( Framebuffer* fb, Dispatcher* dispatch )
 {
   for ( int i = 0; i < dispatch->param_count(); i++ ) {
     int param = dispatch->getparam( i, 0 );
-    if ( param == 47 || param == 1047 || param == 1049 ) { dispatch->keyboard_screen( fb, true ); }
+    if ( param == 47 || param == 1047 || param == 1049 ) {
+      dispatch->keyboard_screen( fb, true );
+      dispatch->ext_relay.set_alternate( *fb, true );
+    }
     else if ( param == 80 ) { dispatch->sixel_display_mode = true; }
     else if ( param == 1070 ) { dispatch->sixel_private_palette = true; }
     else if ( param == 8452 ) { dispatch->sixel_cursor_right = true; }
     else if ( param == 9 || ( param >= 1000 && param <= 1003 ) ) {
       fb->ds.mouse_reporting_mode = (Terminal::DrawState::MouseReportingMode)param;
-    } else if ( param == 1005 || param == 1006 || param == 1015 ) {
+    } else if ( param == 1005 || param == 1006 || param == 1015 || param == 1016 ) {
       fb->ds.mouse_encoding_mode = (Terminal::DrawState::MouseEncodingMode)param;
     } else {
       set_if_available( get_DEC_mode( param, fb ), true );
@@ -401,13 +404,16 @@ static void CSI_DECRM( Framebuffer* fb, Dispatcher* dispatch )
 {
   for ( int i = 0; i < dispatch->param_count(); i++ ) {
     int param = dispatch->getparam( i, 0 );
-    if ( param == 47 || param == 1047 || param == 1049 ) { dispatch->keyboard_screen( fb, false ); }
+    if ( param == 47 || param == 1047 || param == 1049 ) {
+      dispatch->keyboard_screen( fb, false );
+      dispatch->ext_relay.set_alternate( *fb, false );
+    }
     else if ( param == 80 ) { dispatch->sixel_display_mode = false; }
     else if ( param == 1070 ) { dispatch->sixel_private_palette = false; }
     else if ( param == 8452 ) { dispatch->sixel_cursor_right = false; }
     else if ( param == 9 || ( param >= 1000 && param <= 1003 ) ) {
       fb->ds.mouse_reporting_mode = Terminal::DrawState::MOUSE_REPORTING_NONE;
-    } else if ( param == 1005 || param == 1006 || param == 1015 ) {
+    } else if ( param == 1005 || param == 1006 || param == 1015 || param == 1016 ) {
       fb->ds.mouse_encoding_mode = Terminal::DrawState::MOUSE_ENCODING_DEFAULT;
     } else {
       set_if_available( get_DEC_mode( param, fb ), false );
@@ -478,10 +484,53 @@ static void Ctrl_BEL( Framebuffer* fb, Dispatcher* dispatch __attribute( ( unuse
 static Function func_Ctrl_BEL( CONTROL, "\x07", Ctrl_BEL );
 
 /* select graphics rendition -- e.g., bold, blinking, etc. */
+/* An SGR parameter in the colon form, with its sub-parameters: ITU-T T.416
+   colors, and the brightness, gamut and opacity of Silkie's extensions. */
+static void SGR_subparams( Framebuffer* fb, Dispatcher* dispatch, int i, int rendition )
+{
+  Renditions& r = fb->ds.get_renditions();
+  if ( rendition == 38 || rendition == 48 ) {
+    const bool background = rendition == 48;
+    const int kind = dispatch->getsubparam( i, 0, -1 );
+    if ( kind == 5 ) {
+      const int index = dispatch->getsubparam( i, 1, -1 );
+      if ( index < 0 ) {
+        return; /* no color given */
+      }
+      background ? r.set_background_color( index ) : r.set_foreground_color( index );
+    } else if ( kind == 2 ) {
+      /* 38:2:<color space id>:r:g:b, or 38:2:r:g:b without the id. */
+      const int count = dispatch->subparam_count( i );
+      if ( count < 4 ) {
+        return;
+      }
+      const int first = count >= 5 ? 2 : 1;
+      const int id = count >= 5 ? dispatch->getsubparam( i, 1, 0 ) : 0;
+      const unsigned red = std::min( 255, dispatch->getsubparam( i, first, 0 ) );
+      const unsigned green = std::min( 255, dispatch->getsubparam( i, first + 1, 0 ) );
+      const unsigned blue = std::min( 255, dispatch->getsubparam( i, first + 2, 0 ) );
+      const int color = Renditions::make_true_color( red, green, blue );
+      background ? r.set_background_color( color ) : r.set_foreground_color( color );
+      r.set_gamut( background, id == 1 || id == 2 ? id : 0 );
+    }
+  } else if ( rendition == 56 || rendition == 57 ) {
+    r.set_brightness( rendition == 57, dispatch->getsubparam( i, 0, 0 ) );
+  } else if ( rendition == 70 ) {
+    r.set_background_alpha( dispatch->getsubparam( i, 0, 100 ) );
+  } else if ( rendition == 4 ) {
+    /* Underline styles: 4:0 is none, the others are drawn as one. */
+    r.set_attribute( Renditions::underlined, dispatch->getsubparam( i, 0, 1 ) != 0 );
+  }
+}
+
 static void CSI_SGR( Framebuffer* fb, Dispatcher* dispatch )
 {
   for ( int i = 0; i < dispatch->param_count(); i++ ) {
     int rendition = dispatch->getparam( i, 0 );
+    if ( dispatch->subparam_count( i ) ) {
+      SGR_subparams( fb, dispatch, i, rendition );
+      continue;
+    }
     /* We need to special-case the handling of [34]8 ; 5 ; Ps,
        because Ps of 0 in that case does not mean reset to default, even
        though it means that otherwise (as usually renditions are applied
@@ -620,6 +669,10 @@ static Function func_CSI_DL( CSI, "M", CSI_DL );
 static void CSI_ICH( Framebuffer* fb, Dispatcher* dispatch )
 {
   int cells = dispatch->getparam( 0, 1 );
+  const int room = fb->ds.get_width() - fb->ds.get_cursor_col();
+  if ( room < cells ) {
+    cells = room;
+  }
 
   for ( int i = 0; i < cells; i++ ) {
     fb->insert_cell( fb->ds.get_cursor_row(), fb->ds.get_cursor_col() );
@@ -632,6 +685,10 @@ static Function func_CSI_ICH( CSI, "@", CSI_ICH );
 static void CSI_DCH( Framebuffer* fb, Dispatcher* dispatch )
 {
   int cells = dispatch->getparam( 0, 1 );
+  const int room = fb->ds.get_width() - fb->ds.get_cursor_col();
+  if ( room < cells ) {
+    cells = room;
+  }
 
   for ( int i = 0; i < cells; i++ ) {
     fb->delete_cell( fb->ds.get_cursor_row(), fb->ds.get_cursor_col() );
@@ -676,7 +733,14 @@ static Function func_CSI_ECH( CSI, "X", CSI_ECH );
 /* reset to initial state */
 static void Esc_RIS( Framebuffer* fb, Dispatcher* dispatch )
 {
+  /* Contacts in progress are cancelled before the modes go, and the counters
+     the client compares keep counting, so it never mistakes a new brush for
+     one it has. */
+  dispatch->ext_relay.hard_reset( *fb, dispatch->terminal_to_host );
+  const uint32_t brush_gen = fb->ds.ext.brush_gen, frame_output = fb->ds.ext.frame_output;
   fb->reset();
+  fb->ds.ext.brush_gen = brush_gen;
+  fb->ds.ext.frame_output = frame_output;
   dispatch->reset_sixel();
   dispatch->keyboard_stack[0].clear();
   dispatch->keyboard_stack[1].clear();
@@ -697,7 +761,8 @@ static void CSI_mime_query( Framebuffer* fb, Dispatcher* dispatch )
 {
   for ( int i = 0; i < dispatch->param_count(); i++ ) {
     const int mode = dispatch->getparam( i, 0 );
-    const int state = mode == 5522 && dispatch->mime_clipboard_enabled ? ( fb->ds.mime_paste ? 1 : 2 ) : 0;
+    const int state = mode == 1016 ? (fb->ds.mouse_encoding_mode == DrawState::MOUSE_ENCODING_SGR_PIXELS ? 1 : 2)
+      : mode == 5522 && dispatch->mime_clipboard_enabled ? ( fb->ds.mime_paste ? 1 : 2 ) : 0;
     dispatch->terminal_to_host += "\033[?" + std::to_string( mode ) + ";" + std::to_string( state ) + "$y";
   }
 }
@@ -737,8 +802,43 @@ static void OSC_8( const std::string& OSC_string, Framebuffer* fb )
 }
 
 /* xterm uses an Operating System Command to set the window title */
+void Dispatcher::pointer_dispatch( const std::string& body, Framebuffer* fb )
+{
+  goblin::pointer::Message m;
+  if ( !goblin::pointer::parse( body, m ) ) { return; }
+  if ( m.op == goblin::pointer::Op::Mode ) { fb->ds.pointer_mode = m.mode; }
+  else if ( m.op == goblin::pointer::Op::Query ) {
+    const auto* g = get_client_geometry();
+    if ( !g || !g->has_cell_size() || g->columns != unsigned( fb->ds.get_width() )
+         || g->rows != unsigned( fb->ds.get_height() ) ) { return; }
+    m.op = goblin::pointer::Op::Cap; m.caps = pointer_available ? 7 : 0;
+    m.cw = std::min( 4096U, g->cell_width_px ); m.ch = std::min( 4096U, g->cell_height_px );
+    m.w = std::min( 65535U, g->columns * unsigned(m.cw) ); m.h = std::min( 65535U, g->rows * unsigned(m.ch) );
+    terminal_to_host += goblin::pointer::encode( m );
+  }
+}
+
+void Dispatcher::finish_st_frame( bool complete, Framebuffer* fb )
+{
+  if ( complete && fb && !pending_pointer.empty() ) { pointer_dispatch( pending_pointer, fb ); }
+  pending_pointer.clear();
+  if ( complete && fb && !pending_extension.empty() ) {
+    ext_relay.program_frame( pending_extension, *fb, client_geometry, terminal_to_host );
+  }
+  pending_extension.clear();
+}
+
 void Dispatcher::OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb )
 {
+  const auto prefix = goblin::pointer::prefix;
+  if ( OSC_string.size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), OSC_string.begin() ) ) {
+    if ( OSC_overflow || OSC_string.size() > goblin::pointer::max_frame ) { return; }
+    std::string body;
+    for ( wchar_t c : OSC_string ) { if ( c < 32 || c > 126 ) { return; } body += char(c); }
+    if ( act->char_present && (act->ch == 0x07 || act->ch == 0x9c) ) { pointer_dispatch( body, fb ); }
+    else if ( act->char_present && act->ch == 0x1b ) { pending_pointer = std::move(body); }
+    return;
+  }
   if ( OSC_string.size() >= sizeof Download::PREFIX - 1
        && std::equal( Download::PREFIX, Download::PREFIX + sizeof Download::PREFIX - 1, OSC_string.begin() ) ) {
     // The collector is drained after each PTY read, before any state snapshot.
@@ -748,6 +848,29 @@ void Dispatcher::OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb )
     for ( wchar_t c : OSC_string ) { if ( c < 32 || c > 126 ) { return; } body += char( c ); }
     if ( act->char_present && ( act->ch == 0x07 || act->ch == 0x9c ) ) { download_events.push_back( std::move( body ) ); }
     else if ( act->char_present && act->ch == 0x1b ) { pending_download = std::move( body ); }
+    return;
+  }
+  if ( OSC_string.size() >= 4 && std::wstring( OSC_string.begin(), OSC_string.begin() + 4 ) == L"777;" ) {
+    /* Silkie's extensions. A frame is acted on once it is complete, and never
+       becomes anything else, whether it is accepted or not. */
+    if ( OSC_overflow ) { return; }
+    std::string payload;
+    for ( wchar_t c : OSC_string ) { if ( c < 32 || c > 126 ) { return; } payload += char( c ); }
+    if ( act->char_present && ( act->ch == 0x07 || act->ch == 0x9c ) ) {
+      ext_relay.program_frame( payload, *fb, client_geometry, terminal_to_host );
+    } else if ( act->char_present && act->ch == 0x1b ) { pending_extension = std::move( payload ); }
+    return;
+  }
+  if ( OSC_string.size() >= 3 && std::wstring( OSC_string.begin(), OSC_string.begin() + 3 ) == L"22;" ) {
+    std::string payload;
+    if ( OSC_overflow ) { return; }
+    for ( wchar_t c : OSC_string ) { if ( c < 32 || c > 126 ) { return; } payload += char( c ); }
+    ext_relay.pointer_shape( payload.substr( 3 ), *fb, terminal_to_host );
+    return;
+  }
+  if ( OSC_string.size() >= 5 && std::wstring( OSC_string.begin(), OSC_string.begin() + 5 ) == L"133;A" ) {
+    /* A shell prompt: whatever set the extension modes is no longer in charge. */
+    ext_relay.reset_modes( *fb, terminal_to_host );
     return;
   }
   if ( OSC_string.size() >= 5 && std::wstring( OSC_string.begin(), OSC_string.begin() + 5 ) == L"5522;" ) {

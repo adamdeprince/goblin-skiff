@@ -49,7 +49,7 @@ class LinkBudget
 
 public:
   void enable( bool value ) { enabled = value; }
-  // A goTenna packet consumes airtime even when almost empty. Limit each
+  // A goTenna Mesh radio packet consumes airtime even when almost empty. Limit each
   // direction to at most one packet per 1.5 s, including ACKs and reports.
   // Congestion can reduce this further; idle/growth must preserve the cap.
   void enable_radio() { radio = true; rate = 128; largest_packet = 192; }

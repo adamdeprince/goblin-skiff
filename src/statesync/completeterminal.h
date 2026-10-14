@@ -62,6 +62,7 @@ private:
   uint64_t echo_ack;
   std::deque<Network::StreamEvent> stream_events;
   std::deque<ClipboardEvent> clipboard_events;
+  std::deque<std::string> extension_outputs; /* frames for the client's terminal, written once */
   std::string tmux_output;
 
   static const int ECHO_TIMEOUT = 50; /* for late ack */
@@ -70,19 +71,34 @@ public:
   void set_image_encoding( const ImageEncoding& encoding ) { terminal.get_fb().image_encoding = encoding; }
   void set_sixel_enabled( bool enabled ) { terminal.set_sixel_enabled( enabled ); }
   void set_text_sizing_enabled( bool enabled ) { terminal.set_text_sizing_enabled( enabled ); }
+  void set_pointer_available( bool enabled ) { terminal.set_pointer_available( enabled ); }
   void set_keyboard_enabled( bool enabled ) { terminal.set_keyboard_enabled( enabled ); }
   void set_mime_clipboard_enabled( bool enabled ) { terminal.set_mime_clipboard_enabled( enabled ); }
   std::vector<std::string> take_parser_mime_clipboard_events() { return terminal.take_mime_clipboard_events(); }
   std::vector<std::string> take_parser_download_events() { return terminal.take_download_events(); }
   Complete( size_t width, size_t height )
     : parser(), terminal( width, height ), display( false ), actions(), input_history(), echo_ack( 0 ),
-      stream_events(), clipboard_events(), tmux_output()
+      stream_events(), clipboard_events(), extension_outputs(), tmux_output()
   {}
 
   std::string act( const std::string& str, const ClientGeometry* client_geometry = NULL );
   std::string act( const Parser::Action& act );
   void push_back( const Network::StreamEvent& event ) { stream_events.push_back( event ); }
   void push_back( const ClipboardEvent& event ) { clipboard_events.push_back( event ); }
+  void push_extension_output( const std::string& frame ) { extension_outputs.push_back( frame ); }
+  const std::deque<std::string>& get_extension_outputs( void ) const { return extension_outputs; }
+
+  /* Silkie's extensions, as the server relays them; see Emulator. */
+  std::string extension_input( const ExtensionInput& input ) { return terminal.extension_input( input ); }
+  std::string set_client_extensions( const ClientExtensions& info ) { return terminal.set_client_extensions( info ); }
+  std::string extension_detach( void ) { return terminal.extension_detach(); }
+  bool extension_contacts_live( void ) const { return terminal.extension_contacts_live(); }
+  void extension_output_written( void ) { terminal.extension_output_written(); }
+  std::vector<std::string> take_extension_outputs( void ) { return terminal.take_extension_outputs(); }
+  void set_relay_timing( uint64_t input_us, uint64_t repaint_us, uint64_t rtt_ms )
+  {
+    terminal.set_relay_timing( input_us, repaint_us, rtt_ms );
+  }
   void append_tmux_output( const std::string& bytes ) { tmux_output += bytes; }
   const std::string& get_tmux_output() const { return tmux_output; }
 

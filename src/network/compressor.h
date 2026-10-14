@@ -46,9 +46,6 @@ private:
   void* zstd_ddict;
 
 public:
-  // Images live in screen state too. Allocate on demand, not a large buffer
-  // on every connection's stack, and bound decompression before allocation.
-  static constexpr size_t MAX_STATE_SIZE = 256U * 1024U * 1024U;
   Compressor();
   ~Compressor();
 

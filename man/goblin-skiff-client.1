@@ -39,7 +39,7 @@ IP PORT
 \-c
 .SH DESCRIPTION
 .B \-\-radio
-selects the goTenna profile used by goblin-radio-mosh: 128-byte encrypted
+selects the profile for goTenna Mesh radios used by goblin-radio-mosh: 128-byte encrypted
 UDP datagrams, at most one packet per 1.5 seconds in each direction,
 and retransmission waits adapted to long radio round trips. The bootstrap
 must negotiate keepalive-v1, link-budget-v1, and radio-v1 with the server
@@ -81,6 +81,31 @@ information.  If standard error is not redirected from the terminal,
 the display will be corrupted and quickly become unusable.
 
 .SH OPTIONS
+.TP
+.B \-\-csi\-limit=\fIBYTES\fP
+Maximum number of bytes in one CSI sequence
+.RB ( ESC\ [
+up to and including its final byte).
+.B 0
+means no limit. A longer sequence is ignored.
+.B MOSH_CSI_LIMIT
+sets the same number when this flag is absent.
+.TP
+.B \-\-escape\-limit=\fIBYTES\fP
+Maximum number of bytes in one OSC, APC or DCS payload, not counting the
+introducer and terminator.
+.B 0
+means no limit. A longer sequence is discarded.
+.B MOSH_ESCAPE_LIMIT
+sets the same number when this flag is absent.
+.TP
+.B \-\-vector\-depth\-limit=\fIN\fP
+Maximum number of groups a vector element may be nested inside. Deeper
+elements are not followed.
+.B 0
+means any depth. A cycle in the parent chain is rejected either way.
+.B MOSH_VECTOR_DEPTH_LIMIT
+sets the same number when this flag is absent.
 .TP
 .B \-\-connect\-timeout=\fISECONDS\fP
 Wait this many seconds for the initial UDP connection. The default is 120
@@ -215,6 +240,21 @@ Only log received state samples at least this large. The default is 0.
 .SH ENVIRONMENT VARIABLES
 
 .TP
+.B MOSH_CSI_LIMIT
+.TQ
+.B MOSH_ESCAPE_LIMIT
+.TQ
+.B MOSH_VECTOR_DEPTH_LIMIT
+The same optional bounds as
+.BR \-\-csi\-limit ,
+.B \-\-escape\-limit
+and
+.BR \-\-vector\-depth\-limit .
+Each is a non-negative integer read in this process.
+.B 0
+or an unset variable means no limit. A value that is not an integer is ignored.
+
+.TP
 .B MOSH_KEY
 This variable must be set, and must contain a Base64-encoded cryptographic
 key from
@@ -305,3 +345,7 @@ mailing list, at
 .I http://mailman.mit.edu/mailman/listinfo/mosh-users
 .hy
 .
+
+.SH TRADEMARKS
+goTenna and goTenna Mesh are trademarks of goTenna, Inc.
+Goblin Skiff is independent and is not affiliated with or endorsed by goTenna, Inc.

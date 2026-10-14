@@ -1,6 +1,7 @@
 // Modified for Goblin Skiff on 2026-09-19.
 /* Copyright 2026. Distributed under the GNU GPL, version 3 or later. */
 #include "mascot.h"
+#include "src/terminal/goblin_pointer.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -230,7 +231,8 @@ std::string Splash::start( const Size& dimensions, bool interactive, uint64_t no
   if ( !interactive ) {
     return {};
   }
-  std::string queries;
+  std::string queries = "\033]777;goblin-pointer;v=1:op=query:id=17349521\033\\";
+  pointer_reply = true;
   keyboard_reply = true;
   queries += "\033[?u";
   clipboard_reply = true;
@@ -305,6 +307,10 @@ std::string Splash::dismiss()
 
 bool Splash::consume_reply()
 {
+  goblin::pointer::Message m;
+  if ( pointer_reply && goblin::pointer::parse(pending, m) && m.op == goblin::pointer::Op::Cap && m.id == 17349521 ) {
+    pointer = (m.caps & 3) == 3; pointer_reply = false; return true;
+  }
   if ( cursor_reply && pending.compare( 0, 3, "\033[?" ) == 0 && pending.back() == 'R' ) {
     const auto params = numbers( pending.substr( 3, pending.size() - 4 ) );
     if ( ( params.size() != 2 && params.size() != 3 ) || !params[0] || params[0] > size.rows
@@ -371,9 +377,11 @@ bool Splash::consume_reply()
 
 bool Splash::possible_reply() const
 {
-  if ( pending.size() > 256 ) {
+  if ( pending.size() > goblin::pointer::max_frame ) {
     return false;
   }
+  const std::string pointer_prefix = "\033]" + std::string(goblin::pointer::prefix);
+  if ( pointer_reply && (prefix_of(pending,pointer_prefix) || prefix_of(pointer_prefix,pending)) ) { return true; }
   if ( clipboard_reply && ( prefix_of( pending, "\033[?5522;" )
        || ( prefix_of( "\033[?5522;", pending ) && pending.find_first_not_of( "01234$", 8 ) == std::string::npos ) ) ) { return true; }
   if ( kitty_reply && ( prefix_of( pending, query_prefix ) || prefix_of( query_prefix, pending ) ) ) {

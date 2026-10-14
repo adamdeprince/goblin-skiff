@@ -44,13 +44,17 @@
 #include <utility>
 #include <vector>
 
+#include "src/terminal/extensions.h"
 #include "src/terminal/kittygraphics.h"
 #include "src/terminal/sizedtext.h"
 
 /* Terminal framebuffer */
 
 namespace Terminal {
-using color_type = uint32_t;
+/* A color, or for erasing a cell, the background of the current rendition:
+   its color in the low 25 bits and Silkie's attributes of a background above
+   them (see Renditions::get_background_rendition). */
+using color_type = uint64_t;
 
 class Renditions
 {
@@ -72,13 +76,44 @@ private:
   uint64_t foreground_color : 25;
   uint64_t background_color : 25;
   uint64_t attributes : 8;
+  /* Silkie's extensions: the brightness of each color in quarters of SDR
+     white (0 for SDR), the gamut of an RGB color (1 Display P3, 2 Rec. 2020),
+     and the opacity of the background in even percents (0 for opaque, else
+     percent / 2 + 1). */
+  uint32_t foreground_brightness : 7;
+  uint32_t background_brightness : 7;
+  uint32_t foreground_gamut : 2;
+  uint32_t background_gamut : 2;
+  uint32_t background_alpha : 6;
 
 public:
   Renditions( color_type s_background );
   void set_foreground_color( int num );
   void set_background_color( int num );
   void set_rendition( color_type num );
-  std::string sgr( void ) const;
+  /* extended: with the attributes Silkie added, in a sequence of their own
+     after the others, so a terminal that drops what it does not know keeps
+     the colors. */
+  std::string sgr( bool extended = true ) const;
+
+  void set_gamut( bool background, unsigned id )
+  {
+    if ( background ) {
+      background_gamut = id <= 2 ? id : 0;
+    } else {
+      foreground_gamut = id <= 2 ? id : 0;
+    }
+  }
+  /* A percent of SDR white; 100 or less is SDR. */
+  void set_brightness( bool background, int percent );
+  int get_brightness( bool background ) const { return 25 * ( background ? background_brightness : foreground_brightness ); }
+  /* A percent of opacity; 100 or more is opaque. */
+  void set_background_alpha( int percent );
+  int get_background_alpha( void ) const { return background_alpha ? ( background_alpha - 1 ) * 2 : 100; }
+  bool has_extended( void ) const
+  {
+    return foreground_brightness || background_brightness || foreground_gamut || background_gamut || background_alpha;
+  }
 
   static unsigned int make_true_color( unsigned int r, unsigned int g, unsigned int b )
   {
@@ -88,12 +123,20 @@ public:
   static bool is_true_color( unsigned int color ) { return ( color & true_color_mask ) != 0; }
 
   // unsigned int get_foreground_rendition() const { return foreground_color; }
-  unsigned int get_background_rendition() const { return background_color; }
+  /* What an erased cell takes: the background color, with its brightness,
+     gamut and opacity, which survive whatever the color survives. */
+  color_type get_background_rendition() const
+  {
+    return color_type( background_color ) | color_type( background_brightness ) << 32
+           | color_type( background_gamut ) << 39 | color_type( background_alpha ) << 41;
+  }
 
   bool operator==( const Renditions& x ) const
   {
     return ( attributes == x.attributes ) && ( foreground_color == x.foreground_color )
-           && ( background_color == x.background_color );
+           && ( background_color == x.background_color ) && ( foreground_brightness == x.foreground_brightness )
+           && ( background_brightness == x.background_brightness ) && ( foreground_gamut == x.foreground_gamut )
+           && ( background_gamut == x.background_gamut ) && ( background_alpha == x.background_alpha );
   }
   void set_attribute( attribute_type attr, bool val )
   {
@@ -331,6 +374,7 @@ public:
   bool reverse_video;
   bool bracketed_paste;
   bool mime_paste = false;
+  bool pointer_mode = false;
 
   enum MouseReportingMode
   {
@@ -350,7 +394,8 @@ public:
     MOUSE_ENCODING_DEFAULT = 0,
     MOUSE_ENCODING_UTF8 = 1005,
     MOUSE_ENCODING_SGR = 1006,
-    MOUSE_ENCODING_URXVT = 1015
+    MOUSE_ENCODING_URXVT = 1015,
+    MOUSE_ENCODING_SGR_PIXELS = 1016
   } mouse_encoding_mode;
 
   bool application_mode_cursor_keys;
@@ -389,7 +434,7 @@ public:
   void add_rendition( color_type x ) { renditions.set_rendition( x ); }
   const Renditions& get_renditions( void ) const { return renditions; }
   Renditions& get_renditions( void ) { return renditions; }
-  int get_background_rendition( void ) const { return renditions.get_background_rendition(); }
+  color_type get_background_rendition( void ) const { return renditions.get_background_rendition(); }
 
   void save_cursor( void );
   void restore_cursor( void );
@@ -399,6 +444,7 @@ public:
 
   DrawState( int s_width, int s_height );
   unsigned kitty_keyboard_flags = 0;
+  ExtensionModes ext;
 
   bool operator==( const DrawState& x ) const
   {
@@ -409,7 +455,8 @@ public:
            && ( bracketed_paste == x.bracketed_paste ) && ( mouse_reporting_mode == x.mouse_reporting_mode )
            && ( mouse_focus_event == x.mouse_focus_event ) && ( mouse_alternate_scroll == x.mouse_alternate_scroll )
            && ( mouse_encoding_mode == x.mouse_encoding_mode ) && hyperlink == x.hyperlink
-           && kitty_keyboard_flags == x.kitty_keyboard_flags && mime_paste == x.mime_paste;
+           && kitty_keyboard_flags == x.kitty_keyboard_flags && mime_paste == x.mime_paste && pointer_mode == x.pointer_mode
+           && ext == x.ext;
   }
 };
 
@@ -543,12 +590,16 @@ public:
   const KittyImage* find_kitty_image( uint32_t id ) const;
   KittyImage* find_newest_kitty_number( uint32_t number );
   void erase_kitty_image( uint32_t id );
+  /* A vector image changes in place: its placements and identity stay. */
+  bool edit_vector_image( uint32_t id, const Vector::Step& step, std::string& error );
+  void replace_vector_doc( uint32_t id, std::shared_ptr<const Vector::Doc> doc );
+  /* New pixels for an image, as a GPU surface refresh gives: its placements stay. */
+  bool refresh_kitty_image( const KittyImage& image );
   void put_kitty_placement( const KittyPlacement& placement );
   const std::vector<KittyPlacement>& get_kitty_placements( void ) const { return kitty_placements; }
   void replace_kitty_placements( const std::vector<KittyPlacement>& placements );
   void delete_kitty( const KittyCommand& cmd );
   void scroll_kitty_placements( int first_row, int count, bool inserting );
-  void evict_kitty_images( uint32_t preserve_id = 0 );
   void erase_sixel_cells( int row, int col, int height, int width );
   void scroll_sixel( int first_row, int count, bool inserting );
   void prune_sixel_images();

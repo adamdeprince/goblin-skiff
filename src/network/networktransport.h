@@ -158,6 +158,8 @@ public:
   }
 
   void set_send_delay( int new_delay ) { sender.set_send_delay( new_delay ); }
+  void set_low_latency( bool enabled ) { sender.set_low_latency( enabled ); }
+  unsigned int send_mindelay( void ) const { return sender.send_mindelay(); }
   void request_immediate_send( void ) { sender.request_immediate_send(); }
 
   uint64_t get_sent_state_acked_timestamp( void ) const { return sender.get_sent_state_acked_timestamp(); }

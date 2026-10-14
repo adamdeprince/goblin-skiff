@@ -343,6 +343,12 @@ void STMClient::main_init( void )
                                             && term && strcmp( term, "dumb" ) != 0,
                                           timestamp() );
   swrite( STDOUT_FILENO, queries.data(), queries.size() );
+  if ( !tmux_control && isatty( STDIN_FILENO ) && isatty( STDOUT_FILENO ) && term && strcmp( term, "dumb" ) != 0 ) {
+    /* Silkie's extensions, asked about once; the replies come back with the
+       rest of the input and never reach the remote side as keys. */
+    const std::string probe = ext_client.probe();
+    swrite( STDOUT_FILENO, probe.data(), probe.size() );
+  }
   if ( downloads_enabled && !tmux_control && isatty( STDIN_FILENO ) && isatty( STDOUT_FILENO ) ) {
     downloads.enable_forwarding( timestamp() );
   }
@@ -411,11 +417,20 @@ void STMClient::output_new_frame( void )
   overlays.apply( new_state );
   control_panel.paint( new_state );
 
+  display.set_ink_hint( ext_client.ink_hint( new_state ) );
+
   /* calculate minimal difference from where we are */
-  const std::string diff( display.new_frame( screen_initialized && !repaint_requested,
-                                           local_framebuffer, new_state,
-                                           display.uses_alternate_screen() ? NULL : &startup_screen ) );
+  std::string diff( display.new_frame( screen_initialized && !repaint_requested,
+                                       local_framebuffer, new_state,
+                                       display.uses_alternate_screen() ? NULL : &startup_screen ) );
+  std::vector<std::pair<std::string, uint32_t>> modes_sent;
+  Terminal::InkBrush brush_sent;
+  bool vector_resent = false;
+  display.take_drawn( modes_sent, brush_sent, vector_resent );
+  diff += ext_client.drawn( local_framebuffer, new_state, modes_sent,
+                            brush_sent.present() ? &brush_sent : nullptr, vector_resent );
   swrite( STDOUT_FILENO, diff.data(), diff.size() );
+  network->set_low_latency( new_state.ds.ext.latency );
 
   repaint_requested = false;
   screen_initialized = true;
@@ -425,6 +440,9 @@ void STMClient::output_new_frame( void )
 
 void STMClient::process_network_input( void )
 {
+  /* Haptic feedback is for the moment it was asked for: what arrives after
+     contact was lost is not played late. */
+  const bool contact_was_lost = overlays.get_notification_engine().contact_lost( timestamp() );
   network->recv();
 
   const std::string remote_diff( network->get_remote_diff() );
@@ -446,6 +464,12 @@ void STMClient::process_network_input( void )
           if ( ev.op == Terminal::ClipboardQuery ) {
             expecting_osc52_reply = true;
           }
+        }
+      } else if ( input.instruction( i ).HasExtension( HostBuffers::ext_output ) ) {
+        /* Haptic feedback and pad labels, for this terminal, once. */
+        const std::string& frame = input.instruction( i ).GetExtension( HostBuffers::ext_output );
+        if ( !tmux_parser.active() && !( contact_was_lost && frame.find( ";haptic;" ) != std::string::npos ) ) {
+          swrite( STDOUT_FILENO, frame.data(), frame.size() );
         }
       } else if ( tmux_control && input.instruction( i ).HasExtension( HostBuffers::tmux_output ) ) {
         dismiss_mascot();
@@ -540,6 +564,61 @@ bool STMClient::is_command_key( const std::string& key )
 }
 
 bool STMClient::process_user_bytes( const std::string& bytes, bool panel_filtered )
+{
+  if ( panel_filtered || tmux_parser.active() ) { return process_pointer_filtered_bytes( bytes, panel_filtered ); }
+  if ( bytes.empty() ) { return true; }
+  /* A held prefix, such as a lone Escape key, is released 50 ms after the
+     last input; the empty polls of the main loop do not count. */
+  ext_demux_at = timestamp();
+  Terminal::Ext::InputDemux::Output output;
+  ext_demux.feed( bytes, output );
+  return process_demuxed( output );
+}
+
+bool STMClient::process_demuxed( const Terminal::Ext::InputDemux::Output& output )
+{
+  bool ok = true;
+  for ( const auto& item : output.items ) {
+    if ( item.first ) {
+      process_terminal_frame( item.second );
+    } else if ( ok ) {
+      ok = process_pointer_filtered_bytes( item.second );
+    }
+  }
+  return ok;
+}
+
+/* A frame from this terminal is one input operation, never predicted as
+   printable text or taken for a panel shortcut; while the panel is open the
+   program keeps what it captured, its final release above all. */
+void STMClient::process_terminal_frame( const std::string& frame )
+{
+  NetworkType& net = *network;
+  if ( frame.compare( 0, 2 + goblin::pointer::prefix.size(), "\033]" + std::string( goblin::pointer::prefix ) ) == 0 ) {
+    goblin::pointer::Message m;
+    if ( goblin::pointer::parse( frame, m ) && m.op == goblin::pointer::Op::Event && local_framebuffer.ds.pointer_mode ) {
+      for ( char c : frame ) { net.get_current_state().push_back( Parser::UserByte( c ) ); }
+      net.request_immediate_send();
+    }
+    return;
+  }
+  const auto result = ext_client.frame( frame, local_framebuffer, display.get_graphics_geometry(), timestamp() );
+  ext_info_dirty = ext_info_dirty || result.info_changed;
+  if ( !result.to_terminal.empty() && !tmux_parser.active() ) {
+    swrite( STDOUT_FILENO, result.to_terminal.data(), result.to_terminal.size() );
+  }
+  if ( result.forward && !tmux_control && !net.shutdown_in_progress() ) {
+    push_extension_input( result.input );
+  }
+}
+
+void STMClient::push_extension_input( const Terminal::ExtensionInput& input )
+{
+  network->get_current_state().push_back( input );
+  ext_client.sent( timestamp() );
+}
+
+bool STMClient::process_pointer_filtered_bytes( const std::string& bytes, bool panel_filtered )
 {
   if ( bytes.empty() ) { return true; }
   const char* buf = bytes.data();
@@ -786,7 +865,7 @@ bool STMClient::main( void )
   /* Drop unnecessary privileges */
 #ifdef HAVE_PLEDGE
   /* OpenBSD pledge() syscall */
-  if ( pledge( "stdio inet unix tty rpath proc", NULL ) ) {
+  if ( pledge( "stdio inet unix tty rpath wpath cpath proc", NULL ) ) {
     perror( "pledge() failed" );
     exit( 1 );
   }
@@ -812,6 +891,7 @@ bool STMClient::main( void )
         mime_enabled = caps.clipboard && !tmux_control;
         caps.clipboard = mime_enabled;
         caps.downloads = downloads_enabled && !tmux_control;
+        caps.pointer = mascot.supports_pointer() && !tmux_control;
         // The first open() preceded capability discovery. Balance this one
         // initial push with close(); subsequent suspend/resume uses open().
         if ( sixel_state && caps.keyboard ) { swrite( STDOUT_FILENO, "\033[>0u" ); }
@@ -826,9 +906,28 @@ bool STMClient::main( void )
           network->get_current_state().push_back( Parser::Resize( window_size.ws_col, window_size.ws_row ) );
         }
         display.set_graphics_geometry( geometry );
-        if ( sixel_state ) { network->get_current_state().push_back( caps ); }
+        network->get_current_state().push_back( caps );
         network->request_immediate_send();
         graphics_sent = true;
+      }
+      if ( ext_demux.pending() && !ext_demux.in_frame() && timestamp() >= ext_demux_at + 50 ) {
+        Terminal::Ext::InputDemux::Output output;
+        ext_demux.expire( output );
+        process_demuxed( output );
+      }
+      if ( ext_info_dirty && !tmux_control && graphics_sent && !network->shutdown_in_progress() ) {
+        /* What this terminal said of the extensions, once its replies to
+           the probe are in and again whenever something of it changes, with
+           the terminal's clock as the client reckons it. */
+        display.set_extensions( ext_client.info );
+        network->get_current_state().push_back( ext_client.info );
+        push_extension_input( ext_client.heartbeat( timestamp() ) );
+        ext_info_dirty = false;
+      }
+      if ( !tmux_control && ext_client.heartbeat_due( timestamp() ) && !network->shutdown_in_progress() ) {
+        /* Something the terminal reported is in progress: the server is
+           told the client is still there. */
+        push_extension_input( ext_client.heartbeat( timestamp() ) );
       }
       if ( !tmux_parser.active() ) {
         process_user_bytes( control_panel.flush_input( timestamp(),
@@ -883,6 +982,8 @@ bool STMClient::main( void )
       wait_time = std::min( wait_time, std::max( network->bulk_wait_time(), files.wait_time( now, !forwarder.has_pending_network_data() ) ) );
       wait_time = std::min( wait_time, mascot.wait_time( now ) );
       wait_time = std::min( wait_time, mime_input.wait_time( now ) );
+      if ( ext_demux.pending() && !ext_demux.in_frame() ) { wait_time = std::min( wait_time, 50 ); }
+      if ( !tmux_control ) { wait_time = std::min( wait_time, ext_client.wait_time( now ) ); }
       if ( downloads_enabled && !tmux_control ) { wait_time = std::min( wait_time, downloads.wait_time( now, network->bulk_wait_time() ) ); }
       if ( mime_enabled ) { wait_time = std::min( wait_time, std::max( network->bulk_wait_time(), mime_clipboard.channel.wait_time( now, !forwarder.has_pending_network_data() && !reliable_data_pending ) ) ); }
       if ( !network->shutdown_in_progress() ) {

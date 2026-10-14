@@ -96,6 +96,9 @@ my @dynamic_forwards;
 my $agent_forwarding = 0;
 my $x11_forwarding = 0;
 my $fips_crypto = 0;
+my $csi_limit;
+my $escape_limit;
+my $vector_depth_limit;
 my $stream_delay = undef;
 my $stream_bandwidth = undef;
 my $state_zstd_dict = undef;
@@ -170,6 +173,13 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
 -X                         forward X11 connections
         --fips-crypto      require the OpenSSL FIPS provider and use AES-128-GCM
                                 for the UDP session
+        --csi-limit=BYTES  max bytes of one CSI (ESC [); 0 means no limit
+        --escape-limit=BYTES
+                           max bytes of one OSC, APC or DCS; 0 means no limit
+        --vector-depth-limit=N
+                           max vector-group nesting; 0 means no limit
+                           (also MOSH_CSI_LIMIT, MOSH_ESCAPE_LIMIT,
+                            MOSH_VECTOR_DEPTH_LIMIT on each process)
         --tmux-control     pass tmux -CC through to the local terminal
         --mascot=FORMAT    startup goblin: auto, kitty, sixel, ascii, none
         --no-mascot        disable the local startup goblin
@@ -268,6 +278,9 @@ GetOptions( 'client=s' => \$client,
 	    'A' => \$agent_forwarding,
 	    'X' => \$x11_forwarding,
 	    'fips-crypto' => \$fips_crypto,
+	    'csi-limit=s' => \$csi_limit,
+	    'escape-limit=s' => \$escape_limit,
+	    'vector-depth-limit=s' => \$vector_depth_limit,
 	    'tmux-control' => \$tmux_control,
 	    'mascot=s' => \$mascot,
 	    'no-mascot' => sub { $mascot = 'none'; },
@@ -349,6 +362,11 @@ if ( $overwrite ) {
 
 if ( defined $stream_delay and $stream_delay < 0 ) {
   die "$0: --stream-delay must be non-negative.\n";
+}
+foreach my $bound ( [ '--csi-limit', $csi_limit ], [ '--escape-limit', $escape_limit ],
+		    [ '--vector-depth-limit', $vector_depth_limit ] ) {
+  next unless defined $bound->[1];
+  die "$0: $bound->[0] must be a non-negative integer.\n" unless $bound->[1] =~ /\A[0-9]+\z/;
 }
 
 die "$0: --connect-timeout must be 1..3600 seconds.\n"
@@ -567,6 +585,7 @@ close COLORCOUNT or die;
 # A separately selected older client can still receive WebP. Probe without
 # exposing its unknown-option diagnostics, and advertise only confirmed codecs.
 my $client_palette_djvu = 0;
+my $client_png_state = 0;
 my $codec_pid = open( my $codec_output, '-|' );
 die "Can't query client image codecs: $!\n" unless defined $codec_pid;
 if ( !$codec_pid ) {
@@ -577,7 +596,9 @@ if ( !$codec_pid ) {
 {
   local $/ = undef;
   my $codecs = <$codec_output> // '';
-  $client_palette_djvu = close( $codec_output ) && $codecs =~ /(?:\A|\s)palette-djvu-v1(?:\s|\z)/;
+  my $codec_ok = close( $codec_output );
+  $client_palette_djvu = $codec_ok && $codecs =~ /(?:\A|\s)palette-djvu-v1(?:\s|\z)/;
+  $client_png_state = $codec_ok && $codecs =~ /(?:\A|\s)png-state-v1(?:\s|\z)/;
 }
 die "$0: --djvu-lossy requires a client supporting palette-djvu-v1; update goblin-skiff-client.\n"
   if $djvu_lossy && !$client_palette_djvu;
@@ -667,6 +688,9 @@ if ( $pid == 0 ) { # child
   push @server, '--djvu-lossy' if $djvu_lossy;
 
   push @server, '--fips-crypto' if $fips_crypto;
+  push @server, "--csi-limit=$csi_limit" if defined $csi_limit;
+  push @server, "--escape-limit=$escape_limit" if defined $escape_limit;
+  push @server, "--vector-depth-limit=$vector_depth_limit" if defined $vector_depth_limit;
 
   push @server, ( '-c', $colors );
 
@@ -715,7 +739,8 @@ if ( $pid == 0 ) { # child
     # Non-standard shells and broken shrc files cause the ssh
     # proxy to break mysteriously.
     $ENV{ 'SHELL' } = '/bin/sh';
-    my $quoted_proxy_command = shell_quote( $0, "--family=$family", "--connect-timeout=$connect_timeout" );
+    # Inkline's bundled Perl is outside PATH; reuse this interpreter for helpers.
+    my $quoted_proxy_command = shell_quote( $^X, $0, "--family=$family", "--connect-timeout=$connect_timeout" );
     push @sshopts, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
   push @sshopts, '-S', 'none' if defined $socks5_proxy; # after any explicit --ssh -S
@@ -899,6 +924,9 @@ if ( $pid == 0 ) { # child
     push @client_forwarding, '-X';
   }
   my @client_crypto = $fips_crypto ? ( '--fips-crypto' ) : ();
+  push @client_crypto, "--csi-limit=$csi_limit" if defined $csi_limit;
+  push @client_crypto, "--escape-limit=$escape_limit" if defined $escape_limit;
+  push @client_crypto, "--vector-depth-limit=$vector_depth_limit" if defined $vector_depth_limit;
   push @client_crypto, '--tmux-control' if $tmux_control;
   push @client_crypto, '--no-kitty' if $no_kitty;
   push @client_crypto, '--no-sixel' if $no_sixel;
@@ -967,7 +995,7 @@ sub socks_connect {
 
 sub socks_proxy_command {
   my ( $hops, $report ) = @_;
-  my $command = shell_quote( $0, "--socks5-proxy=$socks5_proxy", "--family=$family", "--connect-timeout=$connect_timeout",
+  my $command = shell_quote( $^X, $0, "--socks5-proxy=$socks5_proxy", "--family=$family", "--connect-timeout=$connect_timeout",
                               '--fake-proxy', $report && !$hops ? '--proxy-report' : '--no-proxy-report', '--', '%h', '%p' );
   for ( my $hop = 0; $hop < $hops; ++$hop ) {
     my ( $host, $port ) = parse_jump( $jumps[$hop] );
@@ -1017,7 +1045,7 @@ sub start_udp_relay {
   } elsif ( !defined $socks5_proxy ) {
     # Capture the address actually used by SSH, honoring HostName and address
     # family selection. The SSH-facing interface may be private behind NAT.
-    my $proxy = shell_quote( $0, "--family=$family", "--connect-timeout=$connect_timeout" );
+    my $proxy = shell_quote( $^X, $0, "--family=$family", "--connect-timeout=$connect_timeout" );
     push @args, ( '-o', "ProxyCommand=$proxy --fake-proxy -- %h %p" );
   }
   my @relay = ( 'relay', "--idle-timeout=$jump_idle_timeout" );
@@ -1071,7 +1099,7 @@ sub upload_state_dictionary {
       push @upload_ssh, '-6';
     }
   } elsif ( $use_remote_ip eq 'proxy' && !defined $socks5_proxy ) {
-    my $quoted_proxy_command = shell_quote( $0, "--family=$family", "--connect-timeout=$connect_timeout" );
+    my $quoted_proxy_command = shell_quote( $^X, $0, "--family=$family", "--connect-timeout=$connect_timeout" );
     push @upload_ssh, ( '-S', 'none', '-o', "ProxyCommand=$quoted_proxy_command --fake-proxy -- %h %p" );
   }
 
@@ -1127,6 +1155,7 @@ sub server_environment_prefix {
   my @assignments;
   my @client_capabilities = ( "keepalive-v1", "directory-v1", "directory-v2", "file-sync-v1", "link-budget-v1", "sixel-state-v1", "osc5522-v1" );
   push @client_capabilities, "palette-djvu-v1" if $client_palette_djvu;
+  push @client_capabilities, "png-state-v1" if $client_png_state;
   push @client_capabilities, "goblin-download-v2" unless $no_downloads;
   push @client_capabilities, "fips-aes128-gcm-v1" if $fips_crypto;
   push @client_capabilities, "tmux-control-v1" if $tmux_control;

@@ -37,6 +37,7 @@
 #include "src/terminal/sixel.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldisplay.h"
+#include "goblin_pointer.hpp"
 
 using namespace Terminal;
 
@@ -50,14 +51,17 @@ static const Renditions& initial_rendition( void )
 
 std::string Display::open() const
 {
-  return std::string( smcup ? smcup : "" ) + std::string( "\033[?1h" ) + ( render_keyboard ? "\033[>0u" : "" );
+  return std::string( smcup ? smcup : "" ) + std::string( "\033[?1h" ) + ( render_keyboard ? "\033[>0u" : "" )
+         + ( render_extensions ? extension_open( extensions ) : "" );
 }
 
 std::string Display::close() const
 {
   return std::string( "\033[?1l\033[0m\033[?25h"
                       "\033[?1003l\033[?1002l\033[?1001l\033[?1000l"
-                      "\033[?1015l\033[?1006l\033[?1005l" )
+                      "\033[?1016l\033[?1015l\033[?1006l\033[?1005l" )
+         + ( render_pointer ? goblin::pointer::mode(false) : "" )
+         + ( render_extensions ? extension_close( extensions ) : "" )
          + ( render_keyboard ? "\033[<u" : "" ) + ( render_clipboard ? "\033[?5522l" : "" )
          + std::string( rmcup ? rmcup : "" );
 }
@@ -67,7 +71,8 @@ std::string Display::close() const
    Graphics and mouse coordinates must stay in the unshifted coordinate space. */
 static int startup_unused_rows( const Framebuffer& f )
 {
-  if ( !f.get_kitty_placements().empty() || f.ds.mouse_reporting_mode != DrawState::MOUSE_REPORTING_NONE
+  if ( !f.get_kitty_placements().empty() || f.ds.mouse_reporting_mode != DrawState::MOUSE_REPORTING_NONE || f.ds.pointer_mode
+       || f.ds.ext.reports_input()
        || f.ds.get_scrolling_region_top_row() != 0
        || f.ds.get_scrolling_region_bottom_row() != f.ds.get_height() - 1 ) {
     return 0;
@@ -113,6 +118,7 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
     startup->row_offset = row_offset;
   }
   FrameState frame( last, row_offset );
+  frame.extended_sgr = render_extended_sgr;
   bool have_sized_text = false, redraw_sized_text = !initialized || resized;
   for ( int y = 0; y < f.ds.get_height(); y++ ) {
     for ( int x = 0; x < f.ds.get_width(); x++ ) {
@@ -446,7 +452,8 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
 
   if ( render_kitty ) {
     const size_t before_kitty = frame.str.size();
-    append_kitty_frame( frame.str, initialized && !redraw_sixel, frame.last_frame, f, convert_sixel );
+    append_kitty_frame( frame.str, initialized && !redraw_sixel, frame.last_frame, f, convert_sixel,
+                        render_extensions && extensions.image_gamut, &vector_resent );
     if ( frame.str.size() != before_kitty ) {
       frame.cursor_x = frame.cursor_y = -1;
     }
@@ -478,6 +485,18 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
   frame.update_hyperlink( f.ds.get_hyperlink(), !initialized );
 
   /* has bracketed paste mode changed? */
+  if ( render_pointer && (!initialized || f.ds.pointer_mode != last.ds.pointer_mode) ) {
+    frame.append( goblin::pointer::mode(f.ds.pointer_mode).c_str() );
+  }
+  if ( render_extensions ) {
+    InkBrush given;
+    frame.append_string( render_extension_modes(
+      initialized && !extensions_fresh, last, f, extensions, ink_next_hint, &modes_sent, &given ) );
+    if ( given.present() ) {
+      brush_sent = given;
+    }
+    extensions_fresh = false;
+  }
   if ( render_clipboard && ( !initialized || f.ds.mime_paste != last.ds.mime_paste ) ) {
     frame.append( f.ds.mime_paste ? "\033[?5522h" : "\033[?5522l" );
   }
@@ -740,7 +759,7 @@ void FrameState::update_rendition( const Renditions& r, bool force )
 {
   if ( force || !( current_rendition == r ) ) {
     /* print renditions */
-    append_string( r.sgr() );
+    append_string( r.sgr( extended_sgr ) );
     current_rendition = r;
   }
 }

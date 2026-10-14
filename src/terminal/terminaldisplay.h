@@ -33,6 +33,8 @@
 #ifndef TERMINALDISPLAY_HPP
 #define TERMINALDISPLAY_HPP
 
+#include <set>
+
 #include "src/terminal/terminalframebuffer.h"
 #include "src/terminal/terminalgeometry.h"
 
@@ -48,6 +50,7 @@ public:
   Renditions current_rendition;
   Hyperlink current_hyperlink;
   bool cursor_visible;
+  bool extended_sgr = true; /* Silkie's SGR attributes are written */
 
   const Framebuffer& last_frame;
 
@@ -93,9 +96,19 @@ private:
   bool render_kitty; /* true only for bytes sent to the user's terminal */
   bool render_sixel = false;
   bool convert_sixel = false;
+  bool render_pointer = true;
   bool render_keyboard = true; // state-delta encoder; local client sets from its probe
   bool render_clipboard = true;
   bool render_sized_text = true;
+  bool render_extensions = false; /* only the client's own terminal is sent extension modes */
+  bool render_extended_sgr = true; /* brightness, gamut and alpha of cells */
+  ClientExtensions extensions {};
+  uint32_t ink_next_hint = 0;
+  /* What the last frame did to the client's terminal, for ExtensionClient. */
+  mutable std::vector<std::pair<std::string, uint32_t>> modes_sent {};
+  mutable InkBrush brush_sent {};
+  mutable bool vector_resent = false;
+  mutable bool extensions_fresh = false;
   ClientGeometry graphics_geometry {};
 
   const char *smcup, *rmcup; /* enter and exit alternate screen mode */
@@ -126,8 +139,34 @@ public:
     render_keyboard = sixel_state && caps.keyboard;
     render_sized_text = sixel_state && caps.text_sizing >= 2;
     render_clipboard = caps.clipboard;
+    render_pointer = caps.pointer;
   }
   void set_graphics_geometry( const ClientGeometry& geometry ) { graphics_geometry = geometry; }
+  const ClientGeometry& get_graphics_geometry() const { return graphics_geometry; }
+  /* What the client's terminal said of Silkie's extensions. */
+  void set_extensions( const ClientExtensions& info )
+  {
+    /* Modes that were on before the terminal was known to take them are
+       sent with the next frame, without repainting the screen. */
+    extensions_fresh = extensions_fresh || !render_extensions || info.versions != extensions.versions
+                       || info.pointer_shapes.empty() != extensions.pointer_shapes.empty();
+    extensions = info;
+    render_extensions = true;
+    render_extended_sgr = info.listing;
+  }
+  /* The next ink id the client saw its terminal hand out, for a repaint. */
+  void set_ink_hint( uint32_t next ) { ink_next_hint = next; }
+  /* What the frames since the last call did: the modes they set, the brush
+     they gave (if any) and whether they sent a vector image whole. */
+  void take_drawn( std::vector<std::pair<std::string, uint32_t>>& modes, InkBrush& brush, bool& resent ) const
+  {
+    modes.swap( modes_sent );
+    modes_sent.clear();
+    brush = brush_sent;
+    brush_sent = InkBrush();
+    resent = vector_resent;
+    vector_resent = false;
+  }
 };
 }
 

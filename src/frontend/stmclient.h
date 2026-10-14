@@ -35,6 +35,8 @@
 #define STM_CLIENT_HPP
 
 #include <memory>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -43,6 +45,8 @@
 
 #include "src/frontend/streamforward.h"
 #include "src/frontend/mascot.h"
+#include "src/terminal/goblin_pointer.hpp"
+#include "src/terminal/extensions.h"
 #include "src/frontend/controlpanel.h"
 #include "src/frontend/mimeclipboard.h"
 #include "src/frontend/download.h"
@@ -68,6 +72,12 @@ private:
   Terminal::TmuxControlParser tmux_parser;
   Mascot::Splash mascot;
   bool graphics_sent = false;
+  /* Reports and replies from this terminal's OSC 777 and OSC 22, apart from
+     the keystrokes they arrive among. */
+  Terminal::Ext::InputDemux ext_demux;
+  uint64_t ext_demux_at = 0;
+  Terminal::ExtensionClient ext_client;
+  bool ext_info_dirty = false;
   bool sixel_state = getenv( "GOBLIN_SKIFF_SIXEL_STATE" ) && !strcmp( getenv( "GOBLIN_SKIFF_SIXEL_STATE" ), "1" );
   bool mime_negotiated = getenv( "GOBLIN_SKIFF_CLIPBOARD" ) && !strcmp( getenv( "GOBLIN_SKIFF_CLIPBOARD" ), "1" );
   bool mime_enabled = false;
@@ -119,6 +129,10 @@ private:
   bool process_terminal_bytes( const std::string& bytes );
   bool process_download_filtered_bytes( const std::string& bytes );
   bool process_user_bytes( const std::string& bytes, bool panel_filtered = false );
+  bool process_pointer_filtered_bytes( const std::string& bytes, bool panel_filtered = false );
+  bool process_demuxed( const Terminal::Ext::InputDemux::Output& output );
+  void push_extension_input( const Terminal::ExtensionInput& input );
+  void process_terminal_frame( const std::string& frame );
   bool process_user_keys( const std::string& bytes, bool paste );
   bool is_command_key( const std::string& key );
   void dismiss_mascot();

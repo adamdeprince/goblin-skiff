@@ -14,6 +14,26 @@ and fall back when a peer lacks a feature. Do not infer feature availability
 from a release date or require identical releases/builds. An unavoidable
 breaking change requires an explicit protocol bump and migration notes.
 
+Kitty images outside WebP's dimension range use the optional `png` field in
+image state only when the selected client advertises `png-state-v1` through
+`--image-codecs` and `MOSH_CLIENT_CAPS`. Existing WebP and palette/DjVu state is
+unchanged. Transport instructions advertise `large_fragments_supported`
+(field 13). After receiving that capability, a sender may use a 16-byte
+fragment header for updates needing more than 32768 packets: the high bit of
+the instruction ID marks the extended header, followed by a 64-bit fragment
+index whose high bit marks the final packet. Smaller updates and traffic to
+older peers retain the original 10-byte header. Older peers cannot receive
+snapshots exceeding their original fragment range.
+
+Silkie's extensions add optional fields that older peers ignore: user
+instructions `client_extensions` (14) and `ext_input` (15), host instructions
+`ext_output` (13) and `ext_state` (14), the kitty image fields `vector`,
+`vector_lineage`, `vector_version`, `hdr`, `tone_map` and `gamut` (10–15), and
+`vector_patch` (5) in kitty state deltas. A server answers the extensions only
+after a client describes its terminal, and accepts `f=200` and `f=64` images
+only when that terminal does. An older client therefore sees nothing new, and
+an older server never receives a description, so it answers nothing.
+
 ## Connection identification
 
 `goblin-skiff --version`, `goblin-skiff-client --version` and

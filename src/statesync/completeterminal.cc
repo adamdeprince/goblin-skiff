@@ -38,6 +38,7 @@
 #include "src/protobufs/stream.pb.h"
 #include "src/statesync/clipboard.h"
 #include "src/statesync/completeterminal.h"
+#include "src/statesync/extensions.h"
 #include "src/statesync/kitty.h"
 #include "src/util/fatal_assert.h"
 
@@ -100,6 +101,10 @@ string Complete::diff_from( const Complete& existing ) const
     }
   }
 
+  if ( existing.get_fb().ds.ext != get_fb().ds.ext ) {
+    extension_state_to_proto( get_fb().ds.ext, output.add_instruction()->MutableExtension( HostBuffers::ext_state ) );
+  }
+
   KittyBuffers::StateDelta kitty_delta;
   const bool force_kitty_placements
     = hostbytes_emitted
@@ -150,6 +155,18 @@ string Complete::diff_from( const Complete& existing ) const
     clip_it++;
   }
 
+  std::deque<std::string>::const_iterator out_it = extension_outputs.begin();
+  for ( std::deque<std::string>::const_iterator i = existing.extension_outputs.begin();
+        i != existing.extension_outputs.end();
+        i++ ) {
+    assert( out_it != extension_outputs.end() );
+    assert( *i == *out_it );
+    out_it++;
+  }
+  for ( ; out_it != extension_outputs.end(); out_it++ ) {
+    output.add_instruction()->SetExtension( HostBuffers::ext_output, *out_it );
+  }
+
   assert( tmux_output.compare( 0, existing.tmux_output.size(), existing.tmux_output ) == 0 );
   if ( tmux_output.size() > existing.tmux_output.size() ) {
     output.add_instruction()->SetExtension( HostBuffers::tmux_output,
@@ -191,6 +208,10 @@ void Complete::apply_string( const string& diff )
       apply_kitty_state_delta( input.instruction( i ).GetExtension( HostBuffers::kitty ), terminal.get_fb() );
     } else if ( input.instruction( i ).HasExtension( HostBuffers::tmux_output ) ) {
       tmux_output += input.instruction( i ).GetExtension( HostBuffers::tmux_output );
+    } else if ( input.instruction( i ).HasExtension( HostBuffers::ext_state ) ) {
+      terminal.get_fb().ds.ext = extension_state_from_proto( input.instruction( i ).GetExtension( HostBuffers::ext_state ) );
+    } else if ( input.instruction( i ).HasExtension( HostBuffers::ext_output ) ) {
+      extension_outputs.push_back( input.instruction( i ).GetExtension( HostBuffers::ext_output ) );
     }
   }
   terminal.get_fb().sixel_mutations = true;
@@ -200,7 +221,8 @@ bool Complete::operator==( Complete const& x ) const
 {
   //  assert( parser == x.parser ); /* parser state is irrelevant for us */
   return ( terminal == x.terminal ) && ( echo_ack == x.echo_ack ) && ( stream_events == x.stream_events )
-         && ( clipboard_events == x.clipboard_events ) && ( tmux_output == x.tmux_output );
+         && ( clipboard_events == x.clipboard_events ) && ( extension_outputs == x.extension_outputs )
+         && ( tmux_output == x.tmux_output );
 }
 
 void Complete::subtract( const Complete* prefix )
@@ -208,8 +230,17 @@ void Complete::subtract( const Complete* prefix )
   if ( this == prefix ) {
     stream_events.clear();
     clipboard_events.clear();
+    extension_outputs.clear();
     tmux_output.clear();
     return;
+  }
+
+  for ( std::deque<std::string>::const_iterator i = prefix->extension_outputs.begin();
+        i != prefix->extension_outputs.end();
+        i++ ) {
+    assert( !extension_outputs.empty() );
+    assert( *i == extension_outputs.front() );
+    extension_outputs.pop_front();
   }
 
   assert( tmux_output.compare( 0, prefix->tmux_output.size(), prefix->tmux_output ) == 0 );
@@ -236,10 +267,12 @@ void Complete::replace_terminal_state( const Complete& x )
 {
   std::deque<Network::StreamEvent> saved_stream_events( stream_events );
   std::deque<ClipboardEvent> saved_clipboard_events( clipboard_events );
+  std::deque<std::string> saved_extension_outputs( extension_outputs );
   std::string saved_tmux_output( tmux_output );
   *this = x;
   stream_events = saved_stream_events;
   clipboard_events = saved_clipboard_events;
+  extension_outputs.swap( saved_extension_outputs );
   tmux_output.swap( saved_tmux_output );
   reset_input();
 }

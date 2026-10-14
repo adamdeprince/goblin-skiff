@@ -1,6 +1,29 @@
 <!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin Skiff changes
 
+## Unreleased
+
+- Relay Silkie's OSC 777 extensions: capabilities, tablet pointer, scroll,
+  gesture, frame presentation, low latency, display and haptic feedback, and
+  terminal-side ink. The server answers queries from what the client learnt of
+  its terminal, keeps the modes with terminal state, and cancels open strokes
+  on a mode change, reset, prompt mark or a client that goes silent.
+- Keep vector images (`f=200`) as record tables and send their edits as
+  patches; keep HDR images (`f=64`), the `G` gamut key and `T=1`; read GPU
+  surfaces (`t=g`, `a=r`) on the server.
+- Linger a second after acknowledging a client's quit, re-sending the
+  acknowledgement, so a lost datagram no longer makes the client exit with an
+  unclean-shutdown error.
+- Parse colon sub-parameters in SGR, and keep HDR brightness (`56`, `57`),
+  RGB color-space ids and background alpha (`70`) in cells. Answer
+  `kitty-query-hdr_headroom` and relay OSC 22 pointer shapes, image shapes
+  included.
+- Leave CSI sequences, OSC, APC and DCS payloads, and vector-group nesting
+  uncapped unless `--csi-limit`, `--escape-limit` or `--vector-depth-limit`
+  is set (`MOSH_CSI_LIMIT`, `MOSH_ESCAPE_LIMIT`, `MOSH_VECTOR_DEPTH_LIMIT`).
+  `0` means no limit. A sequence past its bound is ignored, and a parent
+  cycle is rejected either way.
+
 ## 1.4.0-goblin20260919.2 — 2026-09-19
 
 - Name the product Goblin Skiff and install the `goblin-skiff` commands.

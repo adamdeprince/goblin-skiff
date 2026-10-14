@@ -175,6 +175,8 @@ public:
   void adjust_message( void );
   void apply( Framebuffer& fb ) const;
   const std::wstring& get_notification_string( void ) const { return message; }
+  /* Whether the client has lost contact with the server, as its countdown shows. */
+  bool contact_lost( uint64_t ts ) const { return need_countup( ts ); }
   void server_heard( uint64_t s_last_word ) { last_word_from_server = s_last_word; }
   void server_acked( uint64_t s_last_acked ) { last_acked_state = s_last_acked; }
   void set_keepalive_interval( unsigned int s_interval ) { keepalive_interval = s_interval; }

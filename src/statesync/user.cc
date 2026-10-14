@@ -37,6 +37,7 @@
 #include "src/protobufs/stream.pb.h"
 #include "src/protobufs/userinput.pb.h"
 #include "src/statesync/clipboard.h"
+#include "src/statesync/extensions.h"
 #include "src/statesync/user.h"
 #include "src/util/fatal_assert.h"
 
@@ -134,6 +135,24 @@ std::string UserStream::diff_from( const UserStream& existing ) const
         caps->set_clipboard( my_it->graphics.clipboard );
         caps->set_clipboard_fast_threshold( my_it->graphics.clipboard_fast_threshold );
         caps->set_downloads( my_it->graphics.downloads );
+        caps->set_pointer( my_it->graphics.pointer );
+      } break;
+      case UserExtensionsEventType: {
+        Terminal::client_extensions_to_proto( my_it->extensions,
+                                              output.add_instruction()->MutableExtension( client_extensions ) );
+      } break;
+      case UserExtensionInputType: {
+        ExtensionInputMessage* input = output.add_instruction()->MutableExtension( ext_input );
+        if ( !my_it->ext_input.payload.empty() ) {
+          input->set_payload( my_it->ext_input.payload );
+        }
+        if ( my_it->ext_input.ink_image ) {
+          input->set_ink_image( my_it->ext_input.ink_image );
+          input->set_ink_records( my_it->ext_input.ink_records );
+        }
+        if ( my_it->ext_input.clock >= 0 ) {
+          input->set_clock( my_it->ext_input.clock );
+        }
       } break;
       default:
         assert( !"unexpected event type" );
@@ -173,6 +192,17 @@ void UserStream::apply_string( const std::string& diff )
       actions.push_back( UserEvent( Terminal::ClientGraphics( caps.kitty(), caps.sixel(), caps.keyboard(), caps.text_sizing(),
                                                               caps.clipboard(), caps.clipboard_fast_threshold() ) ) );
       actions.back().graphics.downloads = caps.downloads();
+      actions.back().graphics.pointer = caps.pointer();
+    } else if ( input.instruction( i ).HasExtension( client_extensions ) ) {
+      actions.push_back(
+        UserEvent( Terminal::client_extensions_from_proto( input.instruction( i ).GetExtension( client_extensions ) ) ) );
+    } else if ( input.instruction( i ).HasExtension( ext_input ) ) {
+      const ExtensionInputMessage& message = input.instruction( i ).GetExtension( ext_input );
+      Terminal::ExtensionInput report( message.payload() );
+      report.ink_image = message.ink_image();
+      report.ink_records = message.ink_records();
+      report.clock = message.has_clock() ? message.clock() : -1;
+      actions.push_back( UserEvent( report ) );
     } else if ( input.instruction( i ).HasExtension( client_geometry ) ) {
       const ClientGeometryMessage& geometry = input.instruction( i ).GetExtension( client_geometry );
       actions.push_back( UserEvent( Terminal::ClientGeometry( geometry.columns(),
@@ -196,6 +226,8 @@ const Parser::Action& UserStream::get_action( unsigned int i ) const
     case UserClipboardEventType:
     case UserTmuxEventType:
     case UserGraphicsEventType:
+    case UserExtensionsEventType:
+    case UserExtensionInputType:
     case UserClientGeometryEventType: {
       static const Parser::Ignore nothing = Parser::Ignore();
       return nothing;

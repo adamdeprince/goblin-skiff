@@ -33,6 +33,7 @@
 
 #include "src/include/config.h"
 #include "src/include/version.h"
+#include "src/terminal/inputlimits.h"
 
 #include <cerrno>
 #include <climits>
@@ -103,7 +104,12 @@ static void print_usage( FILE* file, const char* argv0 )
            "       --connection-version reports release, build and compatibility protocol and exits\n"
            "       --udp-relay uses GOBLIN_SKIFF_RELAY_KEYS supplied by the wrapper's -J route\n"
            "       --connect-timeout=SECONDS waits 1..3600 seconds for initial UDP connection (default 120)\n"
-           "       --radio uses negotiated goTenna pacing, small datagrams and longer retry waits\n"
+           "       --radio uses negotiated pacing for goTenna Mesh radios, small datagrams and longer retry waits\n"
+           "       --csi-limit=BYTES       max bytes of one CSI (ESC [); 0 means no limit\n"
+           "       --escape-limit=BYTES    max bytes of one OSC, APC or DCS; 0 means no limit\n"
+           "       --vector-depth-limit=N  max vector-group nesting; 0 means no limit\n"
+           "                        A sequence past its bound is ignored. A parent cycle is always rejected.\n"
+           "                        Also MOSH_CSI_LIMIT, MOSH_ESCAPE_LIMIT, MOSH_VECTOR_DEPTH_LIMIT.\n"
            "       --socks5-proxy=HOST:PORT carries UDP through a SOCKS5 proxy (proxy DNS)\n"
            "       Ctrl-^ then 0 opens or resumes the local file browser\n",
            argv0,
@@ -207,7 +213,7 @@ int main( int argc, char* argv[] )
       exit( 0 );
     }
     if ( 0 == strcmp( argv[i], "--image-codecs" ) ) {
-      puts( "webp palette-djvu-v1" );
+      puts( "webp palette-djvu-v1 png-state-v1" );
       exit( 0 );
     }
     if ( 0 == strcmp( argv[i], "--connection-version" ) ) {
@@ -233,6 +239,9 @@ int main( int argc, char* argv[] )
     { "socks5-proxy", required_argument, NULL, 268 },
     { "connect-timeout", required_argument, NULL, 269 },
     { "radio", no_argument, NULL, 270 },
+    { "csi-limit", required_argument, NULL, 271 },
+    { "escape-limit", required_argument, NULL, 272 },
+    { "vector-depth-limit", required_argument, NULL, 273 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -310,6 +319,15 @@ int main( int argc, char* argv[] )
       case 270:
         radio_mode = true;
         break;
+      case 271:
+        setenv( "MOSH_CSI_LIMIT", optarg, 1 );
+        break;
+      case 272:
+        setenv( "MOSH_ESCAPE_LIMIT", optarg, 1 );
+        break;
+      case 273:
+        setenv( "MOSH_VECTOR_DEPTH_LIMIT", optarg, 1 );
+        break;
       case 268:
         socks5_proxy = optarg;
         try { Network::Socks5UDP::validate_proxy( socks5_proxy ); }
@@ -321,6 +339,8 @@ int main( int argc, char* argv[] )
         break;
     }
   }
+
+  Terminal::load_input_limits_from_env();
 
   try {
     Crypto::ensure_mode_available( crypto_mode );

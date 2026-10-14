@@ -41,6 +41,34 @@ message ClientGraphicsMessage {
   optional bool clipboard = 5;
   optional uint32 clipboard_fast_threshold = 6 [default = 65536];
   optional bool downloads = 7;
+  optional bool pointer = 8;
+}
+
+message ClientExtensionSelector {
+  optional string name = 1;
+  optional uint32 version = 2; // present when the terminal listed it
+  optional string caps = 3;    // its cap reply, key=value:...
+  optional uint32 grant = 4;   // the mode bits the terminal keeps
+}
+
+// A report from the client's terminal for the program, as an OSC payload,
+// with the ink the terminal drew for it; or, with no payload, a heartbeat.
+message ExtensionInputMessage {
+  optional bytes payload = 1;
+  optional uint32 ink_image = 2;
+  optional bytes ink_records = 3;
+  optional sint64 clock = 4; // the terminal's clock in ms, as the client reckons it
+}
+
+// What the client's terminal said of Silkie's extensions.
+message ClientExtensionsMessage {
+  optional bool listing = 1;
+  repeated ClientExtensionSelector selector = 2;
+  optional string media = 3;
+  optional string format = 4;
+  optional string display = 5;
+  optional bool image_gamut = 6;
+  optional string pointer_shapes = 7;
 }
 
 extend Instruction {
@@ -52,4 +80,6 @@ extend Instruction {
   // Control commands bypass terminal keystroke interpretation.
   optional bytes tmux_input = 12;
   optional ClientGraphicsMessage client_graphics = 13;
+  optional ClientExtensionsMessage client_extensions = 14;
+  optional ExtensionInputMessage ext_input = 15;
 }

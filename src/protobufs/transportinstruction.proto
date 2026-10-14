@@ -24,4 +24,6 @@ message Instruction {
   optional string goblin_release = 10;
   optional string goblin_build = 11;
   optional uint32 goblin_protocol = 12;
+  // Extended fragment indices remove the legacy 32768-packet state ceiling.
+  optional bool large_fragments_supported = 13;
 }

@@ -14,25 +14,25 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
+
+#include "src/terminal/vectorscene.h"
 
 namespace Terminal {
 class Framebuffer;
 
-static const size_t KITTY_MAX_APC_CHARS = 8192;
 static const size_t KITTY_CHUNK_B64 = 4096;
-// WebP's dimension ceiling is 16383. Keep a separate decoded-pixel limit and
-// an aggregate storage budget; a retina-sized canvas can exceed 32 MiB RGBA.
-static const uint32_t GRAPHICS_MAX_DIMENSION = 16383;
-static const size_t GRAPHICS_MAX_PIXELS = 32 * 1024 * 1024;
-static const size_t KITTY_IMAGE_QUOTA = 256 * 1024 * 1024;
-// Retained encoded images must fit a recovery snapshot even at the 500-byte
-// fallback MTU (15-bit fragment count). This is separate from decoded pixels.
-static const size_t KITTY_ENCODED_QUOTA = 12 * 1024 * 1024;
 static const uint32_t KITTY_FORMAT_RGB = 24;
 static const uint32_t KITTY_FORMAT_RGBA = 32;
 static const uint32_t KITTY_FORMAT_PNG = 100;
+/* Silkie's formats: RGBA as half floats in linear extended sRGB, and a scene
+   of vector records. Both reach the terminal as they were sent. */
+static const uint32_t KITTY_FORMAT_HDR = 64;
+static const uint32_t KITTY_FORMAT_VECTOR = 200;
+/* The client keeps an image it patched as plain RGBA. Internal, like WebP. */
+static const uint32_t KITTY_FORMAT_RAW = 0x52415741U;
 /* Internal codecs, never emitted to the terminal. The public Kitty protocol
    only defines RGB, RGBA, and PNG. */
 static const uint32_t KITTY_FORMAT_WEBP = 0x57454250U;
@@ -44,6 +44,7 @@ struct ImageEncoding
   int quality = -1; // -1: lossless WebP; 0..100: lossy WebP
   bool palette_djvu = false; // enabled only after peer capability negotiation
   bool djvu_lossy = false; // permit cjb2 symbol substitution for bilevel images
+  bool png = false; // png-state-v1: lossless fallback beyond WebP dimensions
 };
 
 enum KittyAction
@@ -55,7 +56,9 @@ enum KittyAction
   KittyDelete = 'd',
   KittyFrame = 'f',
   KittyAnimate = 'a',
-  KittyCompose = 'c'
+  KittyCompose = 'c',
+  KittyEdit = 'e',   /* a patch to a vector image */
+  KittyRefresh = 'r' /* copy a GPU surface again */
 };
 
 struct KittyCommand
@@ -88,6 +91,8 @@ struct KittyCommand
   uint32_t parent_placement;
   int32_t H;
   int32_t V;
+  uint32_t gamut;    /* G: 0 sRGB, 1 Display P3, 2 Rec. 2020 */
+  uint32_t tone_map; /* T: compress what is brighter than the headroom */
   char delete_target;
   std::string payload;
 
@@ -96,6 +101,8 @@ struct KittyCommand
 
 // A sixel image must prefer native sixel output, even on dual-capable clients.
 enum class ImageOrigin { Kitty, Sixel };
+
+struct ImageDelta;
 
 struct KittyImage
 {
@@ -108,9 +115,25 @@ struct KittyImage
   std::shared_ptr<std::string> data;
   std::string palette; // DjVu: 1..16 exact RGBA entries, including alpha
   uint64_t serial;
+  std::shared_ptr<const Vector::Doc> vector; // KITTY_FORMAT_VECTOR: the scene
+  uint32_t gamut = 0;                         // of the RGB pixels, as the G key
+  bool tone_map = false;                      // the T key of an HDR image
+  std::string surface;                        // the GPU surface it copies (server only)
+  uint32_t surface_gamut = 0;                 // the gamut its pixels came in (server only)
+  bool png_original = false;                  // a PNG with a color profile, passed on as it came
+  /* What changed from the version before, when only a rectangle did: a peer
+     that has that version is sent the rectangle instead of the image. */
+  std::shared_ptr<const ImageDelta> delta;
 
   KittyImage();
   bool operator==( const KittyImage& other ) const;
+};
+
+struct ImageDelta
+{
+  uint64_t base_serial = 0; /* the serial of the version it changes */
+  uint32_t x = 0, y = 0;
+  KittyImage rect; /* encoded like any image; plain RGBA on the client */
 };
 
 struct KittyPlacement
@@ -144,6 +167,8 @@ std::string encode_kitty_chunks( const std::string& controls, const std::string&
 std::string kitty_response( uint32_t image_id, uint32_t placement_id, const std::string& message );
 bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string& error );
 bool kitty_inflate( const std::string& input, std::string& output, size_t hint );
+// Check representability, without imposing an image/storage quota.
+bool graphics_pixel_size( uint32_t width, uint32_t height, size_t bytes_per_pixel, size_t& size );
 bool kitty_normalize_webp( uint32_t format,
                            uint32_t width,
                            uint32_t height,
@@ -157,8 +182,16 @@ bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& w
 bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, const std::string& input,
                             KittyImage& image, const ImageEncoding& encoding, std::string& error );
 bool kitty_image_to_rgba( const KittyImage& image, std::string& rgba );
+/* The changed rectangle between two images of one size: false when nothing
+   changed. */
+bool kitty_dirty_rect( const std::string& before, const std::string& after, uint32_t width, uint32_t height,
+                       uint32_t& x, uint32_t& y, uint32_t& w, uint32_t& h );
+/* vector_resent: set when a vector image is sent whole, which ends the
+   strokes of ink the terminal is drawing into it. */
 void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current,
-                         bool convert_sixel = false );
+                         bool convert_sixel = false, bool gamut_supported = false, bool* vector_resent = nullptr );
+/* The whole scene of a vector image, as records. */
+std::string kitty_vector_records( const KittyImage& image );
 
 }
 

@@ -5,9 +5,12 @@
 #include "kittygraphics.h"
 
 #include <array>
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
@@ -31,12 +34,13 @@ unsigned plane_count( size_t colors )
 
 bool dimensions_ok( uint32_t width, uint32_t height )
 {
-  return width && height && width <= GRAPHICS_MAX_DIMENSION && height <= GRAPHICS_MAX_DIMENSION
-         && uint64_t( width ) * height <= GRAPHICS_MAX_PIXELS;
+  size_t size = 0;
+  // The DjVu INFO chunk stores each page dimension in 16 bits.
+  return width <= 65535 && height <= 65535 && graphics_pixel_size( width, height, 4, size );
 }
 
 // cjb2 needs seekable input/output. Anonymous temporary files avoid named
-// image files, shell commands, and pipe deadlocks. Bound both runtime and size.
+// image files, shell commands, and pipe deadlocks. Bound runtime only.
 bool cjb2_encode( const std::string& pbm, bool lossy, std::string& result )
 {
   using File = std::unique_ptr<FILE, decltype( &fclose )>;
@@ -50,14 +54,14 @@ bool cjb2_encode( const std::string& pbm, bool lossy, std::string& result )
   if ( null_fd < 0 ) { return false; }
   const pid_t child = fork();
   if ( child == 0 ) {
-    const struct rlimit cpu = { 5, 5 }, file = { KITTY_ENCODED_QUOTA, KITTY_ENCODED_QUOTA }, core = { 0, 0 };
+    const struct rlimit cpu = { 5, 5 }, core = { 0, 0 };
     sigset_t mask;
     sigemptyset( &mask );
     sigprocmask( SIG_SETMASK, &mask, NULL );
     signal( SIGTERM, SIG_DFL );
     signal( SIGINT, SIG_DFL );
     signal( SIGPIPE, SIG_DFL );
-    if ( setrlimit( RLIMIT_CPU, &cpu ) || setrlimit( RLIMIT_FSIZE, &file ) || setrlimit( RLIMIT_CORE, &core )
+    if ( setrlimit( RLIMIT_CPU, &cpu ) || setrlimit( RLIMIT_CORE, &core )
          || dup2( input_fd, STDIN_FILENO ) < 0 || dup2( output_fd, STDOUT_FILENO ) < 0
          || dup2( null_fd, STDERR_FILENO ) < 0 ) {
       _exit( 127 );
@@ -85,7 +89,7 @@ bool cjb2_encode( const std::string& pbm, bool lossy, std::string& result )
   }
   struct stat st;
   if ( !WIFEXITED( status ) || WEXITSTATUS( status ) != 0 || fstat( output_fd, &st ) < 0 || st.st_size <= 0
-       || uint64_t( st.st_size ) > KITTY_ENCODED_QUOTA || fseek( output.get(), 0, SEEK_SET ) ) {
+       || uint64_t( st.st_size ) > result.max_size() || fseek( output.get(), 0, SEEK_SET ) ) {
     return false;
   }
   result.resize( st.st_size );
@@ -103,7 +107,7 @@ uint32_t read_be32( const char* p )
 // annotations, extra pages, truncated chunks, and other DjVu image layers.
 bool check_djvu( const std::string& data, uint32_t width, uint32_t height )
 {
-  if ( data.size() < 42 || data.size() > KITTY_ENCODED_QUOTA || data.compare( 0, 8, "AT&TFORM" )
+  if ( data.size() < 42 || data.compare( 0, 8, "AT&TFORM" )
        || read_be32( data.data() + 8 ) != data.size() - 12 || data.compare( 12, 4, "DJVU" )
        || data.compare( 16, 4, "INFO" ) || read_be32( data.data() + 20 ) != 10 ) {
     return false;
@@ -133,6 +137,32 @@ bool wait_for_job( ddjvu_context_t* context, ddjvu_job_t* job )
     poll( NULL, 0, 1 );
   }
 }
+
+class DecoderFile
+{
+  std::string path;
+public:
+  DecoderFile() = default;
+  DecoderFile( const DecoderFile& ) = delete;
+  DecoderFile& operator=( const DecoderFile& ) = delete;
+  ~DecoderFile() { if ( !path.empty() ) { unlink( path.c_str() ); } }
+  bool write( const std::string& data )
+  {
+    const char* directory = getenv( "TMPDIR" );
+    path = std::string( directory && *directory ? directory : "/tmp" ) + "/skiff-djvu-XXXXXX";
+    const int fd = mkstemp( &path[0] );
+    if ( fd < 0 ) { path.clear(); return false; }
+    size_t offset = 0;
+    while ( offset < data.size() ) {
+      const ssize_t written = ::write( fd, data.data() + offset, std::min<size_t>( data.size() - offset, SSIZE_MAX ) );
+      if ( written < 0 && errno == EINTR ) { continue; }
+      if ( written <= 0 ) { close( fd ); return false; }
+      offset += written;
+    }
+    return close( fd ) == 0;
+  }
+  const char* name() const { return path.c_str(); }
+};
 }
 
 bool encode_palette_djvu( const unsigned char* pixels, uint32_t width, uint32_t height, bool alpha, bool lossy,
@@ -160,6 +190,7 @@ bool encode_palette_djvu( const unsigned char* pixels, uint32_t width, uint32_t 
     indices[i] = static_cast<char>( index );
   }
   const unsigned planes = plane_count( count );
+  if ( height > 65535 / planes ) { return false; }
   const size_t stride = ( width + 7 ) / 8;
   std::string pbm = "P4\n" + std::to_string( width ) + " " + std::to_string( height * planes ) + "\n";
   const size_t offset = pbm.size();
@@ -186,8 +217,16 @@ bool decode_palette_djvu( const std::string& palette, const std::string& djvu,
        || palette.size() > GRAPHICS_MAX_PALETTE * 4 ) { return false; }
   const size_t colors = palette.size() / 4;
   const unsigned planes = plane_count( colors );
+  if ( height > 65535 / planes ) { return false; }
   const uint32_t page_height = height * planes;
   if ( !check_djvu( djvu, width, page_height ) ) { return false; }
+
+  // DjVuLibre's streaming DataPool callbacks can race with its decoder
+  // threads and crash in ddjvu_stream_write on dense cell-image streams.
+  // A complete, uniquely named file avoids that callback path and cache-key
+  // reuse. Keep it alive until the page/document have been released.
+  DecoderFile input;
+  if ( !input.write( djvu ) ) { return false; }
 
   const auto release_document = []( ddjvu_document_t* p ) { ddjvu_document_release( p ); };
   const auto release_page = []( ddjvu_page_t* p ) { ddjvu_page_release( p ); };
@@ -195,10 +234,8 @@ bool decode_palette_djvu( const std::string& palette, const std::string& djvu,
     ddjvu_context_create( "goblin_skiff" ), ddjvu_context_release );
   if ( !context ) { return false; }
   std::unique_ptr<ddjvu_document_t, decltype( release_document )> document(
-    ddjvu_document_create( context.get(), NULL, false ), release_document );
+    ddjvu_document_create_by_filename_utf8( context.get(), input.name(), false ), release_document );
   if ( !document ) { return false; }
-  ddjvu_stream_write( document.get(), 0, djvu.data(), djvu.size() );
-  ddjvu_stream_close( document.get(), 0, false );
   if ( !wait_for_job( context.get(), ddjvu_document_job( document.get() ) )
        || ddjvu_document_get_pagenum( document.get() ) != 1 ) { return false; }
   std::unique_ptr<ddjvu_page_t, decltype( release_page )> page(

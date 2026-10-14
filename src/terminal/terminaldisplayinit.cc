@@ -85,6 +85,8 @@ Display::Display( bool use_environment, bool kitty_supported )
     rmcup( NULL )
 {
   render_keyboard = !use_environment;
+  render_pointer = !use_environment;
+  render_extended_sgr = !use_environment; /* the client's terminal: once it says it has them */
   render_clipboard = !use_environment;
   render_sized_text = !use_environment;
   if ( use_environment ) {

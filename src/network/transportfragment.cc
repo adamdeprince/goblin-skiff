@@ -31,6 +31,7 @@
 */
 
 #include <cassert>
+#include <cstring>
 #include <stdexcept>
 
 #include "compressor.h"
@@ -42,6 +43,8 @@
 
 using namespace Network;
 using namespace TransportBuffers;
+
+static const uint64_t LARGE_FRAGMENT_FLAG = uint64_t( 1 ) << 63;
 
 static std::string network_order_string( uint16_t host_order )
 {
@@ -61,14 +64,15 @@ std::string Fragment::tostring( void )
 
   std::string ret;
 
-  ret += network_order_string( id );
-
-  fatal_assert(
-    !( fragment_num & 0x8000 ) ); /* effective limit on size of a terminal screen change or buffered user input */
-  uint16_t combined_fragment_num = ( final << 15 ) | fragment_num;
-  ret += network_order_string( combined_fragment_num );
-
-  assert( ret.size() == frag_header_len );
+  fatal_assert( !( id & LARGE_FRAGMENT_FLAG ) );
+  ret += network_order_string( id | ( large ? LARGE_FRAGMENT_FLAG : 0 ) );
+  if ( large ) {
+    fatal_assert( !( fragment_num & LARGE_FRAGMENT_FLAG ) );
+    ret += network_order_string( fragment_num | ( final ? LARGE_FRAGMENT_FLAG : 0 ) );
+  } else {
+    fatal_assert( fragment_num < 32768 );
+    ret += network_order_string( uint16_t( ( final << 15 ) | fragment_num ) );
+  }
 
   ret += contents;
 
@@ -76,18 +80,28 @@ std::string Fragment::tostring( void )
 }
 
 Fragment::Fragment( const std::string& x )
-  : id( -1 ), fragment_num( -1 ), final( false ), initialized( true ), contents()
+  : id( -1 ), fragment_num( -1 ), final( false ), large( false ), initialized( true ), contents()
 {
   fatal_assert( x.size() >= frag_header_len );
-  contents = std::string( x.begin() + frag_header_len, x.end() );
-
   uint64_t data64;
-  uint16_t* data16 = (uint16_t*)x.data();
   memcpy( &data64, x.data(), sizeof( data64 ) );
   id = be64toh( data64 );
-  fragment_num = be16toh( data16[4] );
-  final = ( fragment_num & 0x8000 ) >> 15;
-  fragment_num &= 0x7FFF;
+  large = id & LARGE_FRAGMENT_FLAG;
+  id &= ~LARGE_FRAGMENT_FLAG;
+  if ( large ) {
+    fatal_assert( x.size() >= large_frag_header_len );
+    memcpy( &data64, x.data() + sizeof( uint64_t ), sizeof( data64 ) );
+    fragment_num = be64toh( data64 );
+    final = fragment_num & LARGE_FRAGMENT_FLAG;
+    fragment_num &= ~LARGE_FRAGMENT_FLAG;
+  } else {
+    uint16_t data16;
+    memcpy( &data16, x.data() + sizeof( uint64_t ), sizeof( data16 ) );
+    fragment_num = be16toh( data16 );
+    final = ( fragment_num & 0x8000 ) != 0;
+    fragment_num &= 0x7FFF;
+  }
+  contents.assign( x, large ? large_frag_header_len : frag_header_len, std::string::npos );
 }
 
 bool FragmentAssembly::add_fragment( Fragment& frag )
@@ -95,48 +109,30 @@ bool FragmentAssembly::add_fragment( Fragment& frag )
   /* see if this is a totally new packet */
   if ( current_id != frag.id ) {
     fragments.clear();
-    fragments.resize( frag.fragment_num + 1 );
-    fragments.at( frag.fragment_num ) = frag;
-    fragments_arrived = 1;
-    fragments_total = -1; /* unknown */
+    fragments_total = 0; /* unknown */
     current_id = frag.id;
-  } else { /* not a new packet */
-    /* see if we already have this fragment */
-    if ( ( fragments.size() > frag.fragment_num ) && ( fragments.at( frag.fragment_num ).initialized ) ) {
-      /* make sure new version is same as what we already have */
-      assert( fragments.at( frag.fragment_num ) == frag );
-    } else {
-      if ( (int)fragments.size() < frag.fragment_num + 1 ) {
-        fragments.resize( frag.fragment_num + 1 );
-      }
-      fragments.at( frag.fragment_num ) = frag;
-      fragments_arrived++;
-    }
   }
-
+  const auto inserted = fragments.emplace( frag.fragment_num, frag );
+  assert( inserted.second || inserted.first->second == frag );
   if ( frag.final ) {
     fragments_total = frag.fragment_num + 1;
-    assert( (int)fragments.size() <= fragments_total );
-    fragments.resize( fragments_total );
   }
-
-  if ( fragments_total != -1 ) {
-    assert( fragments_arrived <= fragments_total );
+  if ( fragments_total ) {
+    assert( fragments.rbegin()->first < fragments_total );
   }
 
   /* see if we're done */
-  return fragments_arrived == fragments_total;
+  return fragments_total && fragments.size() == fragments_total;
 }
 
 Instruction FragmentAssembly::get_assembly( StateSampleWriter* sample_writer )
 {
-  assert( fragments_arrived == fragments_total );
+  assert( fragments_total && fragments.size() == fragments_total );
 
   std::string encoded;
 
-  for ( int i = 0; i < fragments_total; i++ ) {
-    assert( fragments.at( i ).initialized );
-    encoded += fragments.at( i ).contents;
+  for ( const auto& fragment : fragments ) {
+    encoded += fragment.second.contents;
   }
 
   Instruction ret;
@@ -147,8 +143,7 @@ Instruction FragmentAssembly::get_assembly( StateSampleWriter* sample_writer )
   fatal_assert( ret.ParseFromString( decoded ) );
 
   fragments.clear();
-  fragments_arrived = 0;
-  fragments_total = -1;
+  fragments_total = 0;
 
   return ret;
 }
@@ -156,14 +151,15 @@ Instruction FragmentAssembly::get_assembly( StateSampleWriter* sample_writer )
 bool Fragment::operator==( const Fragment& x ) const
 {
   return ( id == x.id ) && ( fragment_num == x.fragment_num ) && ( final == x.final )
-         && ( initialized == x.initialized ) && ( contents == x.contents );
+         && ( large == x.large ) && ( initialized == x.initialized ) && ( contents == x.contents );
 }
 
 std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
                                                   size_t MTU,
                                                   bool allow_zstd,
                                                   bool allow_zstd_dictionary,
-                                                  const std::string& zstd_dictionary_id )
+                                                  const std::string& zstd_dictionary_id,
+                                                  bool allow_large_fragments )
 {
   if ( MTU <= Fragment::frag_header_len ) { throw std::invalid_argument( "MTU is too small for a state fragment" ); }
   MTU -= Fragment::frag_header_len;
@@ -177,6 +173,8 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
        || ( inst.goblin_protocol() != last_instruction.goblin_protocol() )
        || ( inst.zstd_supported() != last_instruction.zstd_supported() )
        || ( inst.zstd_dict_id() != last_instruction.zstd_dict_id() ) || ( last_MTU != MTU )
+       || ( inst.large_fragments_supported() != last_instruction.large_fragments_supported() )
+       || ( allow_large_fragments != last_allow_large_fragments )
        || ( allow_zstd != last_allow_zstd ) || ( allow_zstd_dictionary != last_allow_zstd_dictionary )
        || ( zstd_dictionary_id != last_zstd_dictionary_id ) ) {
     next_instruction_id++;
@@ -191,16 +189,26 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
   last_allow_zstd = allow_zstd;
   last_allow_zstd_dictionary = allow_zstd_dictionary;
   last_zstd_dictionary_id = zstd_dictionary_id;
+  last_allow_large_fragments = allow_large_fragments;
 
   std::string payload = get_compressor().compress_str( inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary );
-  const size_t count = ( payload.size() + MTU - 1 ) / MTU;
-  if ( count > 32768 ) { throw std::length_error( "compressed screen state exceeds the fragment limit" ); }
+  size_t count = payload.size() / MTU + ( payload.size() % MTU != 0 );
+  if ( !allow_large_fragments && count > 32768 ) {
+    throw std::length_error( "large screen state requires a peer supporting extended fragments" );
+  }
+  const bool large = count > 32768;
+  if ( large ) {
+    const size_t extra_header = Fragment::large_frag_header_len - Fragment::frag_header_len;
+    if ( MTU <= extra_header ) { throw std::invalid_argument( "MTU is too small for an extended state fragment" ); }
+    MTU -= extra_header;
+    count = payload.size() / MTU + ( payload.size() % MTU != 0 );
+  }
   std::vector<Fragment> ret;
   ret.reserve( count );
   // Offset slicing is linear. Repeatedly copying the remaining payload was
   // quadratic in image size and could stall a wide-screen redraw for seconds.
   for ( size_t i = 0; i < count; i++ ) {
-    ret.emplace_back( next_instruction_id, uint16_t( i ), i + 1 == count, payload.substr( i * MTU, MTU ) );
+    ret.emplace_back( next_instruction_id, i, i + 1 == count, payload.substr( i * MTU, MTU ), large );
   }
 
   return ret;

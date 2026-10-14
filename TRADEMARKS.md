@@ -10,3 +10,8 @@ Goblin Skiff is derived from and compatible with.
 Goblin Skiff is distributed under the GNU General Public License, version 3 or later,
 with the same OpenSSL and iOS exceptions as upstream Mosh. That license covers
 copyright only and conveys no trademark rights.
+
+goTenna and goTenna Mesh are trademarks of goTenna, Inc.
+Goblin Skiff and Goblin Modem are independent projects, not affiliated with,
+endorsed by or sponsored by goTenna, Inc. References identify compatible
+radio hardware.

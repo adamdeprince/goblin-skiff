@@ -93,7 +93,29 @@ public:
   void set_client_geometry( const ClientGeometry* geometry ) { dispatch.set_client_geometry( geometry ); }
   void set_sixel_enabled( bool enabled ) { dispatch.sixel_enabled = enabled; }
   void set_text_sizing_enabled( bool enabled ) { dispatch.text_sizing_enabled = enabled; }
+  void set_pointer_available( bool enabled ) { dispatch.pointer_available = enabled; }
   void set_keyboard_enabled( bool enabled ) { dispatch.keyboard_enabled = enabled; }
+
+  /* Silkie's extensions, from the attached client. Each returns what the
+     program is to be sent. */
+  std::string extension_input( const ExtensionInput& input );
+  std::string set_client_extensions( const ClientExtensions& info );
+  std::string extension_detach( void );
+  bool extension_contacts_live( void ) const { return dispatch.ext_relay.live_contacts(); }
+  void extension_output_written( void ) { dispatch.ext_relay.note_output( fb ); }
+  std::vector<std::string> take_extension_outputs( void )
+  {
+    std::vector<std::string> out;
+    out.swap( dispatch.ext_relay.outputs );
+    return out;
+  }
+  void set_relay_timing( uint64_t input_us, uint64_t repaint_us, uint64_t rtt_ms )
+  {
+    dispatch.ext_relay.relay_input_us = input_us;
+    dispatch.ext_relay.relay_repaint_us = repaint_us;
+    dispatch.ext_relay.relay_rtt_ms = rtt_ms;
+  }
+  const ExtensionRelay& extension_relay( void ) const { return dispatch.ext_relay; }
 
   Framebuffer& get_fb( void ) { return fb; }
   const Framebuffer& get_fb( void ) const { return fb; }

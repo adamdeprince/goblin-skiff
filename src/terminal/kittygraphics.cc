@@ -15,6 +15,7 @@
 #include "src/terminal/osc52.h"
 #include "src/terminal/terminalframebuffer.h"
 
+#include <array>
 #include <cerrno>
 #include <climits>
 #include <cstdio>
@@ -41,7 +42,7 @@ KittyCommand::KittyCommand()
     data_size( 0 ), data_offset( 0 ), image_id( 0 ), image_number( 0 ), placement_id( 0 ), more( 0 ), quiet( 0 ),
     columns( 0 ), rows( 0 ), src_x( 0 ), src_y( 0 ), src_w( 0 ), src_h( 0 ), cell_x( 0 ), cell_y( 0 ), z( 0 ),
     cursor_hold( 0 ), unicode_placeholder( 0 ), parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 ),
-    delete_target( 'a' ), payload()
+    gamut( 0 ), tone_map( 0 ), delete_target( 'a' ), payload()
 {}
 
 KittyImage::KittyImage()
@@ -53,7 +54,11 @@ bool KittyImage::operator==( const KittyImage& other ) const
 {
   return ( id == other.id ) && ( number == other.number ) && ( format == other.format ) && ( width == other.width )
          && ( height == other.height ) && ( origin == other.origin ) && ( serial == other.serial )
-         && ( palette == other.palette )
+         && ( palette == other.palette ) && ( gamut == other.gamut ) && ( tone_map == other.tone_map )
+         && ( png_original == other.png_original )
+         && ( vector == other.vector
+              || ( vector && other.vector && vector->lineage == other.vector->lineage
+                   && vector->version == other.vector->version ) )
          && ( ( data == other.data ) || ( data && other.data && *data == *other.data ) );
 }
 
@@ -183,6 +188,10 @@ bool parse_kitty_command( const std::string& apc, KittyCommand& cmd )
         parse_i32( val, cmd.H );
       } else if ( key == "V" ) {
         parse_i32( val, cmd.V );
+      } else if ( key == "G" ) {
+        parse_u32( val, cmd.gamut );
+      } else if ( key == "T" ) {
+        parse_u32( val, cmd.tone_map );
       } else if ( key == "d" && val.size() == 1 ) {
         cmd.delete_target = val[0];
       }
@@ -284,11 +293,11 @@ static bool read_regular_file( const std::string& path, uint32_t offset, uint32_
   }
   const uint64_t available = total - off;
   const uint64_t wanted = size == 0 ? available : size;
-  if ( wanted > available || wanted > KITTY_IMAGE_QUOTA ) { close( fd ); return false; }
+  if ( wanted > available || wanted > data.max_size() ) { close( fd ); return false; }
   data.assign( static_cast<size_t>( wanted ), '\0' );
   size_t at = 0;
   while ( at < wanted ) {
-    const ssize_t n = pread( fd, &data[at], wanted - at, off + at );
+    const ssize_t n = pread( fd, &data[at], std::min<uint64_t>( wanted - at, SSIZE_MAX ), off + at );
     if ( n < 0 && errno == EINTR ) { continue; }
     if ( n <= 0 ) { data.clear(); close( fd ); return false; }
     at += n;
@@ -353,10 +362,10 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     const size_t off = static_cast<size_t>( off64 );
     const size_t available = total - off;
     const size_t want = cmd.data_size == 0 ? available : cmd.data_size;
-    if ( want > KITTY_IMAGE_QUOTA || want > available ) {
+    if ( want > available || want > data.max_size() ) {
       close( fd );
       shm_unlink( name.c_str() );
-      error = "ENOSPC: shared memory image exceeds storage quota";
+      error = "EINVAL: shared memory image range";
       return false;
     }
     if ( want == 0 ) {
@@ -388,34 +397,52 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
   return false;
 }
 
-static bool checked_pixel_size( uint32_t width, uint32_t height, size_t bytes_per_pixel, size_t& size )
+bool graphics_pixel_size( uint32_t width, uint32_t height, size_t bytes_per_pixel, size_t& size )
 {
-  if ( width == 0 || height == 0 || width > GRAPHICS_MAX_DIMENSION || height > GRAPHICS_MAX_DIMENSION
-       || uint64_t( width ) * height > GRAPHICS_MAX_PIXELS || bytes_per_pixel == 0 ) {
+  if ( width == 0 || height == 0 || bytes_per_pixel == 0 ) {
     return false;
   }
-  if ( width > KITTY_IMAGE_QUOTA / bytes_per_pixel
-       || height > KITTY_IMAGE_QUOTA / ( static_cast<size_t>( width ) * bytes_per_pixel ) ) {
+  const size_t capacity = std::string().max_size();
+  if ( width > capacity / bytes_per_pixel
+       || height > capacity / ( static_cast<size_t>( width ) * bytes_per_pixel ) ) {
     return false;
   }
   size = static_cast<size_t>( width ) * static_cast<size_t>( height ) * bytes_per_pixel;
-  return size <= KITTY_IMAGE_QUOTA;
+  return true;
 }
 
 bool kitty_webp_dimensions( const std::string& webp, uint32_t& width, uint32_t& height )
 {
   int decoded_width = 0, decoded_height = 0;
   size_t rgba_size = 0;
-  if ( webp.empty() || webp.size() > KITTY_IMAGE_QUOTA
+  if ( webp.empty()
        || !WebPGetInfo(
          reinterpret_cast<const uint8_t*>( webp.data() ), webp.size(), &decoded_width, &decoded_height )
        || decoded_width <= 0 || decoded_height <= 0
-       || !checked_pixel_size(
+       || !graphics_pixel_size(
          static_cast<uint32_t>( decoded_width ), static_cast<uint32_t>( decoded_height ), 4, rgba_size ) ) {
     return false;
   }
   width = static_cast<uint32_t>( decoded_width );
   height = static_cast<uint32_t>( decoded_height );
+  return true;
+}
+
+static bool has_small_palette( const unsigned char* pixels, size_t count, bool alpha )
+{
+  std::array<uint32_t, GRAPHICS_MAX_PALETTE> colors;
+  size_t used = 0;
+  for ( size_t i = 0; i < count; i++ ) {
+    const unsigned char* p = pixels + i * ( alpha ? 4 : 3 );
+    const uint32_t color = uint32_t( p[0] ) << 24 | uint32_t( p[1] ) << 16 | uint32_t( p[2] ) << 8
+                           | ( alpha ? p[3] : 255 );
+    size_t index = 0;
+    while ( index < used && colors[index] != color ) { index++; }
+    if ( index == used ) {
+      if ( used == colors.size() ) { return false; }
+      colors[used++] = color;
+    }
+  }
   return true;
 }
 
@@ -435,23 +462,87 @@ static bool encode_image( const unsigned char* pixels,
   image.height = height;
   image.palette.clear();
   image.data = std::make_shared<std::string>();
-  if ( encoding.palette_djvu
+  // A cell-tiled viewer sends thousands of tiny images. Forking cjb2 for
+  // each one (and starting decoder threads twice at the client) can stall
+  // the terminal long enough to lose network acknowledgements. WebP runs
+  // in-process and has less overhead for these images. This selects a
+  // codec; it does not restrict image dimensions or the number of images.
+  const bool small_image = uint64_t( width ) * height < 1024;
+  if ( encoding.palette_djvu && !small_image
+       && ( encoding.png || ( width <= WEBP_MAX_DIMENSION && height <= WEBP_MAX_DIMENSION ) )
        && encode_palette_djvu( pixels, width, height, alpha, encoding.djvu_lossy, image.palette, *image.data ) ) {
     image.format = KITTY_FORMAT_DJVU;
     return true;
   }
-  // If cjb2 failed on a small palette, retain exact pixels in the fallback.
-  const bool lossy = encoding.quality >= 0 && image.palette.empty();
+  // Palette images remain exact even when WebP lossiness is requested,
+  // whether cjb2 failed or we deliberately bypassed it for a small image.
+  const bool exact_palette = !image.palette.empty()
+                             || ( encoding.palette_djvu && small_image
+                                  && has_small_palette( pixels, size_t( width ) * height, alpha ) );
+  const bool lossy = encoding.quality >= 0 && !exact_palette;
   image.palette.clear();
   image.format = KITTY_FORMAT_WEBP;
+  if ( width > WEBP_MAX_DIMENSION || height > WEBP_MAX_DIMENSION ) {
+    if ( !encoding.png ) {
+      error = "EINVAL: image needs peer capability png-state-v1";
+      return false;
+    }
+    // PNG has no WebP 16383-pixel dimension ceiling. Keep exact pixels when
+    // the image cannot be represented by either of the preferred codecs.
+    png_image png;
+    memset( &png, 0, sizeof( png ) );
+    png.version = PNG_IMAGE_VERSION;
+    png.width = width;
+    png.height = height;
+    png.format = alpha ? PNG_FORMAT_RGBA : PNG_FORMAT_RGB;
+    png_alloc_size_t size = 0;
+    if ( !png_image_write_to_memory( &png, NULL, &size, 0, pixels, 0, NULL )
+         || size > image.data->max_size() ) {
+      png_image_free( &png );
+      error = "EINVAL: PNG encode failed";
+      return false;
+    }
+    image.data->resize( size );
+    const bool ok = png_image_write_to_memory( &png, &(*image.data)[0], &size, 0, pixels, 0, NULL );
+    png_image_free( &png );
+    if ( !ok ) { error = "EINVAL: PNG encode failed"; return false; }
+    image.data->resize( size );
+    image.format = KITTY_FORMAT_PNG;
+    return true;
+  }
   const int stride = static_cast<int>( width * ( alpha ? 4 : 3 ) );
+  if ( !lossy ) {
+    WebPConfig config;
+    WebPPicture picture;
+    if ( !WebPConfigInit( &config ) || !WebPPictureInit( &picture ) ) {
+      error = "EINVAL: WebP initialization failed";
+      return false;
+    }
+    config.lossless = 1;
+    config.quality = 75;
+    // The simple lossless API may discard RGB beneath transparent pixels.
+    // Preserve the same exact RGBA semantics as palette/DjVu.
+    config.exact = 1;
+    picture.use_argb = 1;
+    picture.width = width;
+    picture.height = height;
+    WebPMemoryWriter writer;
+    WebPMemoryWriterInit( &writer );
+    picture.writer = WebPMemoryWrite;
+    picture.custom_ptr = &writer;
+    const bool imported = alpha ? WebPPictureImportRGBA( &picture, pixels, stride )
+                                : WebPPictureImportRGB( &picture, pixels, stride );
+    const bool ok = imported && WebPEncode( &config, &picture );
+    if ( ok ) { image.data->assign( reinterpret_cast<const char*>( writer.mem ), writer.size ); }
+    WebPPictureFree( &picture );
+    WebPMemoryWriterClear( &writer );
+    if ( !ok ) { error = "EINVAL: WebP encode failed"; }
+    return ok;
+  }
   uint8_t* encoded = NULL;
-  const size_t encoded_size = lossy
-    ? ( alpha ? WebPEncodeRGBA( pixels, width, height, stride, encoding.quality, &encoded )
-              : WebPEncodeRGB( pixels, width, height, stride, encoding.quality, &encoded ) )
-    : ( alpha ? WebPEncodeLosslessRGBA( pixels, width, height, stride, &encoded )
-              : WebPEncodeLosslessRGB( pixels, width, height, stride, &encoded ) );
-  if ( encoded_size == 0 || encoded == NULL || encoded_size > KITTY_IMAGE_QUOTA ) {
+  const size_t encoded_size = alpha ? WebPEncodeRGBA( pixels, width, height, stride, encoding.quality, &encoded )
+                                    : WebPEncodeRGB( pixels, width, height, stride, encoding.quality, &encoded );
+  if ( encoded_size == 0 || encoded == NULL ) {
     WebPFree( encoded );
     error = "EINVAL: WebP encode failed";
     return false;
@@ -479,16 +570,40 @@ bool kitty_normalize_webp( uint32_t format,
   return true;
 }
 
+/* Whether a PNG carries an ICC profile or a cICP chunk: colors it says
+   are its own, which an RGBA copy would lose. */
+static bool png_has_color_profile( const std::string& png )
+{
+  static const char signature[] = "\x89PNG\r\n\x1a\n";
+  if ( png.size() < 8 || png.compare( 0, 8, signature, 8 ) != 0 ) {
+    return false;
+  }
+  for ( size_t at = 8; at + 8 <= png.size(); ) {
+    const uint32_t length = uint32_t( uint8_t( png[at] ) ) << 24 | uint32_t( uint8_t( png[at + 1] ) ) << 16
+                            | uint32_t( uint8_t( png[at + 2] ) ) << 8 | uint8_t( png[at + 3] );
+    const std::string type = png.substr( at + 4, 4 );
+    if ( type == "iCCP" || type == "cICP" ) {
+      return true;
+    }
+    if ( type == "IDAT" || type == "IEND" || length > png.size() - at - 8 ) {
+      return false; /* both come before the image data */
+    }
+    at += size_t( length ) + 12;
+  }
+  return false;
+}
+
 bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, const std::string& input,
                             KittyImage& output, const ImageEncoding& encoding, std::string& error )
 {
   error.clear();
+  output.png_original = false;
 
   if ( format == KITTY_FORMAT_RGB || format == KITTY_FORMAT_RGBA ) {
     const size_t bytes_per_pixel = format == KITTY_FORMAT_RGB ? 3 : 4;
     size_t expected = 0, rgba_size = 0;
-    if ( !checked_pixel_size( width, height, bytes_per_pixel, expected )
-         || !checked_pixel_size( width, height, 4, rgba_size ) || input.size() != expected ) {
+    if ( !graphics_pixel_size( width, height, bytes_per_pixel, expected )
+         || !graphics_pixel_size( width, height, 4, rgba_size ) || input.size() != expected ) {
       error = "EINVAL: pixel data size does not match dimensions";
       return false;
     }
@@ -509,13 +624,24 @@ bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, co
       error = "EINVAL: invalid PNG image";
       return false;
     }
+    if ( encoding.png && png_has_color_profile( input ) ) {
+      /* A PNG that says what its colors are, Display P3 or Rec. 2020 for
+         one, reaches the terminal as it is, for the terminal to read. */
+      output.format = KITTY_FORMAT_PNG;
+      output.width = image.width;
+      output.height = image.height;
+      output.data = std::make_shared<std::string>( input );
+      output.png_original = true;
+      png_image_free( &image );
+      return true;
+    }
 
     size_t rgba_size = 0;
     const uint32_t png_width = image.width;
     const uint32_t png_height = image.height;
-    if ( !checked_pixel_size( png_width, png_height, 4, rgba_size ) ) {
+    if ( !graphics_pixel_size( png_width, png_height, 4, rgba_size ) ) {
       png_image_free( &image );
-      error = "EINVAL: PNG dimensions exceed image quota";
+      error = "EINVAL: PNG dimensions cannot be represented";
       return false;
     }
 
@@ -554,12 +680,74 @@ bool kitty_webp_to_rgba( const std::string& webp, std::string& rgba, uint32_t& w
   return true;
 }
 
+bool kitty_dirty_rect( const std::string& before, const std::string& after, uint32_t width, uint32_t height,
+                       uint32_t& x, uint32_t& y, uint32_t& w, uint32_t& h )
+{
+  const size_t row = size_t( width ) * 4;
+  if ( before.size() != after.size() || before.size() != row * height ) {
+    x = y = 0;
+    w = width;
+    h = height;
+    return true;
+  }
+  uint32_t left = width, right = 0, top = height, bottom = 0;
+  for ( uint32_t r = 0; r < height; r++ ) {
+    const char* a = before.data() + r * row;
+    const char* b = after.data() + r * row;
+    if ( memcmp( a, b, row ) == 0 ) {
+      continue;
+    }
+    top = std::min( top, r );
+    bottom = r;
+    uint32_t first = 0, last = width - 1;
+    while ( first < width && memcmp( a + first * 4, b + first * 4, 4 ) == 0 ) { first++; }
+    while ( last > first && memcmp( a + size_t( last ) * 4, b + size_t( last ) * 4, 4 ) == 0 ) { last--; }
+    left = std::min( left, first );
+    right = std::max( right, last );
+  }
+  if ( top == height ) {
+    return false;
+  }
+  x = left;
+  y = top;
+  w = right - left + 1;
+  h = bottom - top + 1;
+  return true;
+}
+
 bool kitty_image_to_rgba( const KittyImage& image, std::string& rgba )
 {
   rgba.clear();
   if ( !image.data ) { return false; }
+  if ( image.format == KITTY_FORMAT_RAW ) {
+    size_t size = 0;
+    if ( !graphics_pixel_size( image.width, image.height, 4, size ) || image.data->size() != size ) { return false; }
+    rgba = *image.data;
+    return true;
+  }
   if ( image.format == KITTY_FORMAT_DJVU ) {
     return decode_palette_djvu( image.palette, *image.data, image.width, image.height, rgba );
+  }
+  if ( image.format == KITTY_FORMAT_PNG && image.palette.empty() ) {
+    png_image png;
+    memset( &png, 0, sizeof( png ) );
+    png.version = PNG_IMAGE_VERSION;
+    if ( image.data->empty() || !png_image_begin_read_from_memory( &png, image.data->data(), image.data->size() ) ) {
+      png_image_free( &png );
+      return false;
+    }
+    size_t size = 0;
+    if ( png.width != image.width || png.height != image.height
+         || !graphics_pixel_size( png.width, png.height, 4, size ) ) {
+      png_image_free( &png );
+      return false;
+    }
+    png.format = PNG_FORMAT_RGBA;
+    rgba.resize( size );
+    const bool ok = png_image_finish_read( &png, NULL, &rgba[0], 0, NULL );
+    png_image_free( &png );
+    if ( !ok ) { rgba.clear(); }
+    return ok;
   }
   if ( image.format != KITTY_FORMAT_WEBP || !image.palette.empty() ) { return false; }
   uint32_t width = 0, height = 0;
@@ -605,8 +793,30 @@ static bool anonymous_placement_removed( const std::vector<KittyPlacement>& old_
   return false;
 }
 
+/* A vector image that only moved on from the version the terminal has: it
+   is sent the records it lacks, not the scene again. */
+static bool vector_steps( const KittyImage& before, const KittyImage& after, std::vector<Vector::Step>& steps )
+{
+  return before.format == KITTY_FORMAT_VECTOR && after.format == KITTY_FORMAT_VECTOR && before.vector
+         && after.vector && before.serial == after.serial
+         && Vector::steps_between( before.vector->lineage, before.vector->version, after.vector, steps );
+}
+
+/* An image whose newest version only changed a rectangle of the version
+   the terminal has. */
+static bool rect_patch( const KittyImage& before, const KittyImage& after )
+{
+  return after.delta && after.delta->base_serial == before.serial && before.width == after.width
+         && before.height == after.height && after.origin == ImageOrigin::Kitty;
+}
+
+std::string kitty_vector_records( const KittyImage& image )
+{
+  return image.vector ? image.vector->table()->text() : std::string();
+}
+
 void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current,
-                         bool convert_sixel )
+                         bool convert_sixel, bool gamut_supported, bool* vector_resent )
 {
   // Sixel-origin images must not be implicitly converted by the existing
   // Kitty renderer. Their client compositor will choose native sixel first.
@@ -625,13 +835,19 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     for ( const auto& image : current.get_kitty_images() ) {
       if ( image.second.origin == ImageOrigin::Sixel ) { new_kitty.erase_kitty_image( image.first ); }
     }
-    append_kitty_frame( out, initialized, old_kitty, new_kitty );
+    append_kitty_frame( out, initialized, old_kitty, new_kitty, false, gamut_supported, vector_resent );
     return;
   }
   const std::map<uint32_t, KittyImage>& now_images = current.get_kitty_images();
   const std::map<uint32_t, KittyImage>& old_images = last.get_kitty_images();
   const std::vector<KittyPlacement>& now_places = current.get_kitty_placements();
   const std::vector<KittyPlacement>& old_places = last.get_kitty_placements();
+  // Cell-tiled desktop viewers have thousands of distinct image IDs.
+  // Compare placements within each image rather than rescanning the entire
+  // desktop for every image and placement.
+  std::map<uint32_t, std::vector<KittyPlacement>> now_places_by_image, old_places_by_image;
+  for ( const auto& placement : now_places ) { now_places_by_image[placement.image_id].push_back( placement ); }
+  for ( const auto& placement : old_places ) { old_places_by_image[placement.image_id].push_back( placement ); }
   std::set<uint32_t> placements_cleared;
 
   if ( now_images.empty() && now_places.empty() && old_images.empty() && old_places.empty() ) {
@@ -649,9 +865,12 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     }
   }
 
+  std::vector<Vector::Step> steps;
   for ( std::map<uint32_t, KittyImage>::const_iterator it = old_images.begin(); it != old_images.end(); ++it ) {
     std::map<uint32_t, KittyImage>::const_iterator cur = now_images.find( it->first );
-    if ( cur == now_images.end() || cur->second.serial != it->second.serial ) {
+    if ( cur == now_images.end()
+         || ( !( cur->second == it->second ) && !( initialized && vector_steps( it->second, cur->second, steps ) )
+              && !( initialized && rect_patch( it->second, cur->second ) ) ) ) {
       if ( placements_cleared.insert( it->first ).second ) {
         char buf[64];
         snprintf( buf, sizeof( buf ), "\033_Ga=d,d=I,i=%u,q=2\033\\", it->first );
@@ -662,24 +881,79 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
 
   for ( std::map<uint32_t, KittyImage>::const_iterator it = now_images.begin(); it != now_images.end(); ++it ) {
     std::map<uint32_t, KittyImage>::const_iterator old = old_images.find( it->first );
-    if ( initialized && old != old_images.end() && old->second.serial == it->second.serial ) {
+    // Received states can branch from the same older network snapshot.
+    // Their locally assigned serials can match even when pixels differ.
+    if ( initialized && old != old_images.end() && old->second == it->second ) {
       continue;
     }
-    std::string rgba;
-    if ( !kitty_image_to_rgba( it->second, rgba ) ) {
+    if ( initialized && old != old_images.end() && vector_steps( old->second, it->second, steps ) ) {
+      /* Ink the terminal drew itself is on its screen already. */
+      std::string records;
+      for ( const auto& step : steps ) {
+        if ( !step.terminal_applied ) {
+          records += step.records;
+          if ( !records.empty() && records.back() != '\n' ) {
+            records += '\n';
+          }
+        }
+      }
+      if ( !records.empty() ) {
+        std::string controls( "a=e,q=2" );
+        append_u32_key( controls, "i", it->second.id, false );
+        out.append( encode_kitty_chunks( controls, records ) );
+      }
       continue;
     }
-    std::string controls( "a=t,q=2" );
-    append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
+    if ( initialized && old != old_images.end() && rect_patch( old->second, it->second ) ) {
+      /* Only a rectangle changed: it is written over the image in place. */
+      std::string rect;
+      if ( kitty_image_to_rgba( it->second.delta->rect, rect ) ) {
+        std::string controls( "a=f,r=1,X=1,q=2" );
+        append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
+        append_u32_key( controls, "i", it->second.id, false );
+        append_u32_key( controls, "x", it->second.delta->x );
+        append_u32_key( controls, "y", it->second.delta->y );
+        append_u32_key( controls, "s", it->second.delta->rect.width );
+        append_u32_key( controls, "v", it->second.delta->rect.height );
+        out.append( encode_kitty_chunks( controls, rect ) );
+      }
+      continue;
+    }
+    std::string controls( "a=t,q=2" ), pixels;
+    if ( it->second.format == KITTY_FORMAT_VECTOR ) {
+      pixels = kitty_vector_records( it->second );
+      append_u32_key( controls, "f", KITTY_FORMAT_VECTOR, false );
+      if ( vector_resent ) {
+        *vector_resent = true;
+      }
+    } else if ( it->second.format == KITTY_FORMAT_HDR ) {
+      if ( !it->second.data ) {
+        continue;
+      }
+      pixels = *it->second.data;
+      append_u32_key( controls, "f", KITTY_FORMAT_HDR, false );
+      append_u32_key( controls, "T", it->second.tone_map );
+    } else if ( it->second.format == KITTY_FORMAT_PNG && it->second.png_original && it->second.data ) {
+      pixels = *it->second.data;
+      append_u32_key( controls, "f", KITTY_FORMAT_PNG, false );
+    } else {
+      if ( !kitty_image_to_rgba( it->second, pixels ) ) {
+        continue;
+      }
+      append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
+      if ( gamut_supported ) {
+        append_u32_key( controls, "G", it->second.gamut );
+      }
+    }
     append_u32_key( controls, "i", it->second.id, false );
     append_u32_key( controls, "s", it->second.width );
     append_u32_key( controls, "v", it->second.height );
-    out.append( encode_kitty_chunks( controls, rgba ) );
+    out.append( encode_kitty_chunks( controls, pixels ) );
   }
 
   for ( std::map<uint32_t, KittyImage>::const_iterator it = now_images.begin(); it != now_images.end(); ++it ) {
     if ( placements_cleared.find( it->first ) == placements_cleared.end()
-         && anonymous_placement_removed( old_places, now_places, it->first ) ) {
+         && anonymous_placement_removed( old_places_by_image[it->first], now_places_by_image[it->first], it->first ) ) {
       char buf[64];
       snprintf( buf, sizeof( buf ), "\033_Ga=d,d=i,i=%u,q=2\033\\", it->first );
       out.append( buf );
@@ -692,8 +966,8 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
       continue;
     }
     bool still = false;
-    for ( size_t j = 0; j < now_places.size(); j++ ) {
-      if ( old_places[i] == now_places[j] ) {
+    for ( const auto& placement : now_places_by_image[old_places[i].image_id] ) {
+      if ( old_places[i] == placement ) {
         still = true;
         break;
       }
@@ -718,8 +992,8 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
   for ( size_t i = 0; i < now_places.size(); i++ ) {
     bool already = false;
     if ( initialized ) {
-      for ( size_t j = 0; j < old_places.size(); j++ ) {
-        if ( now_places[i] == old_places[j] ) {
+      for ( const auto& placement : old_places_by_image[now_places[i].image_id] ) {
+        if ( now_places[i] == placement ) {
           already = true;
           break;
         }
@@ -776,12 +1050,11 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
 
 bool kitty_inflate( const std::string& input, std::string& output, size_t hint )
 {
-  size_t dest_len = hint ? hint : ( input.size() * 4 + 64 );
+  const size_t capacity = std::min<size_t>( output.max_size(), ULONG_MAX );
+  if ( input.size() > ULONG_MAX ) { return false; }
+  size_t dest_len = hint ? hint : ( input.size() <= ( capacity - 64 ) / 4 ? input.size() * 4 + 64 : capacity );
   if ( dest_len < 64 ) {
     dest_len = 64;
-  }
-  if ( dest_len > KITTY_IMAGE_QUOTA ) {
-    dest_len = KITTY_IMAGE_QUOTA;
   }
 
   while ( true ) {
@@ -798,10 +1071,10 @@ bool kitty_inflate( const std::string& input, std::string& output, size_t hint )
     if ( rc != Z_BUF_ERROR ) {
       return false;
     }
-    if ( dest_len == KITTY_IMAGE_QUOTA ) {
+    if ( dest_len == capacity ) {
       return false;
     }
-    dest_len = dest_len > KITTY_IMAGE_QUOTA / 2 ? KITTY_IMAGE_QUOTA : dest_len * 2;
+    dest_len = dest_len > capacity / 2 ? capacity : dest_len * 2;
   }
 }
 

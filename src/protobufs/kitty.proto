@@ -9,7 +9,7 @@ message Image {
   optional uint32 number = 2;
   required uint32 width = 3;
   required uint32 height = 4;
-  // Exactly one of webp or djvu is present. Older peers receive only WebP.
+  // Exactly one of webp, djvu, or png is present. Older peers receive WebP.
   optional bytes webp = 5;
   enum Origin { KITTY = 0; SIXEL = 1; }
   optional Origin origin = 6 [default = KITTY];
@@ -19,6 +19,30 @@ message Image {
   // Lossless unless the sender explicitly enables lossy two-color encoding.
   optional bytes djvu = 7;
   optional bytes palette = 8; // 1..16 RGBA entries; absent for WebP
+  optional bytes png = 9; // png-state-v1: images exceeding WebP dimensions
+  // Silkie's formats, passed to the terminal as they were sent: a vector
+  // image's scene as records, and HDR pixels as RGBA half floats.
+  optional bytes vector = 10;
+  optional uint64 vector_lineage = 11;
+  optional uint64 vector_version = 12;
+  optional bytes hdr = 13;
+  optional bool tone_map = 14;
+  optional uint32 gamut = 15; // of RGB pixels: 1 Display P3, 2 Rec. 2020
+  optional bool png_original = 16; // png holds the PNG as sent, with its color profile
+}
+
+message VectorStep {
+  optional bytes records = 1;
+  // Ink the client's terminal drew itself; never written to it again.
+  optional bool terminal_applied = 2;
+}
+
+// The steps that bring a vector image the receiver has to a newer version.
+message VectorPatch {
+  required uint32 image_id = 1;
+  optional uint64 lineage = 2;
+  optional uint64 base_version = 3;
+  repeated VectorStep step = 4;
 }
 
 message Placement {
@@ -43,9 +67,19 @@ message Placement {
   optional sint32 vertical_offset = 19;
 }
 
+// A rectangle written over an image the receiver has the version before of.
+message ImagePatch {
+  required uint32 image_id = 1;
+  optional uint32 x = 2;
+  optional uint32 y = 3;
+  optional Image rect = 4;
+}
+
 message StateDelta {
   repeated uint32 delete_image_id = 1 [packed = true];
   repeated Image image = 2;
   optional bool replace_placements = 3 [default = false];
   repeated Placement placement = 4;
+  repeated VectorPatch vector_patch = 5;
+  repeated ImagePatch image_patch = 6;
 }

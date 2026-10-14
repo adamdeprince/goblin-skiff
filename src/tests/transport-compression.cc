@@ -108,16 +108,19 @@ void large_roundtrip( bool zstd )
   inst.set_old_num( 1 ); inst.set_new_num( 2 );
   // An incompressible >4 MiB state used to fail decompression (or spend
   // quadratic time copying while fragmenting). Include loss and reordering.
-  std::string payload( 5 * 1024 * 1024, '\0' );
+  std::string payload( 17 * 1024 * 1024, '\0' );
   uint32_t random = 0x953badU;
   for ( auto& c : payload ) { random ^= random << 13; random ^= random >> 17; random ^= random << 5; c = char( random ); }
   inst.set_diff( payload );
   Network::Fragmenter fragmenter;
-  auto fragments = fragmenter.make_fragments( inst, 440, zstd, false, "" );
-  require( fragments.size() > 10000, "wide-image fixture actually spans many packets" );
+  auto fragments = fragmenter.make_fragments( inst, 440, zstd, false, "", true );
+  require( fragments.size() > 32768, "wide-image fixture exceeds legacy fragment count" );
   Network::FragmentAssembly assembly;
   for ( size_t i = fragments.size(); i-- > 1; ) {
-    require( !assembly.add_fragment( fragments[i] ), "incomplete image not published before missing packet" );
+    Network::Fragment decoded( fragments[i].tostring() );
+    require( decoded == fragments[i], "extended fragment wire roundtrip" );
+    require( decoded.tostring().size() <= 440, "extended header fits MTU" );
+    require( !assembly.add_fragment( decoded ), "incomplete image not published before missing packet" );
   }
   require( !assembly.add_fragment( fragments.back() ), "duplicate packet does not complete missing image" );
   require( assembly.add_fragment( fragments[0] ), "late packet completes reordered image" );
@@ -126,6 +129,10 @@ void large_roundtrip( bool zstd )
   try { fragmenter.make_fragments( inst, Network::Fragment::frag_header_len, zstd, false, "" ); }
   catch ( const std::invalid_argument& ) { rejected = true; }
   require( rejected, "invalid MTU rejected without underflow" );
+  rejected = false;
+  try { fragmenter.make_fragments( inst, 440, zstd, false, "", false ); }
+  catch ( const std::length_error& ) { rejected = true; }
+  require( rejected, "extended fragments require peer negotiation" );
 }
 }
 
