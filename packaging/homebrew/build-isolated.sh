@@ -40,6 +40,8 @@ for owner in "$brew_repository/Library/Taps/"*; do
 done
 export PATH="$isolated/bin:$PATH"
 export XDG_CONFIG_HOME="$DEPLOY_WORK/build-config"
+mkdir -p "$DEPLOY_WORK/brew-temp"
+export HOMEBREW_TEMP="$DEPLOY_WORK/brew-temp"
 brew trust --formula goblin-deploy/build/goblin-skiff
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
 export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_NO_ENV_HINTS=1
@@ -47,6 +49,7 @@ cp packaging/homebrew/goblin-skiff.rb.in "$DEPLOY_WORK/goblin-skiff.rb"
 # Build with the selected CLT directly. Homebrew's install preflight rejects
 # an unrelated older Xcode.app even when the current CLT is selected.
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-26.0}"
 export CC="$DEVELOPER_DIR/usr/bin/clang" CXX="$DEVELOPER_DIR/usr/bin/clang++"
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 export CPATH="$brew_prefix/opt/librsync/include${CPATH:+:$CPATH}"
@@ -69,6 +72,9 @@ for key, value in [('url', os.environ['DEPLOY_SOURCE_URL']),
     text = re.sub(r'^  ' + key + r' "[^"\n]*"', '  ' + key + ' "' + value + '"', text, flags=re.M)
 Path(sys.argv[2]).write_text(text)
 PYFORMULA
+cache=$(brew --cache --build-from-source "$full")
+mkdir -p "$(dirname "$cache")"
+cp "$DEPLOY_SOURCE" "$cache"
 prefix="$isolated/Cellar/goblin-skiff/$DEPLOY_BREW_VERSION"
 autoreconf -fi
 ./configure --prefix="$prefix" --docdir="$prefix/share/doc/goblin-skiff" \

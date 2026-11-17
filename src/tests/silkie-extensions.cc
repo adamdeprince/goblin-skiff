@@ -1150,6 +1150,13 @@ void vector_service()
   require( asking.service_reply( "\033_Gi=7253;EINVAL:e30=\033\\", 1001, forward, input, changed ) && !forward && changed,
            "any answer means it is there" );
   require( asking.info.vector_service, "and the server is told" );
+  ExtensionClient disabled;
+  disabled.set_graphics_allowed( false );
+  disabled.probe();
+  const auto disabled_reply = disabled.frame( osc( "caps", "v=1:op=cap:id=7253:caps=3:ext=caps.1:format=24,32,200" ),
+                                               shown, geometry, 1000 );
+  require( disabled_reply.to_terminal.empty() && !disabled.service_pending( 1000 ),
+           "disabled Kitty graphics never trigger a vector service probe" );
   ExtensionClient silent;
   silent.probe();
   silent.frame( osc( "caps", "v=1:op=cap:id=7253:caps=3:ext=caps.1:format=24,32,200" ), shown, geometry, 1000 );

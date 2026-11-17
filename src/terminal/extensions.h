@@ -278,6 +278,8 @@ public:
   };
   /* The probe, to write to the terminal once. */
   std::string probe();
+  /* Set before probing: --no-kitty also disables automatic APC service probes. */
+  void set_graphics_allowed( bool allowed ) { graphics_allowed = allowed; }
   /* A frame from the terminal, against what the terminal shows. */
   Result frame( const std::string& frame, const Framebuffer& shown, const ClientGeometry& geometry, uint64_t now );
   /* After a frame was drawn: what it set and gave, and whether it sent a
@@ -308,6 +310,7 @@ public:
   bool service_reply( const std::string& frame, uint64_t now, bool& forward, ExtensionInput& input, bool& info_changed );
 
 private:
+  bool graphics_allowed = true;
   std::map<std::string, std::vector<uint32_t>> mode_reads; /* requests whose reads are on their way */
   bool clock_known = false;
   int64_t clock_offset = 0;

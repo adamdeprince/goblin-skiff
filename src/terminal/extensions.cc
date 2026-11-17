@@ -939,7 +939,7 @@ ExtensionClient::Result ExtensionClient::frame( const std::string& frame,
   const ClientExtensions before = info;
   if ( consume_probe_reply( frame, info ) ) {
     result.info_changed = info != before;
-    if ( !service_probed && info.has_format( std::to_string( KITTY_FORMAT_VECTOR ) ) ) {
+    if ( graphics_allowed && !service_probed && info.has_format( std::to_string( KITTY_FORMAT_VECTOR ) ) ) {
       /* A terminal that has the service says an operation it does not know is
          one; a terminal that does not have it says nothing at all. */
       service_probed = service_probe_open = true;

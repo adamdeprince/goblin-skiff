@@ -212,6 +212,7 @@ public:
       screen_initialized( false ), repaint_requested( false ), lf_entered( false ), quit_sequence_started( false ), clean_shutdown( false ),
       verbose( s_verbose )
   {
+    ext_client.set_graphics_allowed( allow_kitty );
     control_panel.set_files( &files );
     overlays.get_notification_engine().set_keepalive_interval(
       compact_keepalive ? Network::KEEPALIVE_INTERVAL_MIN : Network::ACK_INTERVAL );
