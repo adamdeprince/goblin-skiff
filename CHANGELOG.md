@@ -1,7 +1,7 @@
 <!-- Modified for Goblin Skiff on 2026-09-19. -->
 # Goblin Skiff changes
 
-## 1.4.0-goblin20261117.1 (prepared; not deployed)
+## 1.4.0-goblin20261117.1 — 2026-11-17
 
 - Deliver Program Status Protocol (OSC 7501) reports ahead of bulk traffic.
 - Adopt Silkie's current packed format numbers and Kitty indexed colors.

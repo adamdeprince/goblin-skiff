@@ -104,7 +104,7 @@ python3 src/tests/control-panel-integration.py --udp-relay
 brew ruby -e 'require "formula"; require "tab/tab"; f = Formulary.factory(ARGV.fetch(0)); t = Tab.create(f, :clang, "libc++"); t.built_as_bottle = true; t.built_prefix = HOMEBREW_PREFIX.to_s; t.write' "$full"
 mkdir "$DEPLOY_WORK/bottle"
 (cd "$DEPLOY_WORK/bottle"
- brew bottle --json --root-url="$DEPLOY_BREW_URL" "$full"
+ brew bottle --json --root-url="${DEPLOY_BREW_URL%/}" "$full"
  brew bottle --merge --write --no-commit ./*.bottle.json
  python3 - "$DEPLOY_OUT" <<'PYBOTTLE'
 import json

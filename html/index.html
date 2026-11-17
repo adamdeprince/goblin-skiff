@@ -646,7 +646,7 @@
           </div>
           <div class="record-item">
             <dt>Source version</dt>
-            <dd><code>1.4.0-goblin20260919.2</code> · Goblin protocol 1 · <time datetime="2026-09-19">19 Sep 2026</time></dd>
+            <dd><code>1.4.0-goblin20261117.1</code> · Goblin protocol 1 · <time datetime="2026-11-17">17 Nov 2026</time></dd>
           </div>
           <div class="record-item">
             <dt>License</dt>
@@ -947,8 +947,8 @@
       <div class="section-head">
         <p class="section-index">Release record</p>
         <div>
-          <h2>20261117.1: source release prepared.</h2>
-          <p class="section-deck">The next source release adds Silkie protocol updates, high-priority Program Status reports, indexed and palette images, high precision pixels and transfer functions. Goblin protocol 1 remains compatible through capability negotiation. Packages are being prepared; the published package versions below remain unchanged.</p>
+          <h2>20261117.1: Silkie protocol updates published.</h2>
+          <p class="section-deck">This release adds Silkie protocol updates, high-priority Program Status reports, indexed and palette images, high precision pixels and transfer functions. Goblin protocol 1 remains compatible through capability negotiation. New packages are available for Ubuntu 26.04 on amd64 and arm64, Kylin V10 SP1 on old-world LoongArch, and macOS 26 on Apple Silicon. Other targets retain their earlier releases.</p>
         </div>
       </div>
       <div class="limits">
@@ -983,7 +983,7 @@
       </div>
       <p class="table-note" id="comparison-help">
         Reviewed <time datetime="2026-09-11">11 September 2026</time>. Goblin column: release
-        <code>20260919.2</code>, built from <code>04f2e1d</code>, including authenticated UDP jump relays.
+        <code>20261117.1</code>, built from <code>945cd6d</code>, including authenticated UDP jump relays.
         Upstream Mosh: 1.4.0. Other columns follow the linked project documentation.
         “—” means no equivalent built-in feature documented, not that an external tool cannot supply it.
         Scroll the table horizontally on smaller screens; row and column headings stay visible.
@@ -1200,19 +1200,21 @@
         <table class="package-table">
           <thead><tr><th scope="col">System</th><th scope="col">Binary architecture</th><th scope="col">Setup and artifacts</th></tr></thead>
           <tbody>
-            <tr><th scope="row">Ubuntu 22.04, 24.04, 26.04</th><td>amd64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20260919.2</td></tr>
+            <tr><th scope="row">Ubuntu 26.04</th><td>amd64, arm64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20261117.1</td></tr>
+            <tr><th scope="row">Kylin V10 SP1 (old-world LoongArch)</th><td>loongarch64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20261117.1</td></tr>
+            <tr><th scope="row">Ubuntu 22.04, 24.04</th><td>amd64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20260919.2</td></tr>
             <tr><th scope="row">Debian 12, 13</th><td>amd64</td><td><a href="https://apt.goblinreactor.com/">APT setup</a> · release 20260919.2</td></tr>
             <tr><th scope="row">Fedora 44; Rocky Linux 9, 10</th><td>x86_64</td><td><a href="https://apt.goblinreactor.com/">RPM setup</a> · release 20260919.2</td></tr>
-            <tr><th scope="row">macOS 26 Tahoe</th><td>Apple Silicon / arm64</td><td><a href="https://brew.goblinreactor.com/">Homebrew tap</a> · 1.4.0-goblin20260919.2</td></tr>
+            <tr><th scope="row">macOS 26 Tahoe</th><td>Apple Silicon / arm64</td><td><a href="https://brew.goblinreactor.com/">Homebrew tap</a> · 1.4.0-goblin20261117.1</td></tr>
             <tr><th scope="row">Inkline / reMarkable 2, firmware 3.27</th><td>ARMv7 hard float</td><td><a href="https://inkline.goblinreactor.com/install.html?utility=goblin-skiff#utilities">Tablet bundle</a> · 20260919.2.rm2.1</td></tr>
           </tbody>
         </table>
       </div>
       <p class="table-note">
-        Inventory checked 19 September 2026 against the public
+        Inventory checked 17 November 2026 against the public
         <a href="https://apt.goblinreactor.com/packages.json">APT/RPM catalog</a> and
         <a href="https://brew.goblinreactor.com/packages.json">Homebrew catalog</a>.
-        ARM APT/RPM packages are not published. All listed Goblin Skiff binaries exclude RaptorQ.
+        The arm64 APT package targets Ubuntu 26.04; ARM RPM packages are not published. All listed Goblin Skiff binaries exclude RaptorQ.
         Catalogs and repository setup pages provide exact versions, matching source, checksums and verification records.
         These packages include the directory-cache fixes and authenticated UDP jump relays.
         Install the updated server on every jump host as well as the destination.
