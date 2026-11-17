@@ -92,3 +92,5 @@ cp "$cache/build/librsync-2.3.4/COPYING" "$root/usr/share/doc/goblin-skiff/priva
 deploy_make_deb goblin-skiff "$DEPLOY_VERSION+${DEPLOY_SUITE}$DEPLOY_DEB_REVISION" "$root" \
   "Remote terminal optimized for bandwidth-constrained links" "openssh-client, perl"
 sha256sum "$cache/downloads/"*.tar.gz > "$DEPLOY_OUT/private-dependency-sources.sha256"
+
+bash packaging/loongson/finalize-package.sh "$DEPLOY_OUT/goblin-skiff_${DEPLOY_VERSION}+${DEPLOY_SUITE}${DEPLOY_DEB_REVISION}_${DEPLOY_ARCH}.deb"

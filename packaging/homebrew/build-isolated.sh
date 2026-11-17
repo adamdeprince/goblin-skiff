@@ -48,6 +48,9 @@ cp packaging/homebrew/goblin-skiff.rb.in "$DEPLOY_WORK/goblin-skiff.rb"
 # an unrelated older Xcode.app even when the current CLT is selected.
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
 export CC="$DEVELOPER_DIR/usr/bin/clang" CXX="$DEVELOPER_DIR/usr/bin/clang++"
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+export CPATH="$brew_prefix/opt/librsync/include${CPATH:+:$CPATH}"
+export LIBRARY_PATH="$brew_prefix/opt/librsync/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export CPPFLAGS="-I$brew_prefix/opt/openssl@3/include -I$brew_prefix/opt/ncurses/include"
 export LDFLAGS="-L$brew_prefix/opt/openssl@3/lib -L$brew_prefix/opt/ncurses/lib -Wl,-headerpad_max_install_names"
 export PKG_CONFIG_PATH="$brew_prefix/opt/openssl@3/lib/pkgconfig:$brew_prefix/opt/ncurses/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
@@ -76,19 +79,23 @@ make -j"$DEPLOY_JOBS"
 sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-skiffcp
 runtime=$(mktemp -d /tmp/skiff-check.XXXXXX)
 trap 'rm -rf "$runtime"' EXIT
-XDG_RUNTIME_DIR="$runtime" make -j"$DEPLOY_JOBS" check TESTS="$(cat packaging/release-tests.txt)"
+XDG_RUNTIME_DIR="$runtime" make -j"${DEPLOY_TEST_JOBS:-1}" check TESTS="$(cat packaging/release-tests.txt)"
 cp src/tests/test-suite.log "$DEPLOY_OUT/test-suite.log"
 make install
 mkdir -p "$prefix/.brew" "$prefix/share/bash-completion/completions"
 cp "$formula" "$prefix/.brew/goblin-skiff.rb"
 cp conf/bash-completion/completions/goblin-skiff "$prefix/share/bash-completion/completions/"
+mkdir -p "$prefix/share/goblin-skiff/tests" "$prefix/share/goblin-skiff/verification"
+cp src/tests/control-panel-integration.py packaging/check-prebuilt-fec.sh "$prefix/share/goblin-skiff/tests/"
+cp src/tests/test-suite.log "$prefix/share/goblin-skiff/verification/"
+test -f "$prefix/share/man/man1/goblin-skiff.1"
 GOBLIN_SKIFF_TEST_CLIENT="$prefix/bin/goblin-skiff-client" \
 GOBLIN_SKIFF_TEST_SERVER="$prefix/bin/goblin-skiff-server" \
 python3 src/tests/control-panel-integration.py --files
 GOBLIN_SKIFF_TEST_CLIENT="$prefix/bin/goblin-skiff-client" \
 GOBLIN_SKIFF_TEST_SERVER="$prefix/bin/goblin-skiff-server" \
 python3 src/tests/control-panel-integration.py --udp-relay
-brew ruby -e 'require "formula"; require "tab/tab"; f = Formulary.factory(ARGV.fetch(0)); t = Tab.create(f, :clang, :libcxx); t.built_as_bottle = true; t.built_prefix = HOMEBREW_PREFIX.to_s; t.write' "$full"
+brew ruby -e 'require "formula"; require "tab/tab"; f = Formulary.factory(ARGV.fetch(0)); t = Tab.create(f, :clang, "libc++"); t.built_as_bottle = true; t.built_prefix = HOMEBREW_PREFIX.to_s; t.write' "$full"
 mkdir "$DEPLOY_WORK/bottle"
 (cd "$DEPLOY_WORK/bottle"
  brew bottle --json --root-url="$DEPLOY_BREW_URL" "$full"

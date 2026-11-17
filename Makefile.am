@@ -98,3 +98,4 @@ EXTRA_DIST += tools/hand-motion/evaluate.py
 EXTRA_DIST += docs/SSH_AGENT_PROTOCOL.md
 
 EXTRA_DIST += deploy-packages packaging/release-tests.txt packaging/homebrew/build-isolated.sh packaging/loongson/build-release.sh
+EXTRA_DIST += packaging/loongson/finalize-package.sh

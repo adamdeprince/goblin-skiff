@@ -42,9 +42,20 @@ PROJECT = {
     'unsupported': {},
     'hosts': {
         'naamah': {'jobs': 16},
+        # This host has a small root volume; keep optimized release code but
+        # omit large debug/LTO objects from its disposable build tree.
+        'graviton5': {'env': {'DEB_CFLAGS_MAINT_APPEND': '-g0 -fno-lto',
+                              'DEB_CXXFLAGS_MAINT_APPEND': '-g0 -fno-lto',
+                              'DEB_LDFLAGS_MAINT_APPEND': '-fno-lto'}},
         'loongson': {'env': {'CC': '/opt/loongson-gcc-15.2.0/bin/gcc',
                              'CXX': '/opt/loongson-gcc-15.2.0/bin/g++'}},
     },
+    # Product HTML is prepared separately; source packages contain build inputs.
+    'source_hook': r'''
+rm -rf html
+sed -i.bak '/^EXTRA_DIST += html\/index.html html\/goblin.png$/d' Makefile.am
+rm -f Makefile.am.bak
+''',
     # Runs on each Linux target in the extracted source; writes .deb files to $DEPLOY_OUT.
     'linux_build': r'''
 if [ "$DEPLOY_HOST" = loongson ]; then

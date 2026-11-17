@@ -16,6 +16,8 @@ import tty
 
 ROWS, COLS, WIDTH, HEIGHT = 77, 126, 14, 25
 COUNT = ROWS * COLS
+# A whole 9,702-tile screen takes longer on slower native build hosts.
+PATIENCE = float(os.environ.get("PATIENCE", "300"))
 SCRIPT = Path(__file__).resolve()
 
 
@@ -48,28 +50,39 @@ def session():
     wrapper = os.environ.get("GOBLIN_SKIFF_TEST_WRAPPER", str((build / "../../scripts/goblin-skiff").resolve()))
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, COLS * WIDTH, ROWS * HEIGHT))
-    env = dict(os.environ, TERM="xterm-256color", MOSH_SERVER_NETWORK_TMOUT="45")
+    env = dict(os.environ, TERM="xterm-256color", MOSH_SERVER_NETWORK_TMOUT=str(int(PATIENCE) + 15))
     args = [wrapper, "--client=" + client, "--server=" + server, "--no-mascot", "--predict=never",
             "--local", "--bind-server=127.0.0.1", "--", "127.0.0.1", sys.executable, str(SCRIPT), "--remote"]
     proc = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave, env=env,
                             start_new_session=True, preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
     os.close(slave)
+    os.set_blocking(master, False)
+    pending_input = bytearray()
     pending = b""
     images, placements = {}, {}
     cursor = (0, 0)
     upload = None
     started = time.monotonic()
     phase = 0
-    deadline = started + 30
+    deadline = started + PATIENCE
     pattern = rb"\x1b(?:_G[^\x1b]*\x1b\\|\][^\x1b]*(?:\x1b\\|\x07)|\[[0-?]*[ -/]*[@-~])"
     try:
         while proc.poll() is None:
             assert time.monotonic() < deadline, ("cell desktop timeout", phase, len(images), len(placements))
-            if not select.select([master], [], [], .05)[0]:
+            readable, writable, _ = select.select([master], [master] if pending_input else [], [], .05)
+            if writable:
+                try:
+                    count = os.write(master, pending_input)
+                    del pending_input[:count]
+                except BlockingIOError:
+                    pass
+            if not readable:
                 continue
             try:
                 pending += os.read(master, 65536)
             except OSError as error:
+                if error.errno == errno.EAGAIN:
+                    continue
                 if error.errno == errno.EIO:
                     break
                 raise
@@ -86,7 +99,7 @@ def session():
                     fields = dict(part.split(b"=", 1) for part in header.split(b",") if part)
                     action = fields.get(b"a")
                     if action == b"q":
-                        os.write(master, b"\x1b_Gi=" + fields[b"i"] + b";OK\x1b\\")
+                        pending_input.extend(b"\x1b_Gi=" + fields[b"i"] + b";OK\x1b\\")
                     elif action == b"d":
                         image_id = int(fields[b"i"])
                         placements.pop(image_id, None)
@@ -119,15 +132,16 @@ def session():
                                  b"\x1b[18t": f"\x1b[8;{ROWS};{COLS}t".encode(),
                                  b"\x1b[14t": f"\x1b[4;{ROWS*HEIGHT};{COLS*WIDTH}t".encode()}
                     if frame in responses:
-                        os.write(master, responses[frame])
+                        pending_input.extend(responses[frame])
             if phase == 0 and len(images) == COUNT and len(placements) == COUNT:
                 print(f"All {COUNT} cell images and placements verified in {time.monotonic()-started:.2f}s", flush=True)
                 phase = 1
-                deadline = time.monotonic() + 15
-                os.write(master, b"u")
+                deadline = time.monotonic() + PATIENCE
+                pending_input.extend(b"u")
             elif phase == 1 and images.get(COUNT) == b"\x11\x22\x33" and COUNT in placements:
                 phase = 2
-                os.write(master, b"q")
+                deadline = time.monotonic() + PATIENCE
+                pending_input.extend(b"q")
         assert phase == 2, ("desktop did not finish", phase, len(images), pending[-200:])
         assert proc.wait(timeout=5) == 0
         print("Keyboard input, changed tile, and clean shutdown verified")

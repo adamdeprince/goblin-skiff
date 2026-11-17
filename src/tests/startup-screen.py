@@ -65,6 +65,8 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
                             env=env, start_new_session=True,
                             preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
     os.close(slave)
+    os.set_blocking(master, False)
+    pending_input = bytearray()
     output = b""
     answered = set()
     sent_key = False
@@ -73,13 +75,21 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
         while True:
             remaining = deadline - time.monotonic()
             assert remaining > 0, "startup timeout: " + repr(output[-300:])
-            ready, _, _ = select.select([master], [], [], min(remaining, 1))
+            ready, writable, _ = select.select([master], [master] if pending_input else [], [], min(remaining, 1))
+            if writable:
+                try:
+                    count = os.write(master, pending_input)
+                    del pending_input[:count]
+                except BlockingIOError:
+                    pass
             if not ready:
                 assert proc.poll() is None, "client exited without PTY EOF"
                 continue
             try:
                 data = os.read(master, 65536)
             except OSError as error:
+                if error.errno == errno.EAGAIN:
+                    continue
                 if error.errno != errno.EIO:
                     raise
                 data = b""
@@ -89,17 +99,17 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
             if terminal:
                 response = terminal.feed(data)
                 if response:
-                    os.write(master, response)
+                    pending_input.extend(response)
             else:
                 for query, response in ((KITTY_QUERY, b"\x1b_Gi=4294967294;OK\x1b\\"),
                                         (b"\x1b[c", b"\x1b[?62;4c")):
                     if query in output and query not in answered:
-                        os.write(master, response)
+                        pending_input.extend(response)
                         answered.add(query)
             if READY in output and not sent_key:
                 if terminal:
                     terminal.check_layout(show_mascot)
-                os.write(master, b"q")
+                pending_input.extend(b"q")
                 sent_key = True
         assert proc.wait(timeout=5) == 0, repr(output[-500:])
         assert b"remote-startup-done" in output, repr(output[-500:])
@@ -130,11 +140,11 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
         assert b"a=d,d=A" not in output and b"i=4294967293" not in output, "mascot deletion/collision"
     finally:
         if proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGTERM)
+            proc.terminate()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
+                proc.kill()
                 proc.wait(timeout=5)
         os.close(master)
 
