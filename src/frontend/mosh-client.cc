@@ -34,6 +34,7 @@
 #include "src/include/config.h"
 #include "src/include/version.h"
 #include "src/terminal/inputlimits.h"
+#include "src/terminal/packedimage.h"
 
 #include <cerrno>
 #include <climits>
@@ -111,6 +112,8 @@ static void print_usage( FILE* file, const char* argv0 )
            "                        A sequence past its bound is ignored. A parent cycle is always rejected.\n"
            "                        Also MOSH_CSI_LIMIT, MOSH_ESCAPE_LIMIT, MOSH_VECTOR_DEPTH_LIMIT.\n"
            "       --socks5-proxy=HOST:PORT carries UDP through a SOCKS5 proxy (proxy DNS)\n"
+           "       --exact-mouse sends every report of a mouse, pen or finger as it came, nothing smoothed or merged\n"
+           "                        (otherwise a moving hand is reported at least every GOBLIN_SKIFF_HAND_INTERVAL ms, 25)\n"
            "       Ctrl-^ then 0 opens or resumes the local file browser\n",
            argv0,
            argv0 );
@@ -213,7 +216,8 @@ int main( int argc, char* argv[] )
       exit( 0 );
     }
     if ( 0 == strcmp( argv[i], "--image-codecs" ) ) {
-      puts( "webp palette-djvu-v1 png-state-v1" );
+      printf( "webp palette-djvu-v1 png-state-v1 packed-state-v2 native-image-v1%s\n",
+              Terminal::packed_zstd_available() ? " packed-zstd-v1" : "" );
       exit( 0 );
     }
     if ( 0 == strcmp( argv[i], "--connection-version" ) ) {
@@ -242,6 +246,7 @@ int main( int argc, char* argv[] )
     { "csi-limit", required_argument, NULL, 271 },
     { "escape-limit", required_argument, NULL, 272 },
     { "vector-depth-limit", required_argument, NULL, 273 },
+    { "exact-mouse", no_argument, NULL, 274 },
     { 0, 0, 0, 0 },
   };
   while ( ( opt = getopt_long( argc, argv, "#:AcvXL:D:", long_options, NULL ) ) != -1 ) {
@@ -328,6 +333,9 @@ int main( int argc, char* argv[] )
       case 273:
         setenv( "MOSH_VECTOR_DEPTH_LIMIT", optarg, 1 );
         break;
+      case 274:
+        setenv( "GOBLIN_SKIFF_EXACT_MOUSE", "1", 1 );
+        break;
       case 268:
         socks5_proxy = optarg;
         try { Network::Socks5UDP::validate_proxy( socks5_proxy ); }
@@ -341,6 +349,11 @@ int main( int argc, char* argv[] )
   }
 
   Terminal::load_input_limits_from_env();
+
+  /* On a radio, a moving hand is reported once a frame unless told otherwise. */
+  if ( radio_mode && !getenv( "GOBLIN_SKIFF_HAND_INTERVAL" ) ) {
+    setenv( "GOBLIN_SKIFF_HAND_INTERVAL", "250", 1 );
+  }
 
   try {
     Crypto::ensure_mode_available( crypto_mode );

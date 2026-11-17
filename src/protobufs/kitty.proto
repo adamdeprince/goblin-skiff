@@ -29,6 +29,16 @@ message Image {
   optional bool tone_map = 14;
   optional uint32 gamut = 15; // of RGB pixels: 1 Display P3, 2 Rec. 2020
   optional bool png_original = 16; // png holds the PNG as sent, with its color profile
+  // packed-state-v2: an image in one of Silkie's packed formats, kept as it
+  // was packed. packed_format is its f key (301, 302, 304 or 308 for gray, 516 for
+  // RGB565) and packed the container of src/terminal/packedimage.h: exact,
+  // row filtered, and compressed with zlib or, for packed-zstd-v1, zstd.
+  optional bytes packed = 17;
+  optional uint32 packed_format = 18;
+  // native-image-v1: original raw pixels, including the program's palette.
+  optional bytes native = 19;
+  optional uint32 native_format = 20;
+  optional uint32 transfer = 21;
 }
 
 message VectorStep {
@@ -65,6 +75,12 @@ message Placement {
   optional uint32 parent_placement = 17;
   optional sint32 horizontal_offset = 18;
   optional sint32 vertical_offset = 19;
+  optional uint32 flags = 20; // the F key: 1 pixel-relative, 2 viewport
+  // Silkie's depth protocol: the depth the placement was made at, in
+  // millidegrees or else in reference pixels, and its vertical phase in pixels.
+  optional sint32 depth = 21;
+  optional float depth_pixels = 22;
+  optional float phase = 23;
 }
 
 // A rectangle written over an image the receiver has the version before of.
@@ -75,6 +91,19 @@ message ImagePatch {
   optional Image rect = 4;
 }
 
+// A font a program uploaded to Silkie's vector service (a=v), kept so that a
+// terminal sent a scene whole again can be given the fonts its text names.
+message SessionFont {
+  required bytes name = 1;
+  optional uint64 generation = 2;
+  // The upload request's JSON; left out when the receiver has this generation.
+  optional bytes upload = 3;
+  // Released by the program, kept while text in a scene names it.
+  optional bool released = 4;
+  // The relay's id of the request that uploaded it, which the client wrote.
+  optional uint32 request = 5;
+}
+
 message StateDelta {
   repeated uint32 delete_image_id = 1 [packed = true];
   repeated Image image = 2;
@@ -82,4 +111,6 @@ message StateDelta {
   repeated Placement placement = 4;
   repeated VectorPatch vector_patch = 5;
   repeated ImagePatch image_patch = 6;
+  repeated SessionFont font = 20;     // new or changed session fonts
+  repeated bytes delete_font = 21;    // session fonts no longer kept
 }

@@ -30,12 +30,19 @@
     also delete it here.
 */
 
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <map>
+#include <set>
 
 #include "src/terminal/colorspace.h"
+#include "src/terminal/gpusurface.h"
 #include "src/terminal/terminalframebuffer.h"
+#include "src/terminal/terminalgeometry.h"
 
 using namespace Terminal;
 
@@ -77,7 +84,8 @@ DrawState::DrawState( int s_width, int s_height )
 
 Framebuffer::Framebuffer( int s_width, int s_height )
   : rows(), icon_name(), window_title(), clipboard(), bell_count( 0 ), title_initialized( false ), kitty_images(),
-    kitty_placements(), kitty_next_id( 1 ), kitty_serial( 1 ), ds( s_width, s_height ), image_encoding()
+    kitty_placements(), kitty_next_id( 1 ), kitty_serial( 1 ), vector_fonts(), vector_font_generation( 0 ),
+    ds( s_width, s_height ), image_encoding()
 {
   assert( s_height > 0 );
   assert( s_width > 0 );
@@ -90,7 +98,8 @@ Framebuffer::Framebuffer( const Framebuffer& other )
   : rows( other.rows ), icon_name( other.icon_name ), window_title( other.window_title ),
     clipboard( other.clipboard ), bell_count( other.bell_count ), title_initialized( other.title_initialized ),
     kitty_images( other.kitty_images ), kitty_placements( other.kitty_placements ),
-    kitty_next_id( other.kitty_next_id ), kitty_serial( other.kitty_serial ), ds( other.ds ),
+    kitty_next_id( other.kitty_next_id ), kitty_serial( other.kitty_serial ), vector_fonts( other.vector_fonts ),
+    vector_font_generation( other.vector_font_generation ), ds( other.ds ),
     image_encoding( other.image_encoding )
 {}
 
@@ -107,6 +116,8 @@ Framebuffer& Framebuffer::operator=( const Framebuffer& other )
     kitty_placements = other.kitty_placements;
     kitty_next_id = other.kitty_next_id;
     kitty_serial = other.kitty_serial;
+    vector_fonts = other.vector_fonts;
+    vector_font_generation = other.vector_font_generation;
     ds = other.ds;
     image_encoding = other.image_encoding;
   }
@@ -409,8 +420,12 @@ void Framebuffer::reset( void )
   rows = rows_type( height, newrow() );
   window_title.clear();
   clipboard.clear();
+  for ( auto& image : kitty_images ) {
+    let_go_of_surface( image.second );
+  }
   kitty_images.clear();
   kitty_placements.clear();
+  prune_vector_fonts(); /* the fonts stay, but nothing names the released ones now */
   /* do not reset bell_count */
 }
 
@@ -452,13 +467,15 @@ void Framebuffer::resize( int s_width, int s_height )
     }
   }
 
+  /* A relative placement goes where its parent goes, and goes when it does. */
   std::vector<KittyPlacement> kept;
   for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
-    if ( kitty_placements[i].row < s_height && kitty_placements[i].col < s_width ) {
+    if ( kitty_placements[i].parent_image || ( kitty_placements[i].row < s_height && kitty_placements[i].col < s_width ) ) {
       kept.push_back( kitty_placements[i] );
     }
   }
   kitty_placements.swap( kept );
+  prune_orphan_placements();
 }
 
 void Framebuffer::reset_row( Row* r )
@@ -533,6 +550,7 @@ void Renditions::set_rendition( color_type num )
     clear_attributes();
     foreground_color = background_color = 0;
     foreground_brightness = background_brightness = foreground_gamut = background_gamut = background_alpha = 0;
+    text_style = 0;
     return;
   }
 
@@ -574,8 +592,20 @@ void Renditions::set_rendition( color_type num )
   bool value = num < 9;
   switch ( num ) {
     case 1:
-    case 22:
       set_attribute( bold, value );
+      break;
+    case 2: /* dim, which Silkie keeps apart from brightness */
+      set_attribute( faint, value );
+      break;
+    case 22: /* normal intensity: neither bold nor dim */
+      set_attribute( bold, false );
+      set_attribute( faint, false );
+      break;
+    case 221: /* kitty: bold and dim reset apart */
+      set_attribute( bold, false );
+      break;
+    case 222:
+      set_attribute( faint, false );
       break;
     case 3:
     case 23:
@@ -624,7 +654,75 @@ void Renditions::set_background_color( int num )
   }
 }
 
-std::string Renditions::sgr( bool extended ) const
+static std::vector<TextStyle>& text_styles()
+{
+  static std::vector<TextStyle> styles( 1 );
+  return styles;
+}
+
+/* What tells two styles apart: the floats by their bits, so that every value
+   a program can give is a style of its own (and zero is zero, whatever its sign). */
+static std::string text_style_key( const TextStyle& style )
+{
+  const float pixels = style.depth_pixels == 0 ? 0.f : style.depth_pixels;
+  const float phase = style.phase == 0 ? 0.f : style.phase;
+  uint32_t bits[2];
+  memcpy( &bits[0], &pixels, sizeof( uint32_t ) );
+  memcpy( &bits[1], &phase, sizeof( uint32_t ) );
+  return text_style_fields( style ) + ":d=" + std::to_string( style.depth ) + ":p=" + std::to_string( bits[0] )
+         + ":y=" + std::to_string( bits[1] );
+}
+
+uint32_t Terminal::intern_text_style( const TextStyle& style )
+{
+  static std::map<std::string, uint32_t> handles { { text_style_key( TextStyle() ), 0 } };
+  std::vector<TextStyle>& styles = text_styles();
+  const auto added = handles.emplace( text_style_key( style ), static_cast<uint32_t>( styles.size() ) );
+  if ( added.second ) {
+    styles.push_back( style );
+  }
+  return added.first->second;
+}
+
+const TextStyle& Terminal::text_style_of( uint32_t handle )
+{
+  const std::vector<TextStyle>& styles = text_styles();
+  return handle < styles.size() ? styles[handle] : styles[0];
+}
+
+std::string Terminal::text_style_fields( const TextStyle& style )
+{
+  return "role=" + style.role + ":weight=" + std::to_string( style.weight )
+         + ":slant=" + ( style.has_slant ? std::to_string( style.slant ) : std::string( "auto" ) );
+}
+
+std::string Terminal::float_text( float value )
+{
+  if ( value == 0 ) {
+    return "0";
+  }
+  const Ext::CNumbers c_numbers;
+  char buf[64];
+  for ( int digits = 1; digits <= 9; digits++ ) {
+    snprintf( buf, sizeof( buf ), "%.*g", digits, double( value ) );
+    if ( strtof( buf, nullptr ) == value ) {
+      break;
+    }
+  }
+  return buf;
+}
+
+std::string Terminal::depth_frame( int32_t depth, float depth_pixels, float phase )
+{
+  if ( !depth && depth_pixels == 0 && phase == 0 ) {
+    return "\033]777;depth;v=1:op=reset\033\\";
+  }
+  return "\033]777;depth;v=1:op=set:"
+         + ( depth_pixels != 0 ? "p=" + float_text( depth_pixels ) : "d=" + std::to_string( depth ) ) + ":y="
+         + float_text( phase ) + "\033\\";
+}
+
+std::string Renditions::sgr( bool extended, bool fonts, bool depth ) const
 {
   std::string ret;
   char col[64];
@@ -632,6 +730,8 @@ std::string Renditions::sgr( bool extended ) const
   ret.append( "\033[0" );
   if ( get_attribute( bold ) )
     ret.append( ";1" );
+  if ( get_attribute( faint ) )
+    ret.append( ";2" );
   if ( get_attribute( italic ) )
     ret.append( ";3" );
   if ( get_attribute( underlined ) )
@@ -722,6 +822,14 @@ std::string Renditions::sgr( bool extended ) const
       add( "70:" + std::to_string( get_background_alpha() ) );
     }
     ret += "\033[" + ext + "m";
+  }
+
+  if ( fonts && has_font() ) {
+    ret += "\033]777;font;v=1:op=select:" + text_style_fields( text_style_of( text_style ) ) + "\033\\";
+  }
+  if ( depth && has_depth() ) {
+    const TextStyle& style = text_style_of( text_style );
+    ret += depth_frame( style.depth, style.depth_pixels, style.phase );
   }
 
   return ret;
@@ -845,6 +953,16 @@ bool Cell::compare( const Cell& other ) const
   return ret;
 }
 
+/* The GPU surface of an image that is going is let go at once, though older
+   copies of the state may still refer to it: only the terminal itself reads
+   a surface, and it reads it only for an image it has. */
+void Framebuffer::let_go_of_surface( KittyImage& image )
+{
+  if ( image.surface ) {
+    image.surface->release();
+  }
+}
+
 uint32_t Framebuffer::allocate_kitty_id( void )
 {
   while ( kitty_next_id == 0 || kitty_images.find( kitty_next_id ) != kitty_images.end() ) {
@@ -867,6 +985,9 @@ uint32_t Framebuffer::put_kitty_image( const KittyImage& image )
 
   std::map<uint32_t, KittyImage>::iterator existing = kitty_images.find( stored.id );
   if ( existing != kitty_images.end() ) {
+    if ( existing->second.surface != stored.surface ) {
+      let_go_of_surface( existing->second );
+    }
     std::vector<KittyPlacement> kept;
     for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
       if ( kitty_placements[i].image_id != stored.id ) {
@@ -904,7 +1025,11 @@ KittyImage* Framebuffer::find_newest_kitty_number( uint32_t number )
 
 void Framebuffer::erase_kitty_image( uint32_t id )
 {
-  kitty_images.erase( id );
+  const auto it = kitty_images.find( id );
+  if ( it != kitty_images.end() ) {
+    let_go_of_surface( it->second );
+    kitty_images.erase( it );
+  }
   std::vector<KittyPlacement> kept;
   kept.reserve( kitty_placements.size() );
   for ( size_t i = 0; i < kitty_placements.size(); i++ ) {
@@ -919,7 +1044,7 @@ bool Framebuffer::edit_vector_image( uint32_t id, const Vector::Step& step, std:
 {
   const auto it = kitty_images.find( id );
   if ( it == kitty_images.end() || it->second.format != KITTY_FORMAT_VECTOR || !it->second.vector ) {
-    error = "ENOENT: no such vector image";
+    error = "ENOENT:no such vector image";
     return false;
   }
   it->second.vector = Vector::edit_doc( it->second.vector, step, error );
@@ -931,6 +1056,51 @@ void Framebuffer::replace_vector_doc( uint32_t id, std::shared_ptr<const Vector:
   const auto it = kitty_images.find( id );
   if ( it != kitty_images.end() && it->second.format == KITTY_FORMAT_VECTOR ) {
     it->second.vector = std::move( doc );
+  }
+}
+
+void Framebuffer::commit_vector_font( const std::string& name,
+                                      std::shared_ptr<const std::string> upload,
+                                      uint32_t request,
+                                      std::shared_ptr<const Vector::FontInfo> info )
+{
+  Vector::SessionFont& font = vector_fonts[name];
+  font.upload = std::move( upload );
+  font.generation = ++vector_font_generation;
+  font.released = false;
+  font.request = request;
+  font.info = std::move( info );
+}
+
+bool Framebuffer::release_vector_font( const std::string& name )
+{
+  const auto it = vector_fonts.find( name );
+  if ( it == vector_fonts.end() || it->second.released ) {
+    return false;
+  }
+  it->second.released = true;
+  prune_vector_fonts();
+  return true;
+}
+
+void Framebuffer::prune_vector_fonts( void )
+{
+  for ( auto it = vector_fonts.begin(); it != vector_fonts.end(); ) {
+    bool named = false;
+    if ( it->second.released ) {
+      for ( const auto& image : kitty_images ) {
+        if ( image.second.format == KITTY_FORMAT_VECTOR && image.second.vector
+             && image.second.vector->table()->names_font( it->first ) ) {
+          named = true;
+          break;
+        }
+      }
+    }
+    if ( it->second.released && !named ) {
+      it = vector_fonts.erase( it );
+    } else {
+      ++it;
+    }
   }
 }
 
@@ -964,7 +1134,73 @@ void Framebuffer::replace_kitty_placements( const std::vector<KittyPlacement>& p
   kitty_placements = placements;
 }
 
-void Framebuffer::delete_kitty( const KittyCommand& cmd )
+/* A placement lives as long as its parent does. */
+void Framebuffer::prune_orphan_placements( void )
+{
+  for ( bool removed = true; removed; ) {
+    removed = false;
+    std::set<std::pair<uint32_t, uint32_t>> present;
+    for ( const KittyPlacement& p : kitty_placements ) {
+      present.emplace( p.image_id, p.placement_id );
+    }
+    std::vector<KittyPlacement> kept;
+    kept.reserve( kitty_placements.size() );
+    for ( const KittyPlacement& p : kitty_placements ) {
+      if ( p.parent_image && !present.count( std::make_pair( p.parent_image, p.parent_placement ) ) ) {
+        removed = true;
+      } else {
+        kept.push_back( p );
+      }
+    }
+    kitty_placements.swap( kept );
+  }
+}
+
+/* Where a deletion by position finds a placement: in the cells it covers.
+   One placed in pixels is found in the cells it is visible in; any other in
+   the cells from the one it starts in, which for a relative placement is that
+   of the root of its tree plus the offsets on the way, as the terminal lays
+   it out. The cells it covers take knowing the size of a cell; without it, a
+   placement is found at the cell it starts in. A negative position is any. */
+static bool placement_at( const Framebuffer& fb, const KittyPlacement& p, const ClientGeometry* geometry, int col, int row )
+{
+  if ( p.unicode_placeholder ) {
+    return false;
+  }
+  double cw = 0, ch = 0;
+  const bool sized = geometry && client_cell_size( *geometry, cw, ch );
+  if ( !p.pixel_relative() ) {
+    int64_t first_row = 0, first_col = 0;
+    if ( !kitty_placement_cell( fb, p, first_row, first_col ) ) {
+      return false;
+    }
+    int64_t end_row = first_row + 1, end_col = first_col + 1;
+    KittyPlacementRect rect;
+    if ( sized && kitty_placement_rect( fb, p, cw, ch, rect ) ) {
+      end_col = std::max<int64_t>( end_col, int64_t( std::ceil( ( rect.left + rect.width ) / cw ) ) );
+      end_row = std::max<int64_t>( end_row, int64_t( std::ceil( ( rect.top + rect.height ) / ch ) ) );
+    }
+    return ( col < 0 || ( first_col <= col && col < end_col ) ) && ( row < 0 || ( first_row <= row && row < end_row ) );
+  }
+  KittyPlacementRect rect;
+  if ( !sized || !kitty_placement_rect( fb, p, cw, ch, rect ) ) {
+    return false;
+  }
+  double left = rect.left, top = rect.top, right = rect.left + rect.width, bottom = rect.top + rect.height;
+  if ( rect.clipped ) {
+    left = std::max( left, rect.clip_left );
+    top = std::max( top, rect.clip_top );
+    right = std::min( right, rect.clip_right );
+    bottom = std::min( bottom, rect.clip_bottom );
+  }
+  if ( right <= left || bottom <= top ) {
+    return false;
+  }
+  return ( col < 0 || ( ( col + 1 ) * cw > left && col * cw < right ) )
+         && ( row < 0 || ( ( row + 1 ) * ch > top && row * ch < bottom ) );
+}
+
+void Framebuffer::delete_kitty( const KittyCommand& cmd, const ClientGeometry* geometry )
 {
   const char target = cmd.delete_target ? cmd.delete_target : 'a';
   const bool free_data = target >= 'A' && target <= 'Z';
@@ -990,20 +1226,20 @@ void Framebuffer::delete_kitty( const KittyCommand& cmd )
         break;
       }
       case 'c':
-        drop = p.row == ds.get_cursor_row() && p.col == ds.get_cursor_col();
+        drop = placement_at( *this, p, geometry, ds.get_cursor_col(), ds.get_cursor_row() );
         break;
       case 'p':
-        drop = p.col + 1 == static_cast<int>( cmd.src_x ) && p.row + 1 == static_cast<int>( cmd.src_y );
+        drop = placement_at( *this, p, geometry, static_cast<int>( cmd.src_x ) - 1, static_cast<int>( cmd.src_y ) - 1 );
         break;
       case 'q':
-        drop = p.col + 1 == static_cast<int>( cmd.src_x ) && p.row + 1 == static_cast<int>( cmd.src_y )
+        drop = placement_at( *this, p, geometry, static_cast<int>( cmd.src_x ) - 1, static_cast<int>( cmd.src_y ) - 1 )
                && p.z == cmd.z;
         break;
       case 'x':
-        drop = p.col + 1 == static_cast<int>( cmd.src_x );
+        drop = placement_at( *this, p, geometry, static_cast<int>( cmd.src_x ) - 1, -1 );
         break;
       case 'y':
-        drop = p.row + 1 == static_cast<int>( cmd.src_y );
+        drop = placement_at( *this, p, geometry, -1, static_cast<int>( cmd.src_y ) - 1 );
         break;
       case 'z':
         drop = p.z == cmd.z;
@@ -1017,19 +1253,23 @@ void Framebuffer::delete_kitty( const KittyCommand& cmd )
     }
     if ( !drop ) {
       kept.push_back( p );
-      remaining[p.image_id]++;
     }
   }
   kitty_placements.swap( kept );
+  prune_orphan_placements();
+  for ( const KittyPlacement& p : kitty_placements ) {
+    remaining[p.image_id]++;
+  }
 
   if ( kind == 'i' && cmd.image_id != 0 && remaining.find( cmd.image_id ) == remaining.end() ) {
     if ( free_data ) {
-      kitty_images.erase( cmd.image_id );
+      erase_kitty_image( cmd.image_id );
     }
   } else if ( kind == 'r' ) {
     for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ) {
       if ( it->first >= cmd.src_x && it->first <= cmd.src_y && remaining.find( it->first ) == remaining.end()
            && free_data ) {
+        let_go_of_surface( it->second );
         kitty_images.erase( it++ );
       } else {
         ++it;
@@ -1038,6 +1278,7 @@ void Framebuffer::delete_kitty( const KittyCommand& cmd )
   } else if ( kind == 'a' && free_data ) {
     for ( std::map<uint32_t, KittyImage>::iterator it = kitty_images.begin(); it != kitty_images.end(); ) {
       if ( remaining.find( it->first ) == remaining.end() ) {
+        let_go_of_surface( it->second );
         kitty_images.erase( it++ );
       } else {
         ++it;
@@ -1055,7 +1296,9 @@ void Framebuffer::scroll_kitty_placements( int first_row, int count, bool insert
     KittyPlacement p = kitty_placements[i];
     const auto* image = find_kitty_image( p.image_id );
     if ( image && image->origin == ImageOrigin::Sixel ) { kept.push_back( p ); continue; }
-    if ( p.unicode_placeholder ) {
+    if ( p.unicode_placeholder || p.parent_image ) {
+      /* A relative placement goes where the root of its tree goes, and goes
+         when its parent does. */
       kept.push_back( p );
       continue;
     }
@@ -1077,4 +1320,5 @@ void Framebuffer::scroll_kitty_placements( int first_row, int count, bool insert
     }
   }
   kitty_placements.swap( kept );
+  prune_orphan_placements();
 }

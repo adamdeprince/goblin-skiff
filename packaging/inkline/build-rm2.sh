@@ -20,7 +20,7 @@ export AR="$work/scripts/zig-ar.sh" RANLIB="$work/scripts/zig-ranlib.sh"
 export CFLAGS=-O2 CXXFLAGS=-O2
 export PKG_CONFIG_LIBDIR="$sdk/usr/lib/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$sdk" PKG_CONFIG_PATH=
 cd "$work/djvu-source"
-export CXXFLAGS='-O2 -std=gnu++14'
+export CXXFLAGS='-O2'
 autoreconf -fi
 ./configure --build=x86_64-pc-linux-gnu --host=arm-linux-gnueabihf \
   --prefix="$work/prefix" --enable-static --disable-shared \

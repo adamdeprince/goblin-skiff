@@ -37,6 +37,14 @@ message InkBrush {
   optional string fill = 9;
 }
 
+// What a program said one control of a pad does.
+message PadLabel {
+  optional uint64 device = 1;
+  optional uint32 control = 2; // 0 button, 1 ring, 2 strip, 3 dial
+  optional uint32 index = 3;
+  optional string text = 4;    // base64 of UTF-8, as the program gave it
+}
+
 // The modes of Silkie's OSC 777 extensions and the OSC 22 pointer shapes.
 message ExtensionState {
   optional uint32 tablet = 1;
@@ -52,6 +60,7 @@ message ExtensionState {
   repeated string pointer_main = 11;
   repeated string pointer_alternate = 12;
   optional bool alternate = 13;
+  repeated PadLabel pad_label = 14;
 }
 
 message EchoAck {

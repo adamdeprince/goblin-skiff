@@ -32,6 +32,10 @@ struct ClientGraphics
            && clipboard == other.clipboard && clipboard_fast_threshold == other.clipboard_fast_threshold && downloads == other.downloads && pointer == other.pointer; }
 };
 
+struct ClientGeometry;
+/* The size of a cell in physical pixels, as far as the client has said. */
+inline bool client_cell_size( const ClientGeometry& geometry, double& cell_width, double& cell_height );
+
 /* Presentation geometry for the currently attached client. This is control
    metadata, not part of the replicated terminal or framebuffer state. */
 struct ClientGeometry
@@ -68,6 +72,21 @@ struct ClientGeometry
            && cell_height_px == other.cell_height_px;
   }
 };
+
+inline bool client_cell_size( const ClientGeometry& geometry, double& cell_width, double& cell_height )
+{
+  if ( geometry.has_cell_size() ) {
+    cell_width = geometry.cell_width_px;
+    cell_height = geometry.cell_height_px;
+    return true;
+  }
+  if ( geometry.has_grid() && geometry.has_pixel_size() ) {
+    cell_width = double( geometry.width_px ) / geometry.columns;
+    cell_height = double( geometry.height_px ) / geometry.rows;
+    return true;
+  }
+  return false;
+}
 
 }
 

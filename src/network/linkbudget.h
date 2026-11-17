@@ -66,7 +66,11 @@ public:
   // packet-per-millisecond ceiling on fast links. At satellite rates this
   // is less than one byte. Idle time never accumulates burst credit.
   // Foreground input/ACKs can additionally borrow at most 128 bytes.
-  int wait_time( uint64_t now, bool foreground = false )
+  // A notification is urgent: it may borrow one packet, so that it leaves
+  // at once even behind a full fragment of the screen. What it borrows is
+  // charged like any other byte, so the rate is kept; a second one waits.
+  // A radio's airtime is a hard limit and lends nothing.
+  int wait_time( uint64_t now, bool foreground = false, bool urgent = false )
   {
     if ( !enabled ) { return 0; }
     if ( last_data_sent && now - last_data_sent > 30000 ) {
@@ -79,7 +83,8 @@ public:
     // Control packets can still get through and release the window.
     if ( !foreground && sent.size() >= 512 ) { demand_at = now; return 100; }
     const double slack = measured ? std::min( 1.0, 4096000 / rate ) : 0;
-    const double due = next_send - ( radio ? 0 : slack + ( foreground ? 128000 / rate : 0 ) );
+    const double borrow = urgent ? largest_packet * 1000.0 / rate : foreground ? 128000 / rate : 0;
+    const double due = next_send - ( radio ? 0 : slack + borrow );
     if ( due <= now ) { return 0; }
     demand_at = now;
     return int( std::min( double( INT_MAX ), std::ceil( due - now ) ) );

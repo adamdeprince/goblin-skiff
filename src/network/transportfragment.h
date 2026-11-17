@@ -96,7 +96,13 @@ private:
   bool last_allow_zstd;
   bool last_allow_zstd_dictionary;
   bool last_allow_large_fragments = false;
+  bool last_allow_raw = false;
   std::string last_zstd_dictionary_id;
+  /* An instruction sent again keeps its id, so it must be the same bytes, and
+     the level of a compression may have changed since. */
+  std::string last_payload;
+  bool have_last_payload = false;
+  size_t last_fragment_count = 0;
 
 public:
   Fragmenter()
@@ -111,7 +117,8 @@ public:
                                         bool allow_zstd = false,
                                         bool allow_zstd_dictionary = false,
                                         const std::string& zstd_dictionary_id = "",
-                                        bool allow_large_fragments = false );
+                                        bool allow_large_fragments = false,
+                                        bool allow_raw = false );
   uint64_t last_ack_sent( void ) const { return last_instruction.ack_num(); }
 };
 

@@ -51,6 +51,14 @@ void client_extensions_to_proto( const ClientExtensions& info, ClientBuffers::Cl
   output->set_display( info.display.text() );
   output->set_image_gamut( info.image_gamut );
   output->set_pointer_shapes( info.pointer_shapes );
+  output->set_graphics( info.graphics );
+  output->set_vector_service( info.vector_service );
+  if ( !info.notifications.empty() ) {
+    output->set_notifications( info.notifications );
+  }
+  if ( info.notification_routes ) {
+    output->set_notification_routes( true );
+  }
 }
 
 ClientExtensions client_extensions_from_proto( const ClientBuffers::ClientExtensionsMessage& input )
@@ -74,6 +82,10 @@ ClientExtensions client_extensions_from_proto( const ClientBuffers::ClientExtens
   Ext::parse_fields( input.display(), info.display );
   info.image_gamut = input.image_gamut();
   info.pointer_shapes = input.pointer_shapes();
+  info.graphics = input.graphics();
+  info.vector_service = input.vector_service();
+  info.notifications = input.notifications();
+  info.notification_routes = input.notification_routes();
   return info;
 }
 
@@ -107,6 +119,13 @@ void extension_state_to_proto( const ExtensionModes& modes, HostBuffers::Extensi
     output->add_pointer_alternate( shape );
   }
   output->set_alternate( modes.alternate );
+  for ( const auto& item : modes.pad_labels ) {
+    HostBuffers::PadLabel* label = output->add_pad_label();
+    label->set_device( std::get<0>( item.first ) );
+    label->set_control( std::get<1>( item.first ) );
+    label->set_index( std::get<2>( item.first ) );
+    label->set_text( item.second );
+  }
 }
 
 ExtensionModes extension_state_from_proto( const HostBuffers::ExtensionState& input )
@@ -136,6 +155,12 @@ ExtensionModes extension_state_from_proto( const HostBuffers::ExtensionState& in
   modes.pointer[0].assign( input.pointer_main().begin(), input.pointer_main().end() );
   modes.pointer[1].assign( input.pointer_alternate().begin(), input.pointer_alternate().end() );
   modes.alternate = input.alternate();
+  for ( const auto& label : input.pad_label() ) {
+    /* Only what a program could have given: four kinds of control, 0 to 255. */
+    if ( label.control() < 4 && label.index() <= 255 && !label.text().empty() ) {
+      modes.pad_labels[PadControl( label.device(), label.control(), label.index() )] = label.text();
+    }
+  }
   return modes;
 }
 

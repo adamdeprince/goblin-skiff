@@ -223,6 +223,17 @@ mascot. These options override forced mascot formats, which fall back to
 ASCII, without changing the remote TERM value.
 
 .TP
+.B \-\-exact\-mouse
+Send every report of a mouse, pen or finger as it came: xterm mouse motion,
+Silkie's tablet-pointer reports, scrolls, gestures and the Goblin pointer
+protocol, with nothing smoothed, merged or held. Otherwise the client takes
+the sensor's noise out of a hand's motion and thins it: the bends of its path
+are kept to a quarter of a pixel, straight runs are not, and a moving hand is
+reported at least every 25 ms (\fBGOBLIN_SKIFF_HAND_INTERVAL\fP, in
+milliseconds; \fB--radio\fP makes it 250 unless set). For a program that needs
+the sensor's every sample.
+
+.TP
 .B \-\-mascot=\fIFORMAT\fP, \-\-no\-mascot
 Select auto, kitty, sixel, ascii, or none for the client-local startup mascot.
 The mascot is printed once as inline output. In native-scrollback mode, the
@@ -456,10 +467,14 @@ server side.
 
 .TP
 .B \-A
-Forward the local SSH authentication agent to the remote login
-session. The forwarded agent socket is exposed through
-.B SSH_AUTH_SOCK
-inside the remote session.
+Authorize the client's local SSH_AUTH_SOCK as a fallback when the terminal
+has no available SSH agent provider. The remote session always receives a
+stable SSH_AUTH_SOCK; terminal providers are preferred. Each packet queries
+the current provider and preserves its agent connection and generation, so
+reattaching through a different terminal changes the keys on new connections.
+Enable ssh_agent_forwarding yes in Silkie to offer its agent. Key mutation
+and agent locking are refused. See the SSH agent protocol in
+https://silkie.goblinreactor.com/ssh-agent-protocol.html.
 
 .TP
 .B \-X
@@ -523,9 +538,9 @@ sensitive.
 .B \-\-state\-sample\-min\-size=\fIBYTES\fP
 Only log received state samples at least this large. The default is 0.
 
-Terminal screen updates and keystrokes are highest priority. X11 and
-SSH agent forwarding are medium priority and use a separate stream
-token bucket from local, remote, and SOCKS5 TCP forwarding, which are
+Terminal screen updates and keystrokes are highest priority. Agent packets
+use the reliable terminal event channel. X11 forwarding is medium priority
+and uses a separate stream token bucket from local, remote, and SOCKS5 TCP forwarding, which are
 low priority. Skiff emits at most one forwarded stream event per
 reliable send opportunity and caps forwarded stream chunks below the
 path-MTU payload budget. \fBgoblin-skiffcp\fP bulk datagrams are sent only

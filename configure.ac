@@ -27,7 +27,7 @@ m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 
 # Protobuf transitively requires at least C++14, get ahead of the
 # curve and require at least C++17.
-AX_CXX_COMPILE_STDCXX([17])
+AX_CXX_COMPILE_STDCXX([23], [ext], [mandatory])
 
 WARNING_CXXFLAGS=""
 PICKY_CXXFLAGS=""

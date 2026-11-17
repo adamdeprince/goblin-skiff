@@ -110,7 +110,10 @@ def session(options, kitty, sixel, probes, graphics=False, escape_key=None, noti
             assert PANEL_NOTICE not in output, "default shortcut advertised with a different escape prefix"
         assert (b"\x1b_G" in output) == kitty, "Kitty output override: " + repr(options)
         assert (b"\x1bP0;0;0q" in output) == sixel, "sixel output override: " + repr(options)
-        assert (KITTY_QUERY in output, b"\x1b[c" in output) == probes, "disabled probe was sent"
+        # DA1 also bounds the wait for the answer to the gamut query of a
+        # terminal that has Kitty graphics.
+        assert (KITTY_QUERY in output, b"\x1b[c" in output) == (probes[0], probes[0] or probes[1]), \
+            "disabled probe was sent"
         assert b"\x1b[2J" not in output and b"\x1b[3J" not in output, "startup erased screen/history"
         assert output.count(b"Goblin Skiff\r\n") == int(show_mascot), "mascot banner was repeated or missing"
         banner = output.index(b"Goblin Skiff\r\n") if show_mascot else output.index(notice)

@@ -41,6 +41,7 @@
 #include "src/statesync/stream.h"
 #include "src/statesync/tmux.h"
 #include "src/terminal/extensions.h"
+#include "src/terminal/motioncodec.h"
 #include "src/terminal/osc52.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalgeometry.h"
@@ -125,9 +126,20 @@ class UserStream
 {
 private:
   std::deque<UserEvent> actions;
+  /* Whether the peer takes runs of extension reports as binary records. The
+     sender turns this on between updates, so a diff written again for a resend
+     is the same bytes. */
+  bool motion_records_on = false;
+  /* What both ends know of the extension reports so far, from which a record
+     is written and read. Every report that enters the stream is noted, by
+     whichever path it came. */
+  Terminal::Motion::RecordContext motion_context;
 
 public:
   UserStream() : actions() {}
+
+  void set_motion_records( bool on ) { motion_records_on = on; }
+  bool motion_records_enabled() const { return motion_records_on; }
 
   void push_back( const Parser::UserByte& s_userbyte ) { actions.push_back( UserEvent( s_userbyte ) ); }
   void push_back( const Parser::Resize& s_resize ) { actions.push_back( UserEvent( s_resize ) ); }
@@ -137,7 +149,11 @@ public:
   void push_back( const Terminal::TmuxBytes& bytes ) { actions.push_back( UserEvent( bytes ) ); }
   void push_back( const Terminal::ClientGraphics& caps ) { actions.push_back( UserEvent( caps ) ); }
   void push_back( const Terminal::ClientExtensions& info ) { actions.push_back( UserEvent( info ) ); }
-  void push_back( const Terminal::ExtensionInput& input ) { actions.push_back( UserEvent( input ) ); }
+  void push_back( const Terminal::ExtensionInput& input )
+  {
+    motion_context.note( input );
+    actions.push_back( UserEvent( input ) );
+  }
   bool is_extensions_event( unsigned int i ) const { return actions[i].type == UserExtensionsEventType; }
   const Terminal::ClientExtensions& get_extensions_event( unsigned int i ) const { return actions[i].extensions; }
   bool is_extension_input( unsigned int i ) const { return actions[i].type == UserExtensionInputType; }

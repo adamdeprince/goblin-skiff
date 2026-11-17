@@ -28,6 +28,15 @@ headers). Automatic detection is disabled, and the old `=check` mode is
 rejected. Review the applicable patent terms before enabling it on either
 endpoint. Do not publish such a build as an official prebuilt artifact.
 
+## fast-kalman
+
+`src/kalman/kalman.hpp` is the header-only core of
+[fast-kalman](https://fast-kalman.dev/) 0.3.0, Apache-2.0, vendored unmodified
+with its license in `src/kalman/LICENSE`. The client uses it to smooth hand
+motion reports before they are sent. Apache-2.0 code may be combined with this
+GPL-3.0-or-later program; its notices are retained, and the file is not
+GPL-relicensed.
+
 ## File synchronization dependency
 
 The optional file-menu synchronizer dynamically links **librsync** (tested

@@ -37,8 +37,16 @@ enum class PacketType : uint8_t
   DownloadSymbol = 7,
   DownloadAck = 8,
   FileSymbol = 9,
-  FileAck = 10
+  FileAck = 10,
+  /* Notifications and their answers, see noticechannel.h. Written only to a
+     peer whose instructions say it takes them: a build from before them does
+     not know these as datagrams at all. */
+  Notice = 11,
+  NoticeAck = 12
 };
+
+/* What a datagram's fields take of a packet, before its payload. */
+const size_t DATAGRAM_HEADER_LEN = 8 + 1 + 1 + 8 + 4 + 4 + 4;
 
 struct Datagram
 {

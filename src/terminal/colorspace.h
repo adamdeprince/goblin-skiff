@@ -30,6 +30,15 @@ void gamut_pixels_to_srgb( unsigned gamut, std::string& pixels, size_t bytes_per
    the brightness above SDR white clipped or, with tone_map, compressed as
    the HDR protocol says for a headroom of 1. */
 bool hdr_to_srgb8( const std::string& half_floats, uint32_t width, uint32_t height, bool tone_map, std::string& rgba );
+/* From one gamut to another (0 sRGB, 1 Display P3, 2 Rec. 2020), through
+   linear light, clipping what the other cannot hold. Pixels of 3 or 4 bytes. */
+void convert_pixels_between_gamuts( unsigned from, unsigned to, std::string& pixels, size_t bytes_per_pixel );
+/* IEEE 754 half precision, as kitty converts it (round to nearest even). */
+float half_to_float( uint16_t h );
+uint16_t float_to_half( float f );
+/* H.273 encoded RGB in its source gamut to linear extended sRGB. Alpha is
+   untouched. PQ/HLG use Silkie's 203 nit SDR white. */
+void decode_image_color( uint32_t transfer, uint32_t gamut, double rgba[4] );
 
 }
 

@@ -26,4 +26,12 @@ message Instruction {
   optional uint32 goblin_protocol = 12;
   // Extended fragment indices remove the legacy 32768-packet state ceiling.
   optional bool large_fragments_supported = 13;
+  // The reports of a hand may come as binary records in a user diff.
+  optional bool motion_records_supported = 14;
+  // An instruction that compression would only lengthen may come as it is,
+  // behind a zero byte.
+  optional bool raw_frames_supported = 15;
+  // Notifications, and a terminal's answers to them, may come as Notice
+  // datagrams of their own, ahead of the state (src/network/noticechannel.h).
+  optional bool notices_supported = 16;
 }

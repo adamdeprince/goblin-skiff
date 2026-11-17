@@ -40,6 +40,10 @@ private:
   bool keyboard_reply = false, keyboard = false;
   bool clipboard_reply = false, clipboard = false;
   bool pointer_reply = false, pointer = false;
+  /* The G key of Silkie's wide gamut protocol, asked with a query of a
+     pixel and bounded by DA1: a terminal that does not know the key may drop
+     the query without an answer. */
+  bool gamut_reply = false, gamut = false;
   unsigned sizing_replies = 0, sizing_row = 0, sizing_width_col = 0, text_sizing = 0;
   bool cursor_reply = false, cursor_invalid = false;
   int cursor_row = -1;
@@ -70,6 +74,8 @@ public:
   // forced to a particular format. Late replies are still filtered locally.
   bool probe_ready( uint64_t now ) const { return now >= probe_deadline || !( kitty_reply || da_reply || geometry_reply || keyboard_reply || clipboard_reply || pointer_reply || sizing_replies ); }
   bool supports_kitty() const { return allow_kitty && kitty; }
+  bool supports_image_gamut() const { return allow_kitty && gamut; }
+  bool image_gamut_known() const { return !gamut_reply; }
   bool supports_sixel() const { return allow_sixel && sixel; }
   bool supports_keyboard() const { return keyboard; }
   bool supports_pointer() const { return pointer; }

@@ -16,6 +16,7 @@
 namespace Mascot {
 namespace {
 const std::string query_prefix = "\033_Gi=4294967294;";
+const std::string gamut_prefix = "\033_Gi=4294967292;";
 
 struct Pixels
 {
@@ -242,8 +243,11 @@ std::string Splash::start( const Size& dimensions, bool interactive, uint64_t no
     da_reply = allow_sixel;
     if ( kitty_reply ) {
       queries += "\033_Gi=4294967294,s=1,v=1,a=q,t=d,f=24;AAAA\033\\";
+      /* As docs/wide-gamut-protocol.rst asks: a pixel in Display P3. */
+      queries += "\033_Gi=4294967292,s=1,v=1,a=q,t=d,f=24,G=1;AAAA\033\\";
+      gamut_reply = true;
     }
-    if ( da_reply ) {
+    if ( da_reply || gamut_reply ) {
       queries += "\033[c";
     }
   }
@@ -353,13 +357,23 @@ bool Splash::consume_reply()
     kitty_reply = false;
     return true;
   }
-  if ( da_reply && pending.compare( 0, 3, "\033[?" ) == 0 && pending.back() == 'c' ) {
+  if ( gamut_reply && pending.compare( 0, gamut_prefix.size(), gamut_prefix ) == 0
+       && pending.size() >= gamut_prefix.size() + 2 && pending.substr( pending.size() - 2 ) == "\033\\" ) {
+    gamut = pending.substr( gamut_prefix.size(), pending.size() - gamut_prefix.size() - 2 ) == "OK";
+    gamut_reply = false;
+    return true;
+  }
+  if ( ( da_reply || gamut_reply ) && pending.compare( 0, 3, "\033[?" ) == 0 && pending.back() == 'c' ) {
     const auto params = numbers( pending.substr( 3, pending.size() - 4 ) );
     if ( params.empty() ) {
       return false;
     }
-    sixel = std::find( params.begin() + 1, params.end(), 4 ) != params.end();
-    da_reply = false;
+    if ( da_reply ) {
+      sixel = std::find( params.begin() + 1, params.end(), 4 ) != params.end();
+    }
+    /* Terminals answer in order: no answer to the G query before this one
+       means none is coming. */
+    da_reply = gamut_reply = false;
     return true;
   }
   if ( geometry_reply && pending.compare( 0, 4, "\033[6;" ) == 0 && pending.back() == 't' ) {
@@ -387,12 +401,15 @@ bool Splash::possible_reply() const
   if ( kitty_reply && ( prefix_of( pending, query_prefix ) || prefix_of( query_prefix, pending ) ) ) {
     return true;
   }
+  if ( gamut_reply && ( prefix_of( pending, gamut_prefix ) || prefix_of( gamut_prefix, pending ) ) ) {
+    return true;
+  }
   if ( sizing_replies && ( prefix_of( pending, "\033[" )
        || ( prefix_of( "\033[", pending ) && pending.find_first_not_of( "0123456789;", 2 ) == std::string::npos ) ) ) {
     return true;
   }
   for ( const std::string& prefix : { std::string( "\033[?" ), std::string( "\033[6;" ) } ) {
-    if ( prefix[2] == '?' ? !( da_reply || keyboard_reply || cursor_reply ) : !geometry_reply ) {
+    if ( prefix[2] == '?' ? !( da_reply || gamut_reply || keyboard_reply || cursor_reply ) : !geometry_reply ) {
       continue;
     }
     if ( prefix_of( pending, prefix ) ) {

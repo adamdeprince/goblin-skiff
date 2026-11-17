@@ -273,6 +273,8 @@ public:
   }
   uint64_t active_retry_timeout() const { return radio_mode ? 120000 : 10000; }
   int pacing_wait_time( bool foreground = false ) { return link.wait_time( timestamp(), foreground ); }
+  /* For a notification, which goes ahead of everything else. */
+  int urgent_wait_time( void ) { return link.wait_time( timestamp(), true, true ); }
   int feedback_wait_time() const { return link_confirmed ? link.feedback_wait( timestamp() ) : INT_MAX; }
   std::string recv( void );
   int keepalive_wait_time( void );

@@ -72,6 +72,7 @@ private:
   FragmentAssembly fragments;
   StateSampleWriter state_sample_writer;
   SessionVersion peer_version {};
+  int peer_notices = -1; /* whether the peer takes Notice datagrams: unknown until it has said */
   unsigned int verbose;
 
 public:
@@ -108,6 +109,12 @@ public:
   void set_relay_keys( const std::string& keys ) { connection.set_relay_keys( keys ); }
   const LinkBudget& link_budget() const { return connection.link_budget(); }
   int bulk_wait_time() { return connection.pacing_wait_time(); }
+  /* How long the link's budget holds back a notification. */
+  int notice_wait_time() { return connection.urgent_wait_time(); }
+  /* Whether the peer takes Notice datagrams: -1 until an instruction of its
+     has arrived, then 0 or 1. Nothing of the kind is written to a peer that
+     has not said it takes them. */
+  int peer_takes_notices( void ) const { return peer_notices; }
   bool has_unsent_data( void ) const { return sender.has_unsent_data(); }
   size_t max_datagram_payload( void ) const;
 
@@ -160,6 +167,8 @@ public:
   void set_send_delay( int new_delay ) { sender.set_send_delay( new_delay ); }
   void set_low_latency( bool enabled ) { sender.set_low_latency( enabled ); }
   unsigned int send_mindelay( void ) const { return sender.send_mindelay(); }
+  unsigned int normal_mindelay( void ) const { return sender.normal_mindelay(); }
+  unsigned int normal_interval( void ) const { return sender.normal_interval(); }
   void request_immediate_send( void ) { sender.request_immediate_send(); }
 
   uint64_t get_sent_state_acked_timestamp( void ) const { return sender.get_sent_state_acked_timestamp(); }

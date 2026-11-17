@@ -39,6 +39,7 @@
 #include "src/statesync/clipboard.h"
 #include "src/statesync/extensions.h"
 #include "src/statesync/user.h"
+#include "src/terminal/motioncodec.h"
 #include "src/util/fatal_assert.h"
 
 using namespace Parser;
@@ -71,6 +72,8 @@ std::string UserStream::diff_from( const UserStream& existing ) const
   }
 
   ClientBuffers::UserMessage output;
+  /* The receiver reads a record in the context of the state it has. */
+  Terminal::Motion::RecordContext context = existing.motion_context;
 
   while ( my_it != actions.end() ) {
     switch ( my_it->type ) {
@@ -142,6 +145,16 @@ std::string UserStream::diff_from( const UserStream& existing ) const
                                               output.add_instruction()->MutableExtension( client_extensions ) );
       } break;
       case UserExtensionInputType: {
+        if ( motion_records_on ) {
+          /* A run of reports, as one record. */
+          Terminal::Motion::RecordEncoder encoder( context );
+          while ( my_it != actions.end() && my_it->type == UserExtensionInputType ) {
+            encoder.add( my_it->ext_input );
+            my_it++;
+          }
+          output.add_instruction()->SetExtension( motion_records, encoder.bytes() );
+          continue;
+        }
         ExtensionInputMessage* input = output.add_instruction()->MutableExtension( ext_input );
         if ( !my_it->ext_input.payload.empty() ) {
           input->set_payload( my_it->ext_input.payload );
@@ -149,6 +162,9 @@ std::string UserStream::diff_from( const UserStream& existing ) const
         if ( my_it->ext_input.ink_image ) {
           input->set_ink_image( my_it->ext_input.ink_image );
           input->set_ink_records( my_it->ext_input.ink_records );
+        }
+        if ( !my_it->ext_input.service_reply.empty() ) {
+          input->set_service_reply( my_it->ext_input.service_reply );
         }
         if ( my_it->ext_input.clock >= 0 ) {
           input->set_clock( my_it->ext_input.clock );
@@ -196,13 +212,21 @@ void UserStream::apply_string( const std::string& diff )
     } else if ( input.instruction( i ).HasExtension( client_extensions ) ) {
       actions.push_back(
         UserEvent( Terminal::client_extensions_from_proto( input.instruction( i ).GetExtension( client_extensions ) ) ) );
+    } else if ( input.instruction( i ).HasExtension( motion_records ) ) {
+      std::vector<Terminal::ExtensionInput> reports;
+      fatal_assert(
+        Terminal::Motion::decode_records( input.instruction( i ).GetExtension( motion_records ), motion_context, reports ) );
+      for ( const Terminal::ExtensionInput& report : reports ) {
+        actions.push_back( UserEvent( report ) ); /* noted by the decoder */
+      }
     } else if ( input.instruction( i ).HasExtension( ext_input ) ) {
       const ExtensionInputMessage& message = input.instruction( i ).GetExtension( ext_input );
       Terminal::ExtensionInput report( message.payload() );
       report.ink_image = message.ink_image();
       report.ink_records = message.ink_records();
+      report.service_reply = message.service_reply();
       report.clock = message.has_clock() ? message.clock() : -1;
-      actions.push_back( UserEvent( report ) );
+      push_back( report );
     } else if ( input.instruction( i ).HasExtension( client_geometry ) ) {
       const ClientGeometryMessage& geometry = input.instruction( i ).GetExtension( client_geometry );
       actions.push_back( UserEvent( Terminal::ClientGeometry( geometry.columns(),

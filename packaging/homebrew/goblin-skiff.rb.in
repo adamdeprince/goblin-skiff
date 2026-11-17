@@ -2,8 +2,8 @@
 class GoblinSkiff < Formula
   desc "Fork of Mosh optimized for bandwidth-constrained links"
   homepage "https://skiff.goblinreactor.com/"
-  url "https://brew.goblinreactor.com/sources/goblin-skiff-1.4.0-goblin20260919.2.tar.gz"
-  version "1.4.0-goblin20260919.2"
+  url "https://brew.goblinreactor.com/sources/goblin-skiff-1.4.0-goblin20261117.1.tar.gz"
+  version "1.4.0-goblin20261117.1"
   sha256 "@SOURCE_SHA256@"
   license all_of: ["GPL-3.0-or-later", "ISC"]
 
@@ -45,14 +45,7 @@ class GoblinSkiff < Formula
     # runtime directory. Tests use local Unix sockets and loopback UDP.
     Dir.mktmpdir("gc-", ENV.fetch("TMPDIR", "/tmp")) do |runtime|
       ENV["XDG_RUNTIME_DIR"] = runtime
-      tests = %w[
-        ocb-aes encrypt-decrypt fips-crypto base64 nonce-incr fec-codecs
-        bulk-datagram skiffcp-protocol bulk-loss-sim transport-compression session-version
-        state-samples osc52-parse kitty-graphics terminal-geometry
-        terminal-display tmux-control control-panel mascot file-transfer
-        link-budget sixel-state terminal-extensions download download-forward
-        udp-relay udp-jump-wrapper.test connect-timeout.test
-      ]
+      tests = Pathname("packaging/release-tests.txt").read.split
       system "make", "check", "TESTS=#{tests.join(" ")}"
     end
     system "make", "install"

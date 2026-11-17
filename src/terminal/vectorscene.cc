@@ -9,6 +9,7 @@
 */
 
 #include "src/terminal/inputlimits.h"
+#include "src/terminal/osc52.h"
 #include "src/terminal/vectorscene.h"
 #include "src/terminal/extframe.h"
 
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <random>
 
 namespace Terminal {
@@ -81,7 +83,7 @@ bool parse_num( cursor& s, cursor end, double& out )
     p++;
   }
   std::string text;
-  while ( p < end && text.size() < 63
+  while ( p < end
           && ( isdigit( static_cast<unsigned char>( *p ) ) || *p == '-' || *p == '+' || *p == '.' || *p == 'e'
                || *p == 'E' ) ) {
     if ( !text.empty() && ( *p == '-' || *p == '+' ) && text.back() != 'e' && text.back() != 'E' ) {
@@ -193,6 +195,43 @@ enum class Paint
   Gradient
 };
 
+/* The terminal's pipeline for a color, in single precision as it keeps one:
+   decoding the sRGB transfer curve, converting a wide gamut to linear
+   extended sRGB, then the brightness. Whatever comes out of it that is not
+   finite is an overflow. (Silkie's vector-color.h.) */
+float decode_srgb( float x )
+{
+  return x <= .04045f ? x / 12.92f : powf( ( x + .055f ) / 1.055f, 2.4f );
+}
+
+void gamut_to_srgb( float* c, unsigned gamut )
+{
+  if ( !gamut || gamut > 2 ) {
+    return;
+  }
+  /* D65 primaries, without clipping to the gamut. */
+  static const double to_xyz[2][9] = {
+    { .4865709, .2656677, .1982173, .2289746, .6917385, .0792869, 0, .0451134, 1.0439444 },
+    { .6369580, .1446169, .1688810, .2627002, .6779981, .0593017, 0, .0280727, 1.0609851 }
+  };
+  static const double from_xyz[9]
+    = { 3.2404542, -1.5371385, -.4985314, -.9692660, 1.8760108, .0415560, .0556434, -.2040259, 1.0572252 };
+  double xyz[3] = { 0, 0, 0 }, rgb[3] = { 0, 0, 0 };
+  for ( unsigned i = 0; i < 3; i++ ) {
+    for ( unsigned j = 0; j < 3; j++ ) {
+      xyz[i] += to_xyz[gamut - 1][3 * i + j] * c[j];
+    }
+  }
+  for ( unsigned i = 0; i < 3; i++ ) {
+    for ( unsigned j = 0; j < 3; j++ ) {
+      rgb[i] += from_xyz[3 * i + j] * xyz[j];
+    }
+  }
+  for ( unsigned i = 0; i < 3; i++ ) {
+    c[i] = static_cast<float>( rgb[i] );
+  }
+}
+
 bool parse_color( cursor s, cursor end, Paint& paint, std::string& error )
 {
   const size_t n = end - s;
@@ -203,31 +242,86 @@ bool parse_color( cursor s, cursor end, Paint& paint, std::string& error )
   if ( n > 1 && *s == '@' ) {
     double id;
     s++;
-    if ( !parse_num( s, end, id ) || s != end || id < 0 || id > UINT32_MAX ) {
+    if ( !parse_num( s, end, id ) || s != end || id < 0 || id > UINT32_MAX || id != std::floor( id ) ) {
       return fail( error, "Bad gradient reference" );
     }
     paint = Paint::Gradient;
     return true;
   }
-  if ( n < 7 || *s != '#' ) {
-    return fail( error, "Bad color" );
-  }
-  const char* star = static_cast<const char*>( memchr( s, '*', n ) ); /* an HDR brightness */
-  const size_t hexlen = ( star ? static_cast<size_t>( star - s ) : n ) - 1;
-  if ( hexlen != 6 && hexlen != 8 ) {
-    return fail( error, "Bad color" );
-  }
-  for ( size_t i = 0; i < hexlen; i++ ) {
-    unsigned digit;
-    if ( !hex_digit( s[1 + i], digit ) ) {
+  const char* star = static_cast<const char*>( memchr( s, '*', n ) ); /* a brightness in percent */
+  cursor color_end = star ? star : end;
+  const char* colon = static_cast<const char*>( memchr( s, ':', color_end - s ) );
+  float channels[4] = { 0, 0, 0, 1 };
+  if ( colon ) {
+    /* srgb:, p3:, rec2020: or linear:, with three or four components. */
+    const std::string space( s, colon );
+    const bool linear = space == "linear";
+    unsigned gamut = 0;
+    if ( space == "p3" ) {
+      gamut = 1;
+    } else if ( space == "rec2020" ) {
+      gamut = 2;
+    } else if ( space != "srgb" && !linear ) {
+      return fail( error, "Unknown color space" );
+    }
+    cursor q = colon + 1;
+    unsigned count = 0;
+    while ( q < color_end ) {
+      double v;
+      if ( count == 4 || !parse_num( q, color_end, v ) ) {
+        return fail( error, "Bad color components" );
+      }
+      if ( ( !linear || count == 3 ) && ( v < 0 || v > 1 ) ) {
+        return fail( error, "Color component outside 0..1" );
+      }
+      channels[count++] = static_cast<float>( v );
+      if ( q < color_end && ( *q++ != '/' || q == color_end ) ) {
+        return fail( error, "Bad color components" );
+      }
+    }
+    if ( count < 3 ) {
+      return fail( error, "Color needs three or four components" );
+    }
+    if ( !linear ) {
+      for ( unsigned i = 0; i < 3; i++ ) {
+        channels[i] = decode_srgb( channels[i] );
+      }
+    }
+    gamut_to_srgb( channels, gamut );
+  } else {
+    if ( n < 7 || *s != '#' ) {
       return fail( error, "Bad color" );
     }
+    const size_t hexlen = ( star ? static_cast<size_t>( star - s ) : n ) - 1;
+    if ( hexlen != 6 && hexlen != 8 ) {
+      return fail( error, "Bad color" );
+    }
+    unsigned v[4] = { 0, 0, 0, 255 };
+    for ( size_t i = 0; i < hexlen / 2; i++ ) {
+      unsigned high, low;
+      if ( !hex_digit( s[1 + 2 * i], high ) || !hex_digit( s[2 + 2 * i], low ) ) {
+        return fail( error, "Bad color" );
+      }
+      v[i] = high << 4 | low;
+    }
+    for ( unsigned i = 0; i < 3; i++ ) {
+      channels[i] = decode_srgb( v[i] / 255.f );
+    }
+    channels[3] = v[3] / 255.f;
   }
   if ( star ) {
     double brightness;
     cursor q = star + 1;
-    if ( !parse_num( q, end, brightness ) || q != end ) {
+    if ( !parse_num( q, end, brightness ) || q != end || brightness < 0 ) {
       return fail( error, "Bad brightness" );
+    }
+    for ( unsigned i = 0; i < 3; i++ ) {
+      channels[i] *= static_cast<float>( brightness / 100 );
+    }
+  }
+  for ( float channel : channels ) {
+    if ( !std::isfinite( channel ) ) {
+      return fail( error, "Color overflow" );
     }
   }
   paint = Paint::Solid;
@@ -314,6 +408,8 @@ struct Parsing
   uint32_t ref = 0;          /* s, clip or img */
   uint32_t doomed_group = 0; /* g of a delete */
   unsigned stops = 0;
+  bool have_text = false;
+  std::string text; /* the last text field, laid out once the record is read */
 };
 
 bool parse_field( Parsing& p, const std::string& key, cursor v, cursor end, std::string& error )
@@ -358,6 +454,28 @@ bool parse_field( Parsing& p, const std::string& key, cursor v, cursor end, std:
     r.t.e = m[4];
     r.t.f = m[5];
     r.has_t = true;
+  } else if ( key == "depth" || key == "depth_px" || key == "phase" ) {
+    /* The depth of a record or of a group's descendants, in millidegrees or
+       in reference pixels, and its vertical phase: for the terminal, which
+       draws the eyes; here they are only checked as it checks them. */
+    if ( !parse_number_field( v, end, error ) ) {
+      return false;
+    }
+  } else if ( key == "box" ) {
+    /* A rectangular clip: x, y, width, height. */
+    double b[4];
+    cursor q = v;
+    for ( double& x : b ) {
+      if ( !parse_num( q, end, x ) ) {
+        return fail( error, "Bad clipping box" );
+      }
+    }
+    if ( q != end || b[2] < 0 || b[3] < 0 || !std::isfinite( b[0] + b[2] ) || !std::isfinite( b[1] + b[3] ) ) {
+      return fail( error, "Bad clipping box" );
+    }
+  } else if ( key == "text" && r.op == 't' ) {
+    p.text.assign( v, end );
+    p.have_text = true;
   } else if ( key == "clip" || key == "s" || key == "img" ) {
     if ( !parse_uint( v, end, p.ref, error ) ) {
       return false;
@@ -419,7 +537,7 @@ bool parse_field( Parsing& p, const std::string& key, cursor v, cursor end, std:
   return true;
 }
 
-bool parse_record( cursor line, cursor end, Record& out, std::string& error )
+bool parse_record( cursor line, cursor end, Record& out, std::string& error, const FontCheck* fonts )
 {
   out = Record();
   while ( line < end && *line == ' ' ) {
@@ -434,7 +552,7 @@ bool parse_record( cursor line, cursor end, Record& out, std::string& error )
   if ( line < end && *line != ' ' ) {
     return fail( error, "Record type must be a single character" );
   }
-  if ( !strchr( "gpsuikalrx", r.op ) ) {
+  if ( !strchr( "gpsuikalrxt", r.op ) ) {
     r.op = 0; /* unknown record types are ignored, so the format can grow */
     return true;
   }
@@ -478,6 +596,20 @@ bool parse_record( cursor line, cursor end, Record& out, std::string& error )
     return fail( error, "Only the root group has id 0" );
   }
   switch ( r.op ) {
+    case 't':
+      /* As the terminal lays it out, when the whole record is read; what
+         needs the fonts themselves is the terminal's to check. */
+      if ( !p.have_text ) {
+        return fail( error, "Text record without text" );
+      }
+      try {
+        if ( !text_layout_ok( p.text, fonts, r.fonts ) ) {
+          return fail( error, "Invalid vector text, font or layout" );
+        }
+      } catch ( const std::bad_alloc& ) {
+        return fail( error, "Out of memory laying out vector text" ); /* Silkie's words for a MemoryError */
+      }
+      break;
     case 'p':
     case 's':
       if ( !r.has_d ) {
@@ -549,7 +681,7 @@ bool color_paints( const std::string& color )
          && paint != Paint::None;
 }
 
-bool parse_records( const std::string& text, std::vector<Record>& out, std::string& error )
+bool parse_records( const std::string& text, std::vector<Record>& out, std::string& error, const FontCheck* fonts )
 {
   Ext::CNumbers c_numbers;
   out.clear();
@@ -564,7 +696,7 @@ bool parse_records( const std::string& text, std::vector<Record>& out, std::stri
     lineno++;
     Record record;
     std::string why;
-    if ( !parse_record( s, le, record, why ) ) {
+    if ( !parse_record( s, le, record, why, fonts ) ) {
       error = "Line " + std::to_string( lineno ) + ": " + ( why.empty() ? std::string( "Bad record" ) : why );
       out.clear();
       return false;
@@ -599,14 +731,15 @@ const Element* Table::lookup( uint32_t id ) const
 
 bool Table::is_descendant( const Element& e, uint32_t group ) const
 {
+  /* As the terminal walks it: the group is compared before the walk stops
+     at the root, so everything is under group 0, and no depth limit cuts
+     it short (a chain of parents can be no longer than the scene). */
   uint32_t p = e.parent;
-  size_t guard = elements.size();
-  unsigned depth = 0;
-  while ( p && guard-- ) {
+  for ( size_t remaining = live; remaining; remaining-- ) {
     if ( p == group ) {
       return true;
     }
-    if ( vector_depth_limit && ++depth > vector_depth_limit ) {
+    if ( !p ) {
       return false;
     }
     const Element* g = lookup( p );
@@ -618,6 +751,20 @@ bool Table::is_descendant( const Element& e, uint32_t group ) const
   return false;
 }
 
+void Table::count_fonts( const Element& e, bool adding )
+{
+  for ( const auto& name : e.fonts ) {
+    if ( adding ) {
+      font_refs[name]++;
+    } else {
+      const auto it = font_refs.find( name );
+      if ( it != font_refs.end() && !--it->second ) {
+        font_refs.erase( it );
+      }
+    }
+  }
+}
+
 void Table::remove( uint32_t id )
 {
   const auto it = elements.find( id );
@@ -625,6 +772,7 @@ void Table::remove( uint32_t id )
     return;
   }
   order[it->second.first] = 0;
+  count_fonts( it->second.second, false );
   element_bytes -= it->second.second.bytes();
   elements.erase( it );
   live--;
@@ -637,9 +785,12 @@ void Table::insert( Element e )
     /* A replacement keeps its place in the order. */
     element_bytes -= it->second.second.bytes();
     element_bytes += e.bytes();
+    count_fonts( it->second.second, false );
+    count_fonts( e, true );
     it->second.second = std::move( e );
     return;
   }
+  count_fonts( e, true );
   element_bytes += e.bytes();
   order.push_back( e.id );
   const uint32_t id = e.id;
@@ -672,6 +823,7 @@ std::string Table::apply( const std::vector<Record>& records )
         if ( r.all ) {
           order.clear();
           elements.clear();
+          font_refs.clear();
           live = 0;
           element_bytes = 0;
           root_line.clear();
@@ -732,6 +884,7 @@ std::string Table::apply( const std::vector<Record>& records )
         e.parent = r.parent;
         e.has_t = r.has_t;
         e.t = r.t;
+        e.fonts = r.fonts;
         if ( r.op == 'k' ) {
           e.line = without_pts( r.line );
           e.pts = r.pts;
@@ -751,6 +904,11 @@ std::string Table::apply( const std::vector<Record>& records )
 
 std::string Table::text() const
 {
+  return text( []( const std::string& ) { return true; } );
+}
+
+std::string Table::text( const std::function<bool( const std::string& )>& font_ok ) const
+{
   std::string out;
   if ( !root_line.empty() ) {
     out += root_line;
@@ -758,7 +916,7 @@ std::string Table::text() const
   }
   for ( uint32_t id : order ) {
     const Element* e = id ? lookup( id ) : nullptr;
-    if ( !e ) {
+    if ( !e || !std::all_of( e->fonts.begin(), e->fonts.end(), font_ok ) ) {
       continue;
     }
     out += e->line;
@@ -802,16 +960,22 @@ int Table::matrix_of( const Element& e, Matrix& out ) const
   return 1;
 }
 
-bool Table::point_to_group( uint32_t group, double& x, double& y ) const
+bool Table::group_inverse( uint32_t group, Matrix& out ) const
 {
-  Matrix m = root_has_t ? root_t : Matrix(), inverse;
+  Matrix m = root_has_t ? root_t : Matrix();
   if ( group ) {
     const Element* g = lookup( group );
     if ( !g || g->type != 'g' || matrix_of( *g, m ) != 1 ) {
       return false;
     }
   }
-  if ( !invert( m, inverse ) ) {
+  return invert( m, out );
+}
+
+bool Table::point_to_group( uint32_t group, double& x, double& y ) const
+{
+  Matrix inverse;
+  if ( !group_inverse( group, inverse ) ) {
     return false;
   }
   Vector::apply( inverse, x, y );

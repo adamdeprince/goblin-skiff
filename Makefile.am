@@ -93,3 +93,8 @@ oclint: compile_commands.json
 scan-build:
 	$(MAKE) clean
 	$(CLANG_SCAN_BUILD) $(MAKE) check TESTS=
+EXTRA_DIST += tools/hand-motion/evaluate.py
+
+EXTRA_DIST += docs/SSH_AGENT_PROTOCOL.md
+
+EXTRA_DIST += deploy-packages packaging/release-tests.txt packaging/homebrew/build-isolated.sh packaging/loongson/build-release.sh

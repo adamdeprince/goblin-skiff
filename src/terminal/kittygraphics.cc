@@ -11,18 +11,22 @@
 #include "src/include/config.h"
 
 #include "src/terminal/kittygraphics.h"
+#include "src/terminal/colorspace.h"
 #include "src/terminal/djvu.h"
 #include "src/terminal/osc52.h"
+#include "src/terminal/packedimage.h"
 #include "src/terminal/terminalframebuffer.h"
 
 #include <array>
 #include <cerrno>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <sys/stat.h>
@@ -30,6 +34,7 @@
 
 #include <sys/mman.h>
 
+#include <csetjmp>
 #include <png.h>
 #include <webp/decode.h>
 #include <webp/encode.h>
@@ -42,7 +47,7 @@ KittyCommand::KittyCommand()
     data_size( 0 ), data_offset( 0 ), image_id( 0 ), image_number( 0 ), placement_id( 0 ), more( 0 ), quiet( 0 ),
     columns( 0 ), rows( 0 ), src_x( 0 ), src_y( 0 ), src_w( 0 ), src_h( 0 ), cell_x( 0 ), cell_y( 0 ), z( 0 ),
     cursor_hold( 0 ), unicode_placeholder( 0 ), parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 ),
-    gamut( 0 ), tone_map( 0 ), delete_target( 'a' ), payload()
+    gamut( 0 ), tone_map( 0 ), flags( 0 ), delete_target( 'a' ), payload()
 {}
 
 KittyImage::KittyImage()
@@ -55,7 +60,7 @@ bool KittyImage::operator==( const KittyImage& other ) const
   return ( id == other.id ) && ( number == other.number ) && ( format == other.format ) && ( width == other.width )
          && ( height == other.height ) && ( origin == other.origin ) && ( serial == other.serial )
          && ( palette == other.palette ) && ( gamut == other.gamut ) && ( tone_map == other.tone_map )
-         && ( png_original == other.png_original )
+         && ( png_original == other.png_original ) && ( native == other.native ) && ( transfer == other.transfer )
          && ( vector == other.vector
               || ( vector && other.vector && vector->lineage == other.vector->lineage
                    && vector->version == other.vector->version ) )
@@ -65,7 +70,7 @@ bool KittyImage::operator==( const KittyImage& other ) const
 KittyPlacement::KittyPlacement()
   : image_id( 0 ), placement_id( 0 ), row( 0 ), col( 0 ), columns( 0 ), rows( 0 ), src_x( 0 ), src_y( 0 ),
     src_w( 0 ), src_h( 0 ), cell_x( 0 ), cell_y( 0 ), z( 0 ), cursor_hold( false ), unicode_placeholder( false ),
-    parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 )
+    parent_image( 0 ), parent_placement( 0 ), H( 0 ), V( 0 ), flags( 0 )
 {}
 
 bool KittyPlacement::operator==( const KittyPlacement& other ) const
@@ -76,12 +81,13 @@ bool KittyPlacement::operator==( const KittyPlacement& other ) const
          && ( src_h == other.src_h ) && ( cell_x == other.cell_x ) && ( cell_y == other.cell_y ) && ( z == other.z )
          && ( cursor_hold == other.cursor_hold ) && ( unicode_placeholder == other.unicode_placeholder )
          && ( parent_image == other.parent_image ) && ( parent_placement == other.parent_placement )
-         && ( H == other.H ) && ( V == other.V );
+         && ( H == other.H ) && ( V == other.V ) && ( flags == other.flags ) && ( depth == other.depth )
+         && ( depth_pixels == other.depth_pixels ) && ( phase == other.phase );
 }
 
 static bool parse_u32( const std::string& s, uint32_t& out )
 {
-  if ( s.empty() ) {
+  if ( s.empty() || s.find_first_not_of( "0123456789" ) != std::string::npos ) {
     return false;
   }
   char* end = NULL;
@@ -106,6 +112,18 @@ static bool parse_i32( const std::string& s, int32_t& out )
     return false;
   }
   out = static_cast<int32_t>( val );
+  return true;
+}
+
+static bool parse_u64( const std::string& s, uint64_t& out )
+{
+  if ( s.empty() ) { return false; }
+  uint64_t value = 0;
+  for ( char c : s ) {
+    if ( c < '0' || c > '9' || value > ( UINT64_MAX - ( c - '0' ) ) / 10 ) { return false; }
+    value = value * 10 + ( c - '0' );
+  }
+  out = value;
   return true;
 }
 
@@ -139,59 +157,66 @@ bool parse_kitty_command( const std::string& apc, KittyCommand& cmd )
       } else if ( key == "o" && val.size() == 1 ) {
         cmd.compression = val[0];
       } else if ( key == "f" ) {
-        parse_u32( val, cmd.format );
+        if ( !parse_u32( val, cmd.format ) ) { return false; }
       } else if ( key == "s" ) {
-        parse_u32( val, cmd.width );
+        if ( !parse_u32( val, cmd.width ) ) { return false; }
       } else if ( key == "v" ) {
-        parse_u32( val, cmd.height );
+        if ( !parse_u32( val, cmd.height ) ) { return false; }
       } else if ( key == "S" ) {
-        parse_u32( val, cmd.data_size );
+        if ( !parse_u64( val, cmd.data_size ) ) { return false; }
       } else if ( key == "O" ) {
-        parse_u32( val, cmd.data_offset );
+        if ( !parse_u64( val, cmd.data_offset ) ) { return false; }
+      } else if ( key == "e" && val.size() == 1 ) {
+        cmd.feature = val[0];
+      } else if ( key == "E" ) {
+        if ( !parse_u32( val, cmd.transfer ) ) { return false; }
       } else if ( key == "i" ) {
-        parse_u32( val, cmd.image_id );
+        if ( !parse_u32( val, cmd.image_id ) ) { return false; }
       } else if ( key == "I" ) {
-        parse_u32( val, cmd.image_number );
+        if ( !parse_u32( val, cmd.image_number ) ) { return false; }
       } else if ( key == "p" ) {
-        parse_u32( val, cmd.placement_id );
+        if ( !parse_u32( val, cmd.placement_id ) ) { return false; }
       } else if ( key == "m" ) {
-        parse_u32( val, cmd.more );
+        if ( !parse_u32( val, cmd.more ) ) { return false; }
       } else if ( key == "q" ) {
-        parse_u32( val, cmd.quiet );
+        if ( !parse_u32( val, cmd.quiet ) ) { return false; }
       } else if ( key == "c" ) {
-        parse_u32( val, cmd.columns );
+        if ( !parse_u32( val, cmd.columns ) ) { return false; }
       } else if ( key == "r" ) {
-        parse_u32( val, cmd.rows );
+        if ( !parse_u32( val, cmd.rows ) ) { return false; }
       } else if ( key == "x" ) {
-        parse_u32( val, cmd.src_x );
+        if ( !parse_u32( val, cmd.src_x ) ) { return false; }
       } else if ( key == "y" ) {
-        parse_u32( val, cmd.src_y );
+        if ( !parse_u32( val, cmd.src_y ) ) { return false; }
       } else if ( key == "w" ) {
-        parse_u32( val, cmd.src_w );
+        if ( !parse_u32( val, cmd.src_w ) ) { return false; }
       } else if ( key == "h" ) {
-        parse_u32( val, cmd.src_h );
+        if ( !parse_u32( val, cmd.src_h ) ) { return false; }
       } else if ( key == "X" ) {
-        parse_u32( val, cmd.cell_x );
+        if ( !parse_u32( val, cmd.cell_x ) ) { return false; }
       } else if ( key == "Y" ) {
-        parse_u32( val, cmd.cell_y );
+        if ( !parse_u32( val, cmd.cell_y ) ) { return false; }
       } else if ( key == "z" ) {
         parse_i32( val, cmd.z );
       } else if ( key == "C" ) {
-        parse_u32( val, cmd.cursor_hold );
+        if ( !parse_u32( val, cmd.cursor_hold ) ) { return false; }
       } else if ( key == "U" ) {
-        parse_u32( val, cmd.unicode_placeholder );
+        if ( !parse_u32( val, cmd.unicode_placeholder ) ) { return false; }
       } else if ( key == "P" ) {
-        parse_u32( val, cmd.parent_image );
+        if ( !parse_u32( val, cmd.parent_image ) ) { return false; }
       } else if ( key == "Q" ) {
-        parse_u32( val, cmd.parent_placement );
+        if ( !parse_u32( val, cmd.parent_placement ) ) { return false; }
       } else if ( key == "H" ) {
         parse_i32( val, cmd.H );
       } else if ( key == "V" ) {
         parse_i32( val, cmd.V );
       } else if ( key == "G" ) {
-        parse_u32( val, cmd.gamut );
+        if ( !parse_u32( val, cmd.gamut ) ) { return false; }
+        cmd.gamut_set = true;
       } else if ( key == "T" ) {
-        parse_u32( val, cmd.tone_map );
+        if ( !parse_u32( val, cmd.tone_map ) ) { return false; }
+      } else if ( key == "F" ) {
+        if ( !parse_u32( val, cmd.flags ) ) { return false; }
       } else if ( key == "d" && val.size() == 1 ) {
         cmd.delete_target = val[0];
       }
@@ -199,7 +224,7 @@ bool parse_kitty_command( const std::string& apc, KittyCommand& cmd )
     start = comma + 1;
   }
 
-  if ( !b64.empty() && !base64_decode_osc52( b64, cmd.payload ) ) {
+  if ( !cmd.feature && !b64.empty() && !base64_decode_osc52( b64, cmd.payload ) ) {
     return false;
   }
   return true;
@@ -239,12 +264,36 @@ std::string encode_kitty_chunks( const std::string& controls, const std::string&
   return out;
 }
 
-std::string kitty_response( uint32_t image_id, uint32_t placement_id, const std::string& message )
+std::string encode_vector_service( uint32_t request_id, const std::string& json, uint32_t quiet )
+{
+  /* Unlike every other command sent to a terminal this one is answered, so
+     it is not quiet, but for what the client asks for itself. The later
+     chunks take after the first. */
+  const std::string controls
+    = "a=v,f=200,i=" + std::to_string( request_id ) + ( quiet ? ",q=" + std::to_string( quiet ) : std::string() );
+  const std::string encoded = base64_encode_osc52( json );
+  if ( encoded.empty() ) {
+    return "\033_G" + controls + "\033\\";
+  }
+  std::string out;
+  for ( size_t off = 0; off < encoded.size(); off += KITTY_CHUNK_B64 ) {
+    const size_t n = std::min( KITTY_CHUNK_B64, encoded.size() - off );
+    out += "\033_G" + ( off ? std::string() : controls + "," ) + "m=" + ( off + n < encoded.size() ? "1" : "0" ) + ";";
+    out.append( encoded, off, n );
+    out += "\033\\";
+  }
+  return out;
+}
+
+std::string kitty_response( uint32_t image_id, uint32_t placement_id, const std::string& message, uint32_t frame )
 {
   std::ostringstream out;
   out << "\033_Gi=" << image_id;
   if ( placement_id != 0 ) {
     out << ",p=" << placement_id;
+  }
+  if ( frame != 0 ) {
+    out << ",r=" << frame;
   }
   out << ';' << message << "\033\\";
   return out.str();
@@ -276,7 +325,7 @@ static bool graphics_temporary_path( const std::string& path )
   return false;
 }
 
-static bool read_regular_file( const std::string& path, uint32_t offset, uint32_t size, std::string& data, bool temporary )
+static bool read_regular_file( const std::string& path, uint64_t offset, uint64_t size, std::string& data, bool temporary )
 {
   // Check the opened descriptor, not a stat-then-reopen race. O_NONBLOCK
   // prevents a swapped FIFO/device from blocking the terminal connection.
@@ -318,14 +367,20 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     return true;
   }
 
+  if ( cmd.data_offset > uint64_t( std::numeric_limits<off_t>::max() )
+       || cmd.data_size > uint64_t( std::numeric_limits<off_t>::max() ) - cmd.data_offset ) {
+    error = "EOVERFLOW:file range does not fit in an offset";
+    return false;
+  }
+
   if ( cmd.medium == 'f' || cmd.medium == 't' ) {
     const std::string path = canonical_path( cmd.payload );
     if ( path.empty() || path_is_sensitive( path ) ) {
-      error = "EINVAL: refused to read path";
+      error = "EINVAL:refused to read path";
       return false;
     }
     if ( !read_regular_file( path, cmd.data_offset, cmd.data_size, data, cmd.medium == 't' ) ) {
-      error = "ENOENT: could not read file";
+      error = "ENOENT:could not read file";
       return false;
     }
     return true;
@@ -335,19 +390,19 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
 #if defined( __unix__ ) || defined( __APPLE__ )
     const std::string name = cmd.payload;
     if ( name.empty() || name.find( '\0' ) != std::string::npos ) {
-      error = "EINVAL: empty shm name";
+      error = "EINVAL:empty shm name";
       return false;
     }
     int fd = shm_open( name.c_str(), O_RDONLY, 0 );
     if ( fd < 0 ) {
-      error = "ENOENT: shm_open failed";
+      error = "ENOENT:shm_open failed";
       return false;
     }
     struct stat st;
     if ( fstat( fd, &st ) < 0 || st.st_size < 0 ) {
       close( fd );
       shm_unlink( name.c_str() );
-      error = "EINVAL: shm fstat failed";
+      error = "EINVAL:shm fstat failed";
       return false;
     }
     const uint64_t total64 = static_cast<uint64_t>( st.st_size );
@@ -355,7 +410,7 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     if ( total64 > SIZE_MAX || off64 > total64 ) {
       close( fd );
       shm_unlink( name.c_str() );
-      error = "EINVAL: shm offset";
+      error = "EINVAL:shm offset";
       return false;
     }
     const size_t total = static_cast<size_t>( total64 );
@@ -365,7 +420,7 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     if ( want > available || want > data.max_size() ) {
       close( fd );
       shm_unlink( name.c_str() );
-      error = "EINVAL: shared memory image range";
+      error = "EINVAL:shared memory image range";
       return false;
     }
     if ( want == 0 ) {
@@ -380,7 +435,7 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     close( fd );
     if ( map == MAP_FAILED ) {
       shm_unlink( name.c_str() );
-      error = "EINVAL: mmap failed";
+      error = "EINVAL:mmap failed";
       return false;
     }
     data.assign( static_cast<char*>( map ) + skip, want );
@@ -388,12 +443,12 @@ bool kitty_read_medium( const KittyCommand& cmd, std::string& data, std::string&
     shm_unlink( name.c_str() );
     return true;
 #else
-    error = "EINVAL: shared memory not supported";
+    error = "EINVAL:shared memory not supported";
     return false;
 #endif
   }
 
-  error = "EINVAL: unknown transmission medium";
+  error = "EINVAL:unknown transmission medium";
   return false;
 }
 
@@ -455,7 +510,7 @@ static bool encode_image( const unsigned char* pixels,
                           std::string& error )
 {
   if ( encoding.quality < -1 || encoding.quality > 100 ) {
-    error = "EINVAL: WebP quality must be between 0 and 100";
+    error = "EINVAL:WebP quality must be between 0 and 100";
     return false;
   }
   image.width = width;
@@ -484,7 +539,7 @@ static bool encode_image( const unsigned char* pixels,
   image.format = KITTY_FORMAT_WEBP;
   if ( width > WEBP_MAX_DIMENSION || height > WEBP_MAX_DIMENSION ) {
     if ( !encoding.png ) {
-      error = "EINVAL: image needs peer capability png-state-v1";
+      error = "EINVAL:image needs peer capability png-state-v1";
       return false;
     }
     // PNG has no WebP 16383-pixel dimension ceiling. Keep exact pixels when
@@ -499,13 +554,13 @@ static bool encode_image( const unsigned char* pixels,
     if ( !png_image_write_to_memory( &png, NULL, &size, 0, pixels, 0, NULL )
          || size > image.data->max_size() ) {
       png_image_free( &png );
-      error = "EINVAL: PNG encode failed";
+      error = "EINVAL:PNG encode failed";
       return false;
     }
     image.data->resize( size );
     const bool ok = png_image_write_to_memory( &png, &(*image.data)[0], &size, 0, pixels, 0, NULL );
     png_image_free( &png );
-    if ( !ok ) { error = "EINVAL: PNG encode failed"; return false; }
+    if ( !ok ) { error = "EINVAL:PNG encode failed"; return false; }
     image.data->resize( size );
     image.format = KITTY_FORMAT_PNG;
     return true;
@@ -515,7 +570,7 @@ static bool encode_image( const unsigned char* pixels,
     WebPConfig config;
     WebPPicture picture;
     if ( !WebPConfigInit( &config ) || !WebPPictureInit( &picture ) ) {
-      error = "EINVAL: WebP initialization failed";
+      error = "EINVAL:WebP initialization failed";
       return false;
     }
     config.lossless = 1;
@@ -536,7 +591,7 @@ static bool encode_image( const unsigned char* pixels,
     if ( ok ) { image.data->assign( reinterpret_cast<const char*>( writer.mem ), writer.size ); }
     WebPPictureFree( &picture );
     WebPMemoryWriterClear( &writer );
-    if ( !ok ) { error = "EINVAL: WebP encode failed"; }
+    if ( !ok ) { error = "EINVAL:WebP encode failed"; }
     return ok;
   }
   uint8_t* encoded = NULL;
@@ -544,7 +599,7 @@ static bool encode_image( const unsigned char* pixels,
                                     : WebPEncodeRGB( pixels, width, height, stride, encoding.quality, &encoded );
   if ( encoded_size == 0 || encoded == NULL ) {
     WebPFree( encoded );
-    error = "EINVAL: WebP encode failed";
+    error = "EINVAL:WebP encode failed";
     return false;
   }
   image.data->assign( reinterpret_cast<const char*>( encoded ), encoded_size );
@@ -593,18 +648,439 @@ static bool png_has_color_profile( const std::string& png )
   return false;
 }
 
+/* The colors of a PNG, as Silkie's png-reader.c reads them, with the ICC
+   profiles it meets in practice (matrix and curves) read here instead of by
+   lcms. See Silkie's docs/wide-gamut-protocol.rst. */
+namespace {
+uint32_t be32( const std::string& data, size_t at )
+{
+  return uint32_t( uint8_t( data[at] ) ) << 24 | uint32_t( uint8_t( data[at + 1] ) ) << 16
+         | uint32_t( uint8_t( data[at + 2] ) ) << 8 | uint8_t( data[at + 3] );
+}
+
+double s15fixed16( const std::string& data, size_t at )
+{
+  return double( int32_t( be32( data, at ) ) ) / 65536.0;
+}
+
+/* A tone curve of an ICC profile: from the encoded value to linear light. */
+struct IccCurve
+{
+  int kind = -1; /* -1 identity, 0..4 parametric of that type, 5 table */
+  double g = 1, a = 1, b = 0, c = 0, d = 0, e = 0, f = 0;
+  std::vector<uint16_t> table;
+
+  double operator()( double x ) const
+  {
+    switch ( kind ) {
+      case 0:
+        return std::pow( x, g );
+      case 1:
+        return x >= -b / a ? std::pow( std::max( 0.0, a * x + b ), g ) : 0;
+      case 2:
+        return x >= -b / a ? std::pow( std::max( 0.0, a * x + b ), g ) + c : c;
+      case 3:
+        return x >= d ? std::pow( std::max( 0.0, a * x + b ), g ) : c * x;
+      case 4:
+        return x >= d ? std::pow( std::max( 0.0, a * x + b ), g ) + e : c * x + f;
+      case 5: {
+        const double at = x * double( table.size() - 1 );
+        const size_t i = size_t( std::floor( at ) );
+        if ( i + 1 >= table.size() ) {
+          return table.back() / 65535.0;
+        }
+        return ( table[i] + ( table[i + 1] - table[i] ) * ( at - double( i ) ) ) / 65535.0;
+      }
+      default:
+        return x;
+    }
+  }
+};
+
+/* An RGB profile of a matrix and three curves, the kind displays and images
+   carry: the matrix takes linear RGB to XYZ, adapted to D50. */
+struct IccProfile
+{
+  double matrix[3][3] = {};
+  IccCurve curves[3];
+};
+
+bool icc_tag( const std::string& icc, const char* signature, size_t& at, size_t& size )
+{
+  if ( icc.size() < 132 ) {
+    return false;
+  }
+  const uint64_t count = be32( icc, 128 );
+  for ( uint64_t i = 0; i < count && 132 + ( i + 1 ) * 12 <= icc.size(); i++ ) {
+    const size_t entry = size_t( 132 + i * 12 );
+    if ( icc.compare( entry, 4, signature, 4 ) != 0 ) {
+      continue;
+    }
+    const uint64_t offset = be32( icc, entry + 4 ), length = be32( icc, entry + 8 );
+    if ( offset + length > icc.size() || length < 12 ) {
+      return false;
+    }
+    at = size_t( offset );
+    size = size_t( length );
+    return true;
+  }
+  return false;
+}
+
+bool icc_curve( const std::string& icc, const char* signature, IccCurve& curve )
+{
+  size_t at = 0, size = 0;
+  if ( !icc_tag( icc, signature, at, size ) ) {
+    return false;
+  }
+  if ( icc.compare( at, 4, "curv" ) == 0 ) {
+    const uint64_t count = be32( icc, at + 8 );
+    if ( 12 + count * 2 > size ) {
+      return false;
+    }
+    if ( count == 0 ) {
+      curve.kind = -1;
+    } else if ( count == 1 ) {
+      curve.kind = 0;
+      curve.g = ( uint8_t( icc[at + 12] ) * 256 + uint8_t( icc[at + 13] ) ) / 256.0;
+    } else {
+      curve.kind = 5;
+      curve.table.resize( size_t( count ) );
+      for ( size_t i = 0; i < count; i++ ) {
+        curve.table[i] = uint16_t( uint8_t( icc[at + 12 + i * 2] ) << 8 | uint8_t( icc[at + 13 + i * 2] ) );
+      }
+    }
+    return true;
+  }
+  if ( icc.compare( at, 4, "para" ) == 0 ) {
+    static const size_t params[] = { 1, 3, 4, 5, 7 };
+    const unsigned type = uint8_t( icc[at + 8] ) << 8 | uint8_t( icc[at + 9] );
+    if ( type > 4 || 12 + params[type] * 4 > size ) {
+      return false;
+    }
+    double v[7] = { 1, 1, 0, 0, 0, 0, 0 };
+    for ( size_t i = 0; i < params[type]; i++ ) {
+      v[i] = s15fixed16( icc, at + 12 + i * 4 );
+    }
+    curve.kind = int( type );
+    curve.g = v[0];
+    curve.a = v[1];
+    curve.b = v[2];
+    curve.c = v[3];
+    curve.d = v[4];
+    curve.e = v[5];
+    curve.f = v[6];
+    if ( ( type == 1 || type == 2 ) && curve.a == 0 ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool parse_icc( const std::string& icc, IccProfile& profile )
+{
+  if ( icc.size() < 132 || icc.compare( 16, 4, "RGB " ) != 0 || icc.compare( 20, 4, "XYZ " ) != 0 ) {
+    return false;
+  }
+  const char* columns[3] = { "rXYZ", "gXYZ", "bXYZ" };
+  const char* curves[3] = { "rTRC", "gTRC", "bTRC" };
+  for ( int c = 0; c < 3; c++ ) {
+    size_t at = 0, size = 0;
+    if ( !icc_tag( icc, columns[c], at, size ) || size < 20 || icc.compare( at, 4, "XYZ " ) != 0
+         || !icc_curve( icc, curves[c], profile.curves[c] ) ) {
+      return false;
+    }
+    for ( int r = 0; r < 3; r++ ) {
+      profile.matrix[r][c] = s15fixed16( icc, at + 8 + r * 4 );
+    }
+  }
+  return true;
+}
+
+void invert3( const double m[3][3], double out[3][3] )
+{
+  const double det = m[0][0] * ( m[1][1] * m[2][2] - m[1][2] * m[2][1] )
+                     - m[0][1] * ( m[1][0] * m[2][2] - m[1][2] * m[2][0] )
+                     + m[0][2] * ( m[1][0] * m[2][1] - m[1][1] * m[2][0] );
+  out[0][0] = ( m[1][1] * m[2][2] - m[1][2] * m[2][1] ) / det;
+  out[0][1] = ( m[0][2] * m[2][1] - m[0][1] * m[2][2] ) / det;
+  out[0][2] = ( m[0][1] * m[1][2] - m[0][2] * m[1][1] ) / det;
+  out[1][0] = ( m[1][2] * m[2][0] - m[1][0] * m[2][2] ) / det;
+  out[1][1] = ( m[0][0] * m[2][2] - m[0][2] * m[2][0] ) / det;
+  out[1][2] = ( m[0][2] * m[1][0] - m[0][0] * m[1][2] ) / det;
+  out[2][0] = ( m[1][0] * m[2][1] - m[1][1] * m[2][0] ) / det;
+  out[2][1] = ( m[0][1] * m[2][0] - m[0][0] * m[2][1] ) / det;
+  out[2][2] = ( m[0][0] * m[1][1] - m[0][1] * m[1][0] ) / det;
+}
+
+void multiply3( const double a[3][3], const double b[3][3], double out[3][3] )
+{
+  for ( int r = 0; r < 3; r++ ) {
+    for ( int c = 0; c < 3; c++ ) {
+      out[r][c] = a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c];
+    }
+  }
+}
+
+/* The matrix of a profile in a gamut as lcms makes it: the primaries with
+   the D65 white, adapted to D50 by Bradford. Gamut 0 is sRGB. */
+void gamut_matrix( unsigned gamut, double out[3][3] )
+{
+  static const double primaries[3][6] = { { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06 },
+                                          { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060 },
+                                          { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046 } };
+  const double* p = primaries[gamut <= 2 ? gamut : 0];
+  const double wx = 0.3127, wy = 0.3290;
+  const double white[3] = { wx / wy, 1, ( 1 - wx - wy ) / wy };
+  double m[3][3];
+  for ( int c = 0; c < 3; c++ ) {
+    const double x = p[c * 2], y = p[c * 2 + 1];
+    m[0][c] = x / y;
+    m[1][c] = 1;
+    m[2][c] = ( 1 - x - y ) / y;
+  }
+  double inverse[3][3];
+  invert3( m, inverse );
+  double scale[3];
+  for ( int r = 0; r < 3; r++ ) {
+    scale[r] = inverse[r][0] * white[0] + inverse[r][1] * white[1] + inverse[r][2] * white[2];
+  }
+  for ( int r = 0; r < 3; r++ ) {
+    for ( int c = 0; c < 3; c++ ) {
+      m[r][c] *= scale[c];
+    }
+  }
+  static const double bradford[3][3]
+    = { { 0.8951, 0.2664, -0.1614 }, { -0.7502, 1.7135, 0.0367 }, { 0.0389, -0.0685, 1.0296 } };
+  const double d50[3] = { 0.9642, 1.0, 0.8249 };
+  double bradford_inverse[3][3], cone[3][3] = {}, adapt[3][3], step[3][3];
+  invert3( bradford, bradford_inverse );
+  for ( int r = 0; r < 3; r++ ) {
+    const double to = bradford[r][0] * d50[0] + bradford[r][1] * d50[1] + bradford[r][2] * d50[2];
+    const double from = bradford[r][0] * white[0] + bradford[r][1] * white[1] + bradford[r][2] * white[2];
+    cone[r][r] = to / from;
+  }
+  multiply3( cone, bradford, step );
+  multiply3( bradford_inverse, step, adapt );
+  multiply3( adapt, m, out );
+}
+
+/* The wide gamut a profile is in, 0 when neither: each of its primaries
+   within 0.005 in x and in y of that of the gamut, both adapted to D50. */
+unsigned wide_gamut_of_profile( const IccProfile& profile )
+{
+  for ( unsigned gamut = 1; gamut <= 2; gamut++ ) {
+    double wanted[3][3];
+    gamut_matrix( gamut, wanted );
+    bool same = true;
+    for ( int c = 0; c < 3 && same; c++ ) {
+      const double sum = profile.matrix[0][c] + profile.matrix[1][c] + profile.matrix[2][c];
+      const double want = wanted[0][c] + wanted[1][c] + wanted[2][c];
+      if ( !( sum > 0 ) ) {
+        return 0;
+      }
+      same = std::fabs( profile.matrix[0][c] / sum - wanted[0][c] / want ) <= 0.005
+             && std::fabs( profile.matrix[1][c] / sum - wanted[1][c] / want ) <= 0.005;
+    }
+    if ( same ) {
+      return gamut;
+    }
+  }
+  return 0;
+}
+
+double srgb_encode( double linear )
+{
+  linear = std::min( 1.0, std::max( 0.0, linear ) );
+  return linear <= 0.0031308 ? linear * 12.92 : 1.055 * std::pow( linear, 1 / 2.4 ) - 0.055;
+}
+
+/* Pixels in a profile to the gamut whose primaries it has, with the sRGB
+   curve: only the curve changes. Or, to_srgb, to sRGB through XYZ. */
+void apply_profile( const IccProfile& profile, bool to_srgb, std::string& rgba )
+{
+  double linear[3][256];
+  for ( int c = 0; c < 3; c++ ) {
+    for ( int v = 0; v < 256; v++ ) {
+      linear[c][v] = profile.curves[c]( v / 255.0 );
+    }
+  }
+  double m[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+  if ( to_srgb ) {
+    double srgb[3][3], inverse[3][3];
+    gamut_matrix( 0, srgb );
+    invert3( srgb, inverse );
+    multiply3( inverse, profile.matrix, m );
+  }
+  for ( size_t at = 0; at + 4 <= rgba.size(); at += 4 ) {
+    uint8_t* p = reinterpret_cast<uint8_t*>( &rgba[at] );
+    const double r = linear[0][p[0]], g = linear[1][p[1]], b = linear[2][p[2]];
+    for ( int c = 0; c < 3; c++ ) {
+      p[c] = uint8_t( std::lround( srgb_encode( m[c][0] * r + m[c][1] * g + m[c][2] * b ) * 255 ) );
+    }
+  }
+}
+
+struct PngInput
+{
+  const std::string* data;
+  size_t at;
+  jmp_buf jump;
+};
+
+void png_input_read( png_structp png, png_bytep out, png_size_t length )
+{
+  PngInput* input = static_cast<PngInput*>( png_get_io_ptr( png ) );
+  if ( !input || length > input->data->size() - input->at ) {
+    png_error( png, "PNG data is truncated" );
+  }
+  memcpy( out, input->data->data() + input->at, length );
+  input->at += length;
+}
+
+void png_input_error( png_structp png, png_const_charp )
+{
+  PngInput* input = static_cast<PngInput*>( png_get_error_ptr( png ) );
+  longjmp( input->jump, 1 );
+}
+
+void png_input_warning( png_structp, png_const_charp ) {}
+
+/* The code points of ITU-T H.273 in a cICP chunk, read from the stream so
+   that any libpng will do: primaries 12 are Display P3 and 9 Rec. 2020, with
+   transfer 13 the sRGB curve. */
+unsigned cicp_gamut( const std::string& png )
+{
+  for ( size_t at = 8; at + 12 <= png.size(); ) {
+    const uint32_t length = be32( png, at );
+    const std::string type = png.substr( at + 4, 4 );
+    if ( type == "IDAT" || type == "IEND" || length > png.size() - at - 12 ) {
+      return 0;
+    }
+    if ( type == "cICP" && length == 4 ) {
+      const uint8_t primaries = png[at + 8], transfer = png[at + 9], matrix = png[at + 10], full = png[at + 11];
+      if ( transfer == 13 && matrix == 0 && full == 1 ) {
+        return primaries == 12 ? 1 : primaries == 9 ? 2 : 0;
+      }
+      return 0;
+    }
+    at += size_t( length ) + 12;
+  }
+  return 0;
+}
+}
+
+bool kitty_png_to_rgba( const std::string& data, std::string& rgba, uint32_t& width, uint32_t& height, uint32_t& gamut )
+{
+  static const char signature[] = "\x89PNG\r\n\x1a\n";
+  gamut = 0;
+  if ( data.size() < 8 || data.compare( 0, 8, signature, 8 ) != 0 ) {
+    return false;
+  }
+  PngInput input;
+  input.data = &data;
+  input.at = 0;
+  std::string icc;
+  IccProfile profile;
+  png_structp png = png_create_read_struct( PNG_LIBPNG_VER_STRING, &input, png_input_error, png_input_warning );
+  if ( !png ) {
+    return false;
+  }
+  png_infop info = png_create_info_struct( png );
+  std::vector<png_bytep> rows;
+  /* What changes after setjmp and is read after a longjmp. */
+  volatile int profile_use = 0; /* 1: wide, curve only; 2: to sRGB */
+  if ( !info || setjmp( input.jump ) ) {
+    png_destroy_read_struct( &png, info ? &info : nullptr, nullptr );
+    rgba.clear();
+    return false;
+  }
+  png_set_read_fn( png, &input, png_input_read );
+  png_read_info( png, info );
+  width = png_get_image_width( png, info );
+  height = png_get_image_height( png, info );
+  const png_byte color_type = png_get_color_type( png, info ), bit_depth = png_get_bit_depth( png, info );
+  int intent = 0;
+  const bool srgb = png_get_sRGB( png, info, &intent ) != 0;
+  png_charp name = nullptr;
+  int compression = 0;
+  png_bytep profile_data = nullptr;
+  png_uint_32 profile_length = 0;
+  if ( png_get_iCCP( png, info, &name, &compression, &profile_data, &profile_length ) & PNG_INFO_iCCP ) {
+    icc.assign( reinterpret_cast<const char*>( profile_data ), profile_length );
+  }
+  /* A file in a wide gamut stays in it, tagged with the gamut. */
+  unsigned source = cicp_gamut( data );
+  bool wide = source != 0;
+  if ( !source && !srgb && !icc.empty() && parse_icc( icc, profile ) && ( source = wide_gamut_of_profile( profile ) ) ) {
+    wide = true;
+    profile_use = 1;
+  }
+  double file_gamma = 0;
+  if ( wide ) {
+    gamut = source;
+  } else if ( srgb ) {
+    /* sRGB, as wanted */
+  } else if ( png_get_gAMA( png, info, &file_gamma ) ) {
+    if ( file_gamma != 0 && std::fabs( file_gamma - 1.0 / 2.2 ) > 0.0001 ) {
+      png_set_gamma( png, 2.2, file_gamma );
+    }
+  } else if ( !icc.empty() && parse_icc( icc, profile ) ) {
+    profile_use = 2; /* any other profile is converted to sRGB */
+  }
+  if ( bit_depth == 16 ) {
+    png_set_strip_16( png );
+  }
+  if ( color_type == PNG_COLOR_TYPE_PALETTE ) {
+    png_set_palette_to_rgb( png );
+  }
+  if ( color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8 ) {
+    png_set_expand_gray_1_2_4_to_8( png );
+  }
+  if ( png_get_valid( png, info, PNG_INFO_tRNS ) ) {
+    png_set_tRNS_to_alpha( png );
+  }
+  if ( color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_PALETTE ) {
+    png_set_filler( png, 0xff, PNG_FILLER_AFTER );
+  }
+  if ( color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA ) {
+    png_set_gray_to_rgb( png );
+  }
+  png_set_interlace_handling( png );
+  png_read_update_info( png, info );
+  const size_t row_bytes = png_get_rowbytes( png, info );
+  size_t size = 0;
+  if ( row_bytes != size_t( width ) * 4 || !graphics_pixel_size( width, height, 4, size ) ) {
+    png_destroy_read_struct( &png, &info, nullptr );
+    return false;
+  }
+  rgba.assign( size, '\0' );
+  rows.resize( height );
+  for ( size_t y = 0; y < height; y++ ) {
+    rows[y] = reinterpret_cast<png_bytep>( &rgba[y * row_bytes] );
+  }
+  png_read_image( png, rows.data() );
+  png_destroy_read_struct( &png, &info, nullptr );
+  if ( profile_use ) {
+    apply_profile( profile, profile_use == 2, rgba );
+  }
+  return true;
+}
+
 bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, const std::string& input,
                             KittyImage& output, const ImageEncoding& encoding, std::string& error )
 {
   error.clear();
   output.png_original = false;
+  output.gamut = 0;
 
   if ( format == KITTY_FORMAT_RGB || format == KITTY_FORMAT_RGBA ) {
     const size_t bytes_per_pixel = format == KITTY_FORMAT_RGB ? 3 : 4;
     size_t expected = 0, rgba_size = 0;
     if ( !graphics_pixel_size( width, height, bytes_per_pixel, expected )
          || !graphics_pixel_size( width, height, 4, rgba_size ) || input.size() != expected ) {
-      error = "EINVAL: pixel data size does not match dimensions";
+      error = "EINVAL:pixel data size does not match dimensions";
       return false;
     }
     return encode_image( reinterpret_cast<const unsigned char*>( input.data() ),
@@ -616,12 +1092,43 @@ bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, co
                           error );
   }
 
+  if ( packed_format( format ) ) {
+    size_t row = 0, expected = 0;
+    if ( !packed_size( format, width, height, row, expected ) || input.size() != expected ) {
+      error = "EINVAL:pixel data size does not match dimensions";
+      return false;
+    }
+    if ( encoding.packed ) {
+      /* Kept as the program packed them, and compressed without loss. */
+      auto container = std::make_shared<std::string>();
+      if ( !packed_encode( format, width, height, input, encoding.packed_zstd, *container ) ) {
+        error = "EINVAL:could not store packed image";
+        return false;
+      }
+      output.format = format;
+      output.width = width;
+      output.height = height;
+      output.palette.clear();
+      output.data = container;
+      return true;
+    }
+    /* A client from before packed state takes the pixels expanded. They are
+       exact all the same: a program that packed its pixels chose every one. */
+    std::string rgb;
+    if ( !packed_expand( format, width, height, input, false, rgb ) ) {
+      error = "EINVAL:pixel data size does not match dimensions";
+      return false;
+    }
+    return encode_image( reinterpret_cast<const unsigned char*>( rgb.data() ), width, height, false, output,
+                         kitty_exact_encoding( encoding ), error );
+  }
+
   if ( format == KITTY_FORMAT_PNG ) {
     png_image image;
     memset( &image, 0, sizeof( image ) );
     image.version = PNG_IMAGE_VERSION;
     if ( input.empty() || !png_image_begin_read_from_memory( &image, input.data(), input.size() ) ) {
-      error = "EINVAL: invalid PNG image";
+      error = "EINVAL:invalid PNG image";
       return false;
     }
     if ( encoding.png && png_has_color_profile( input ) ) {
@@ -636,28 +1143,25 @@ bool kitty_normalize_image( uint32_t format, uint32_t width, uint32_t height, co
       return true;
     }
 
-    size_t rgba_size = 0;
-    const uint32_t png_width = image.width;
-    const uint32_t png_height = image.height;
-    if ( !graphics_pixel_size( png_width, png_height, 4, rgba_size ) ) {
-      png_image_free( &image );
-      error = "EINVAL: PNG dimensions cannot be represented";
-      return false;
-    }
-
-    image.format = PNG_FORMAT_RGBA;
-    std::string rgba( rgba_size, '\0' );
-    if ( !png_image_finish_read( &image, NULL, &rgba[0], 0, NULL ) ) {
-      png_image_free( &image );
-      error = "EINVAL: PNG decode failed";
-      return false;
-    }
     png_image_free( &image );
-    return encode_image(
-      reinterpret_cast<const unsigned char*>( rgba.data() ), png_width, png_height, true, output, encoding, error );
+    /* Its colors as Silkie reads them: a PNG in Display P3 or Rec. 2020 is
+       kept in that gamut and tagged with it, any other profile is converted
+       to sRGB. */
+    std::string rgba;
+    uint32_t png_width = 0, png_height = 0, gamut = 0;
+    if ( !kitty_png_to_rgba( input, rgba, png_width, png_height, gamut ) ) {
+      error = "EINVAL:PNG decode failed";
+      return false;
+    }
+    if ( !encode_image( reinterpret_cast<const unsigned char*>( rgba.data() ), png_width, png_height, true, output,
+                        encoding, error ) ) {
+      return false;
+    }
+    output.gamut = gamut;
+    return true;
   }
 
-  error = "EINVAL: unsupported Kitty image format";
+  error = "EINVAL:unsupported Kitty image format";
   return false;
 }
 
@@ -715,10 +1219,153 @@ bool kitty_dirty_rect( const std::string& before, const std::string& after, uint
   return true;
 }
 
+bool kitty_image_is_packed( const KittyImage& image )
+{
+  return !image.native && packed_format( image.format );
+}
+
+bool kitty_image_packed_bytes( const KittyImage& image, std::string& packed )
+{
+  return kitty_image_is_packed( image ) && image.data
+         && packed_decode( image.format, image.width, image.height, *image.data, packed );
+}
+
+ImageEncoding kitty_exact_encoding( const ImageEncoding& encoding )
+{
+  ImageEncoding exact = encoding;
+  exact.quality = -1;
+  exact.djvu_lossy = false;
+  return exact;
+}
+
+uint32_t kitty_format_bit( uint32_t format )
+{
+  // These are internal capability bits, not the public f values.
+  unsigned bit = 0;
+  for ( uint32_t f : { 301u, 302u, 304u, 308u, 516u, 8u, 16u, 401u, 402u, 404u, 408u, 316u, 632u, 664u, 24u, 32u } ) {
+    if ( f == format ) { return uint32_t( 1 ) << bit; }
+    ++bit;
+  }
+  return 0;
+}
+
+bool kitty_palette_format( uint32_t format )
+{
+  return format == 401 || format == 402 || format == 404 || format == 408;
+}
+
+bool kitty_native_format( uint32_t format )
+{
+  return format == 8 || format == 16 || kitty_palette_format( format )
+         || format == 316 || format == 632 || format == 664;
+}
+
+bool kitty_transfer_valid( uint32_t format, uint32_t transfer )
+{
+  if ( !transfer ) { return true; }
+  if ( format == KITTY_FORMAT_HDR ) { return transfer == 8; }
+  if ( format != 24 && format != 32 && !packed_format( format )
+       && format != 316 && format != 632 && format != 664 ) { return false; }
+  return transfer == 8 || transfer == 13 || transfer == 16 || transfer == 18;
+}
+
+bool kitty_native_size( uint32_t format, uint32_t width, uint32_t height, size_t& size )
+{
+  size_t row = 0;
+  if ( packed_format( format ) ) { return packed_size( format, width, height, row, size ); }
+  if ( kitty_palette_format( format ) ) {
+    const unsigned bits = format - 400;
+    if ( !packed_size( 300 + bits, width, height, row, size ) ) { return false; }
+    const size_t palette = size_t( 4 ) << bits;
+    if ( size > std::string().max_size() - palette ) { return false; }
+    size += palette;
+    return true;
+  }
+  const size_t bytes = format == 8 ? 1 : format == 16 || format == 316 ? 2
+                       : format == 24 ? 3 : format == 32 || format == 632 ? 4 : format == 664 ? 8 : 0;
+  return bytes && graphics_pixel_size( width, height, bytes, size );
+}
+
+/* Decode only at the point of drawing. State always retains every source bit.
+   Indexed pixels require the terminal's live palette and are sent to it as
+   indices; as in Silkie they cannot be sampled by a vector image. */
+bool kitty_native_to_hdr( const KittyImage& image, std::string& half )
+{
+  size_t size = 0, half_size = 0;
+  if ( !image.native || !image.data || image.format == 8 || image.format == 16
+       || !kitty_native_size( image.format, image.width, image.height, size ) || image.data->size() != size
+       || !graphics_pixel_size( image.width, image.height, 8, half_size ) ) { return false; }
+  const std::string& input = *image.data;
+  std::string expanded;
+  if ( packed_format( image.format ) && !packed_expand( image.format, image.width, image.height, input, true, expanded ) ) {
+    return false;
+  }
+  half.resize( half_size );
+  const auto byte = [&]( size_t at ) { return uint32_t( uint8_t( input[at] ) ); };
+  const auto word = [&]( size_t at ) { return byte( at ) | ( byte( at + 1 ) << 8 ); };
+  const unsigned bits = kitty_palette_format( image.format ) ? image.format - 400 : 0;
+  const size_t row = bits ? ( size_t( image.width ) / ( 8 / bits ) + ( image.width % ( 8 / bits ) != 0 ) ) : 0;
+  for ( size_t i = 0, n = half_size / 8; i < n; ++i ) {
+    double c[4] = { 0, 0, 0, 1 };
+    if ( bits ) {
+      const size_t x = i % image.width, y = i / image.width;
+      const unsigned index = ( byte( ( size_t( 4 ) << bits ) + y * row + x / ( 8 / bits ) )
+                               >> ( 8 - bits - ( x % ( 8 / bits ) ) * bits ) ) & ( ( 1u << bits ) - 1 );
+      for ( unsigned k = 0; k < 4; ++k ) { c[k] = byte( 4 * index + k ) / 255.0; }
+    } else if ( !expanded.empty() ) {
+      for ( unsigned k = 0; k < 4; ++k ) { c[k] = uint8_t( expanded[4 * i + k] ) / 255.0; }
+    } else if ( image.format == 316 ) {
+      c[0] = c[1] = c[2] = word( 2 * i ) / 65535.0;
+    } else if ( image.format == 632 ) {
+      const uint32_t value = word( 4 * i ) | ( word( 4 * i + 2 ) << 16 );
+      for ( unsigned k = 0; k < 3; ++k ) { c[k] = ( ( value >> ( 10 * k ) ) & 1023 ) / 1023.0; }
+      c[3] = ( value >> 30 ) / 3.0;
+    } else if ( image.format == 664 ) {
+      for ( unsigned k = 0; k < 4; ++k ) { c[k] = word( 8 * i + 2 * k ) / 65535.0; }
+    } else {
+      const unsigned channels = image.format == 24 ? 3 : 4;
+      for ( unsigned k = 0; k < channels; ++k ) { c[k] = byte( channels * i + k ) / 255.0; }
+    }
+    decode_image_color( image.transfer, image.gamut, c );
+    for ( unsigned k = 0; k < 4; ++k ) {
+      const uint16_t value = float_to_half( float( c[k] ) );
+      half[8 * i + 2 * k] = char( value & 255 );
+      half[8 * i + 2 * k + 1] = char( value >> 8 );
+    }
+  }
+  return true;
+}
+
+uint32_t kitty_packed_formats( const std::string& listing )
+{
+  uint32_t mask = 0;
+  size_t at = 0;
+  while ( at <= listing.size() ) {
+    const size_t end = std::min( listing.find( ',', at ), listing.size() );
+    const std::string item = listing.substr( at, end - at );
+    for ( uint32_t format : { 301u, 302u, 304u, 308u, 516u, 8u, 16u, 401u, 402u, 404u, 408u, 316u, 632u, 664u, 24u, 32u } ) {
+      if ( item == std::to_string( format ) ) {
+        mask |= kitty_format_bit( format );
+      }
+    }
+    at = end + 1;
+  }
+  return mask;
+}
+
 bool kitty_image_to_rgba( const KittyImage& image, std::string& rgba )
 {
+  if ( image.native ) {
+    std::string half;
+    return kitty_native_to_hdr( image, half ) && hdr_to_srgb8( half, image.width, image.height, image.tone_map, rgba );
+  }
   rgba.clear();
   if ( !image.data ) { return false; }
+  if ( kitty_image_is_packed( image ) ) {
+    std::string packed;
+    return kitty_image_packed_bytes( image, packed )
+           && packed_expand( image.format, image.width, image.height, packed, true, rgba );
+  }
   if ( image.format == KITTY_FORMAT_RAW ) {
     size_t size = 0;
     if ( !graphics_pixel_size( image.width, image.height, 4, size ) || image.data->size() != size ) { return false; }
@@ -815,8 +1462,183 @@ std::string kitty_vector_records( const KittyImage& image )
   return image.vector ? image.vector->table()->text() : std::string();
 }
 
+bool kitty_image_needs_gamut( const KittyImage& image )
+{
+  return image.gamut != 0 && image.format != KITTY_FORMAT_VECTOR && image.format != KITTY_FORMAT_HDR
+         && !image.png_original;
+}
+
+bool kitty_image_needs_hdr( const KittyImage& image )
+{
+  return image.format == KITTY_FORMAT_HDR || image.native;
+}
+
+namespace {
+/* The session fonts of the client's terminal, brought in line with the
+   state it is drawn: the uploads the program made are written to it as they
+   come, so what it lacks is what it never saw (a new client, a repaint) and
+   what was released since. A scene sent whole, or a patch, that names a font
+   released since is given that font for the while, as the terminal lays its
+   text out again from the font. */
+class FontReplay
+{
+  const Vector::SessionFonts& now;
+  std::set<std::string> has; /* what the terminal has, as far as is known */
+
+  void upload( const std::string& name, const Vector::SessionFont& font, std::string& out )
+  {
+    if ( font.upload ) {
+      out += encode_vector_service( Vector::FONT_REPLAY_ID, *font.upload, 2 );
+      has.insert( name );
+    }
+  }
+
+public:
+  FontReplay( const Framebuffer& last, const Framebuffer& current, bool initialized, std::string& out )
+    : now( current.get_vector_fonts() )
+  {
+    const Vector::SessionFonts& before = last.get_vector_fonts();
+    if ( initialized ) {
+      for ( const auto& font : before ) {
+        if ( !font.second.released ) {
+          has.insert( font.first );
+        }
+      }
+    }
+    for ( const auto& font : now ) {
+      if ( font.second.released ) {
+        continue;
+      }
+      const auto old = before.find( font.first );
+      const bool changed = old == before.end() || old->second.generation != font.second.generation;
+      if ( initialized && !changed && !old->second.released ) {
+        continue;
+      }
+      if ( initialized && changed && font.second.request ) {
+        has.insert( font.first ); /* the program's own upload, written as it came */
+        continue;
+      }
+      upload( font.first, font.second, out );
+    }
+  }
+  bool available( const std::string& name ) const
+  {
+    const auto font = now.find( name );
+    return has.count( name ) || ( font != now.end() && font->second.upload );
+  }
+  void need( const std::vector<std::string>& names, std::string& out )
+  {
+    for ( const auto& name : names ) {
+      const auto font = now.find( name );
+      if ( !has.count( name ) && font != now.end() ) {
+        upload( name, font->second, out );
+      }
+    }
+  }
+  /* What the terminal has that the program released, it releases. */
+  void finish( std::string& out )
+  {
+    for ( const auto& name : has ) {
+      const auto font = now.find( name );
+      if ( font == now.end() || font->second.released ) {
+        out += encode_vector_service( Vector::FONT_REPLAY_ID, Vector::font_release_request( name ), 2 );
+      }
+    }
+  }
+};
+
+/* Whether some records hold a text record: a line that starts with t. */
+bool has_text_record( const std::string& records )
+{
+  for ( size_t at = 0; at < records.size(); ) {
+    const size_t start = records.find_first_not_of( ' ', at );
+    if ( start == std::string::npos ) {
+      break;
+    }
+    if ( records[start] == 't' && ( start + 1 == records.size() || records[start + 1] == ' ' ) ) {
+      return true;
+    }
+    const size_t nl = records.find( '\n', start );
+    at = nl == std::string::npos ? records.size() : nl + 1;
+  }
+  return false;
+}
+
+/* The session fonts the text records of some steps name. */
+std::vector<std::string> step_fonts( const std::vector<Vector::Step>& steps )
+{
+  std::vector<std::string> names;
+  for ( const auto& step : steps ) {
+    if ( !has_text_record( step.records ) ) {
+      continue;
+    }
+    std::vector<Vector::Record> records;
+    std::string error;
+    if ( Vector::parse_records( step.records, records, error ) ) {
+      for ( const auto& record : records ) {
+        names.insert( names.end(), record.fonts.begin(), record.fonts.end() );
+      }
+    }
+  }
+  return names;
+}
+}
+
+/* A patch the terminal can take: every font its text names is one the
+   terminal has or can be given; otherwise the scene is sent whole. */
+static bool vector_patch_ok( const KittyImage& before,
+                             const KittyImage& after,
+                             std::vector<Vector::Step>& steps,
+                             const FontReplay& fonts )
+{
+  if ( !vector_steps( before, after, steps ) ) {
+    return false;
+  }
+  for ( const auto& name : step_fonts( steps ) ) {
+    if ( !fonts.available( name ) ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void append_kitty_images( std::string& out,
+                                 bool initialized,
+                                 const Framebuffer& last,
+                                 const Framebuffer& current,
+                                 bool convert_sixel,
+                                 bool gamut_supported,
+                                 bool* vector_resent,
+                                 bool viewport_supported,
+                                 bool hdr_supported,
+                                 uint32_t packed_formats,
+                                 bool depth_supported,
+                                 CursorDepth* cursor_depth,
+                                 FontReplay& fonts );
+
 void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& last, const Framebuffer& current,
-                         bool convert_sixel, bool gamut_supported, bool* vector_resent )
+                         bool convert_sixel, bool gamut_supported, bool* vector_resent, bool viewport_supported,
+                         bool hdr_supported, uint32_t packed_formats, bool depth_supported, CursorDepth* cursor_depth )
+{
+  FontReplay fonts( last, current, initialized, out );
+  append_kitty_images( out, initialized, last, current, convert_sixel, gamut_supported, vector_resent,
+                       viewport_supported, hdr_supported, packed_formats, depth_supported, cursor_depth, fonts );
+  fonts.finish( out );
+}
+
+static void append_kitty_images( std::string& out,
+                                 bool initialized,
+                                 const Framebuffer& last,
+                                 const Framebuffer& current,
+                                 bool convert_sixel,
+                                 bool gamut_supported,
+                                 bool* vector_resent,
+                                 bool viewport_supported,
+                                 bool hdr_supported,
+                                 uint32_t packed_formats,
+                                 bool depth_supported,
+                                 CursorDepth* cursor_depth,
+                                 FontReplay& fonts )
 {
   // Sixel-origin images must not be implicitly converted by the existing
   // Kitty renderer. Their client compositor will choose native sixel first.
@@ -835,7 +1657,8 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     for ( const auto& image : current.get_kitty_images() ) {
       if ( image.second.origin == ImageOrigin::Sixel ) { new_kitty.erase_kitty_image( image.first ); }
     }
-    append_kitty_frame( out, initialized, old_kitty, new_kitty, false, gamut_supported, vector_resent );
+    append_kitty_images( out, initialized, old_kitty, new_kitty, false, gamut_supported, vector_resent,
+                         viewport_supported, hdr_supported, packed_formats, depth_supported, cursor_depth, fonts );
     return;
   }
   const std::map<uint32_t, KittyImage>& now_images = current.get_kitty_images();
@@ -869,7 +1692,7 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
   for ( std::map<uint32_t, KittyImage>::const_iterator it = old_images.begin(); it != old_images.end(); ++it ) {
     std::map<uint32_t, KittyImage>::const_iterator cur = now_images.find( it->first );
     if ( cur == now_images.end()
-         || ( !( cur->second == it->second ) && !( initialized && vector_steps( it->second, cur->second, steps ) )
+         || ( !( cur->second == it->second ) && !( initialized && vector_patch_ok( it->second, cur->second, steps, fonts ) )
               && !( initialized && rect_patch( it->second, cur->second ) ) ) ) {
       if ( placements_cleared.insert( it->first ).second ) {
         char buf[64];
@@ -886,8 +1709,9 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     if ( initialized && old != old_images.end() && old->second == it->second ) {
       continue;
     }
-    if ( initialized && old != old_images.end() && vector_steps( old->second, it->second, steps ) ) {
+    if ( initialized && old != old_images.end() && vector_patch_ok( old->second, it->second, steps, fonts ) ) {
       /* Ink the terminal drew itself is on its screen already. */
+      fonts.need( step_fonts( steps ), out );
       std::string records;
       for ( const auto& step : steps ) {
         if ( !step.terminal_applied ) {
@@ -911,6 +1735,14 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
         std::string controls( "a=f,r=1,X=1,q=2" );
         append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
         append_u32_key( controls, "i", it->second.id, false );
+        /* The rectangle is in the gamut of the image: a terminal that has the
+           image in that gamut is told so, any other gets sRGB as it got the
+           image. */
+        if ( gamut_supported ) {
+          append_u32_key( controls, "G", it->second.gamut );
+        } else {
+          gamut_pixels_to_srgb( it->second.gamut, rect, 4 );
+        }
         append_u32_key( controls, "x", it->second.delta->x );
         append_u32_key( controls, "y", it->second.delta->y );
         append_u32_key( controls, "s", it->second.delta->rect.width );
@@ -921,21 +1753,91 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     }
     std::string controls( "a=t,q=2" ), pixels;
     if ( it->second.format == KITTY_FORMAT_VECTOR ) {
-      pixels = kitty_vector_records( it->second );
+      /* The terminal lays the text out again, with the fonts it names. Text
+         that names a font nobody can give it would cost the whole scene,
+         so it is left out. */
+      if ( it->second.vector ) {
+        const std::shared_ptr<const Vector::Table> table = it->second.vector->table();
+        std::vector<std::string> names;
+        for ( const auto& font : table->fonts() ) {
+          names.push_back( font.first );
+        }
+        fonts.need( names, out );
+        pixels = table->text( [&]( const std::string& name ) { return fonts.available( name ); } );
+      }
       append_u32_key( controls, "f", KITTY_FORMAT_VECTOR, false );
+      append_u32_key( controls, "T", it->second.tone_map );
       if ( vector_resent ) {
         *vector_resent = true;
+      }
+    } else if ( it->second.native ) {
+      const KittyImage& image = it->second;
+      const bool has_transfer = image.transfer && image.transfer != 13;
+      const bool precision_terminal = packed_formats & ( kitty_format_bit( 316 ) | kitty_format_bit( 632 ) | kitty_format_bit( 664 ) );
+      if ( ( packed_formats & kitty_format_bit( image.format ) ) && ( !has_transfer || precision_terminal )
+           && ( !image.gamut || gamut_supported ) ) {
+        pixels = *image.data;
+        append_u32_key( controls, "f", image.format, false );
+        append_u32_key( controls, "G", image.gamut );
+        append_u32_key( controls, "E", image.transfer );
+        append_u32_key( controls, "T", image.tone_map );
+      } else if ( image.format == 8 || image.format == 16 ) {
+        // Only the terminal can resolve its live palette. Keep the indices.
+        pixels = *image.data;
+        append_u32_key( controls, "f", image.format, false );
+      } else {
+        std::string half;
+        if ( !kitty_native_to_hdr( image, half ) ) { continue; }
+        if ( hdr_supported ) {
+          pixels.swap( half );
+          append_u32_key( controls, "f", KITTY_FORMAT_HDR, false );
+          append_u32_key( controls, "T", image.tone_map );
+        } else if ( hdr_to_srgb8( half, image.width, image.height, image.tone_map, pixels ) ) {
+          append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
+        } else { continue; }
       }
     } else if ( it->second.format == KITTY_FORMAT_HDR ) {
       if ( !it->second.data ) {
         continue;
       }
-      pixels = *it->second.data;
-      append_u32_key( controls, "f", KITTY_FORMAT_HDR, false );
-      append_u32_key( controls, "T", it->second.tone_map );
+      if ( hdr_supported ) {
+        pixels = *it->second.data;
+        append_u32_key( controls, "f", KITTY_FORMAT_HDR, false );
+        append_u32_key( controls, "T", it->second.tone_map );
+      } else if ( hdr_to_srgb8( *it->second.data, it->second.width, it->second.height, it->second.tone_map, pixels ) ) {
+        /* Shown at SDR, clipped or, with T=1, compressed, as such a
+           terminal would show it. */
+        append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
+      } else {
+        continue;
+      }
     } else if ( it->second.format == KITTY_FORMAT_PNG && it->second.png_original && it->second.data ) {
       pixels = *it->second.data;
       append_u32_key( controls, "f", KITTY_FORMAT_PNG, false );
+    } else if ( kitty_image_is_packed( it->second ) ) {
+      /* A terminal that lists the format is given the pixels as the program
+         packed them; any other, the same pixels as RGB. */
+      std::string packed;
+      if ( !kitty_image_packed_bytes( it->second, packed ) ) {
+        continue;
+      }
+      const uint32_t gamut = it->second.format == 516 ? it->second.gamut : 0;
+      if ( ( packed_formats & kitty_format_bit( it->second.format ) ) && ( !gamut || gamut_supported ) ) {
+        pixels.swap( packed );
+        append_u32_key( controls, "f", it->second.format, false );
+        if ( gamut_supported ) {
+          append_u32_key( controls, "G", gamut );
+        }
+      } else if ( packed_expand( it->second.format, it->second.width, it->second.height, packed, false, pixels ) ) {
+        append_u32_key( controls, "f", KITTY_FORMAT_RGB, false );
+        if ( gamut_supported ) {
+          append_u32_key( controls, "G", gamut );
+        } else {
+          gamut_pixels_to_srgb( gamut, pixels, 3 );
+        }
+      } else {
+        continue;
+      }
     } else {
       if ( !kitty_image_to_rgba( it->second, pixels ) ) {
         continue;
@@ -943,6 +1845,8 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
       append_u32_key( controls, "f", KITTY_FORMAT_RGBA, false );
       if ( gamut_supported ) {
         append_u32_key( controls, "G", it->second.gamut );
+      } else {
+        gamut_pixels_to_srgb( it->second.gamut, pixels, 4 );
       }
     }
     append_u32_key( controls, "i", it->second.id, false );
@@ -989,6 +1893,10 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
     }
   }
 
+  /* What depth the terminal's cursor has is the text's, which the caller
+     knows or does not; a placement that needs another gives it one. */
+  CursorDepth depth_unknown;
+  CursorDepth& depth_now = cursor_depth ? *cursor_depth : depth_unknown;
   for ( size_t i = 0; i < now_places.size(); i++ ) {
     bool already = false;
     if ( initialized ) {
@@ -1006,6 +1914,17 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
       continue;
     }
     const KittyPlacement& p = now_places[i];
+    /* A placement takes the depth the terminal's cursor has: the terminal is
+       given the placement's, and whoever draws next gives it its own again. */
+    if ( depth_supported
+         && ( !depth_now.known || p.depth != depth_now.depth || p.depth_pixels != depth_now.depth_pixels
+              || p.phase != depth_now.phase ) ) {
+      out.append( depth_frame( p.depth, p.depth_pixels, p.phase ) );
+      depth_now.known = true;
+      depth_now.depth = p.depth;
+      depth_now.depth_pixels = p.depth_pixels;
+      depth_now.phase = p.phase;
+    }
     if ( !p.unicode_placeholder && p.parent_image == 0 ) {
       char cup[32];
       snprintf( cup, sizeof( cup ), "\033[%d;%dH", p.row + 1, p.col + 1 );
@@ -1042,6 +1961,10 @@ void append_kitty_frame( std::string& out, bool initialized, const Framebuffer& 
       snprintf( buf, sizeof( buf ), ",V=%d", p.V );
       controls.append( buf );
     }
+    /* A terminal that does not know F would not make the placement at all. */
+    if ( viewport_supported ) {
+      append_u32_key( controls, "F", p.flags );
+    }
     out.append( "\033_G" );
     out.append( controls );
     out.append( "\033\\" );
@@ -1076,6 +1999,410 @@ bool kitty_inflate( const std::string& input, std::string& output, size_t hint )
     }
     dest_len = dest_len > capacity / 2 ? capacity : dest_len * 2;
   }
+}
+
+/* Compositing, as kitty does it for the frames of an image. */
+namespace {
+uint32_t div255_round( uint32_t x )
+{
+  const uint32_t y = x + 128;
+  return ( y + ( y >> 8 ) ) >> 8;
+}
+
+/* The over operator on straight alpha in 8 bit integers, bit for bit as
+   kitty's blend_pixel_over_straight. */
+void blend_pixel( unsigned char* dst, const unsigned char* src )
+{
+  const uint32_t alpha = src[3], dst_alpha = dst[3], inv_alpha = 255 - alpha;
+  const uint32_t denom = alpha * 255 + dst_alpha * inv_alpha;
+  if ( !denom ) {
+    return;
+  }
+  for ( unsigned c = 0; c < 3; c++ ) {
+    const uint32_t num = src[c] * alpha * 255 + dst[c] * dst_alpha * inv_alpha;
+    dst[c] = static_cast<unsigned char>( lrintf( float( num ) / float( denom ) ) );
+  }
+  dst[3] = static_cast<unsigned char>( div255_round( denom ) );
+}
+
+/* The same in linear light, on half floats, as kitty's blend_over_half. */
+void blend_pixel_half( unsigned char* dst, const unsigned char* src )
+{
+  uint16_t d[4], s[4];
+  memcpy( d, dst, 8 );
+  memcpy( s, src, 8 );
+  const float alpha = half_to_float( s[3] ), dst_alpha = half_to_float( d[3] ) * ( 1.f - alpha ),
+              out_alpha = alpha + dst_alpha;
+  if ( out_alpha <= 0.f ) {
+    return;
+  }
+  for ( unsigned c = 0; c < 3; c++ ) {
+    d[c] = float_to_half( ( half_to_float( s[c] ) * alpha + half_to_float( d[c] ) * dst_alpha ) / out_alpha );
+  }
+  d[3] = float_to_half( out_alpha );
+  memcpy( dst, d, 8 );
+}
+
+void compose_row( unsigned char* under, const unsigned char* over, size_t pixels, bool blend, bool half )
+{
+  const size_t size = half ? 8 : 4;
+  if ( !blend ) {
+    memmove( under, over, pixels * size );
+    return;
+  }
+  for ( size_t x = 0; x < pixels; x++ ) {
+    if ( half ) {
+      blend_pixel_half( under + x * size, over + x * size );
+    } else {
+      blend_pixel( under + x * size, over + x * size );
+    }
+  }
+}
+}
+
+void kitty_compose( std::string& under, uint32_t under_width, uint32_t under_height, const std::string& over,
+                    uint32_t over_width, uint32_t over_height, uint32_t x, uint32_t y, bool blend, bool half )
+{
+  const size_t size = half ? 8 : 4;
+  const size_t row_pixels = std::min<size_t>( x < under_width ? under_width - x : 0, over_width );
+  for ( size_t row = 0; row + y < under_height && row < over_height && row_pixels; row++ ) {
+    const size_t under_at = ( ( row + y ) * under_width + x ) * size, over_at = row * over_width * size;
+    if ( under_at + row_pixels * size > under.size() || over_at + row_pixels * size > over.size() ) {
+      break;
+    }
+    compose_row( reinterpret_cast<unsigned char*>( &under[under_at] ),
+                 reinterpret_cast<const unsigned char*>( over.data() + over_at ), row_pixels, blend, half );
+  }
+}
+
+void kitty_compose_within( std::string& pixels, uint32_t width, uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy,
+                           uint32_t w, uint32_t h, bool blend, bool half )
+{
+  const size_t size = half ? 8 : 4;
+  for ( size_t row = 0; row < h; row++ ) {
+    const size_t dst = ( ( row + dy ) * width + dx ) * size, src = ( ( row + sy ) * width + sx ) * size;
+    if ( dst + size_t( w ) * size > pixels.size() || src + size_t( w ) * size > pixels.size() ) {
+      break;
+    }
+    compose_row( reinterpret_cast<unsigned char*>( &pixels[dst] ),
+                 reinterpret_cast<const unsigned char*>( pixels.data() + src ), w, blend, half );
+  }
+}
+
+/* Relative placements; see Silkie's docs/viewport-protocol.rst and kitty's
+   graphics protocol. */
+namespace {
+/* The placement a reference (image, placement) names: the first with that
+   image and id, as kitty takes the first placement of an image for a
+   reference without one. */
+const KittyPlacement* find_placement( const Framebuffer& fb, uint32_t image, uint32_t placement )
+{
+  for ( const auto& candidate : fb.get_kitty_placements() ) {
+    if ( candidate.image_id == image && candidate.placement_id == placement ) {
+      return &candidate;
+    }
+  }
+  return nullptr;
+}
+
+/* The number of a row and column diacritic of a Unicode placeholder, as
+   kitty's diacritic_to_num has them (Unicode 17.0.0): 0 for none. */
+int diacritic_to_num( uint32_t code )
+{
+  static const uint32_t ranges[][3] = {
+  { 0x305, 0x306, 1 }, { 0x30d, 0x30f, 2 }, { 0x310, 0x311, 4 }, { 0x312, 0x313, 5 }, { 0x33d, 0x340, 6 }, {
+  0x346, 0x347, 9 }, { 0x34a, 0x34d, 10 }, { 0x350, 0x353, 13 }, { 0x357, 0x358, 16 }, { 0x35b, 0x35c, 17 }, {
+  0x363, 0x370, 18 }, { 0x483, 0x488, 31 }, { 0x592, 0x596, 36 }, { 0x597, 0x59a, 40 }, { 0x59c, 0x5a2, 43 }, {
+  0x5a8, 0x5aa, 49 }, { 0x5ab, 0x5ad, 51 }, { 0x5af, 0x5b0, 53 }, { 0x5c4, 0x5c5, 54 }, { 0x610, 0x618, 55 }, {
+  0x657, 0x65c, 63 }, { 0x65d, 0x65f, 68 }, { 0x6d6, 0x6dd, 70 }, { 0x6df, 0x6e3, 77 }, { 0x6e4, 0x6e5, 81 }, {
+  0x6e7, 0x6e9, 82 }, { 0x6eb, 0x6ed, 84 }, { 0x730, 0x731, 86 }, { 0x732, 0x734, 87 }, { 0x735, 0x737, 89 }, {
+  0x73a, 0x73b, 91 }, { 0x73d, 0x73e, 92 }, { 0x73f, 0x742, 93 }, { 0x743, 0x744, 96 }, { 0x745, 0x746, 97 }, {
+  0x747, 0x748, 98 }, { 0x749, 0x74b, 99 }, { 0x7eb, 0x7f2, 101 }, { 0x7f3, 0x7f4, 108 }, { 0x816, 0x81a, 109 }, {
+  0x81b, 0x824, 113 }, { 0x825, 0x828, 122 }, { 0x829, 0x82e, 125 }, { 0x951, 0x952, 130 }, { 0x953, 0x955, 131 },
+  { 0xf82, 0xf84, 133 }, { 0xf86, 0xf88, 135 }, { 0x135d, 0x1360, 137 }, { 0x17dd, 0x17de, 140 }, { 0x193a,
+  0x193b, 141 }, { 0x1a17, 0x1a18, 142 }, { 0x1a75, 0x1a7d, 143 }, { 0x1b6b, 0x1b6c, 151 }, { 0x1b6d, 0x1b74, 152
+  }, { 0x1cd0, 0x1cd3, 159 }, { 0x1cda, 0x1cdc, 162 }, { 0x1ce0, 0x1ce1, 164 }, { 0x1dc0, 0x1dc2, 165 }, { 0x1dc3,
+  0x1dca, 167 }, { 0x1dcb, 0x1dcd, 174 }, { 0x1dd1, 0x1de7, 176 }, { 0x1dfe, 0x1dff, 198 }, { 0x20d0, 0x20d2, 199
+  }, { 0x20d4, 0x20d8, 201 }, { 0x20db, 0x20dd, 205 }, { 0x20e1, 0x20e2, 207 }, { 0x20e7, 0x20e8, 208 }, { 0x20e9,
+  0x20ea, 209 }, { 0x20f0, 0x20f1, 210 }, { 0x2cef, 0x2cf2, 211 }, { 0x2de0, 0x2e00, 214 }, { 0xa66f, 0xa670, 246
+  }, { 0xa67c, 0xa67e, 247 }, { 0xa6f0, 0xa6f2, 249 }, { 0xa8e0, 0xa8f2, 251 }, { 0xaab0, 0xaab1, 269 }, { 0xaab2,
+  0xaab4, 270 }, { 0xaab7, 0xaab9, 272 }, { 0xaabe, 0xaac0, 274 }, { 0xaac1, 0xaac2, 276 }, { 0xfe20, 0xfe27, 277
+  }, { 0x10a0f, 0x10a10, 284 }, { 0x10a38, 0x10a39, 285 }, { 0x1d185, 0x1d18a, 286 }, { 0x1d1aa, 0x1d1ae, 291 }, {
+  0x1d242, 0x1d245, 295 }
+  };
+  for ( const auto& range : ranges ) {
+    if ( code >= range[0] && code <= range[1] ) {
+      return int( code - range[0] + range[2] );
+    }
+  }
+  return 0;
+}
+
+std::vector<uint32_t> code_points( const std::string& text )
+{
+  std::vector<uint32_t> out;
+  for ( size_t i = 0; i < text.size(); ) {
+    const unsigned char c = text[i];
+    const size_t length = c < 0x80 ? 1 : ( c >> 5 ) == 6 ? 2 : ( c >> 4 ) == 14 ? 3 : ( c >> 3 ) == 30 ? 4 : 0;
+    if ( !length || i + length > text.size() ) {
+      break;
+    }
+    uint32_t code = length == 1 ? c : c & ( 0x7f >> length );
+    for ( size_t k = 1; k < length; k++ ) {
+      code = code << 6 | ( uint8_t( text[i + k] ) & 0x3f );
+    }
+    out.push_back( code );
+    i += length;
+  }
+  return out;
+}
+
+/* The cell kitty takes a virtual placement to be at: the first row and the
+   first column of the placeholders of its image (U+10EEEE, the image id in
+   the foreground color and, above 24 bits, in the third diacritic). The
+   placement id is in the underline color, which this terminal does not keep,
+   so every placeholder of the image counts. */
+bool placeholder_cell( const Framebuffer& fb, const KittyPlacement& virtual_placement, int64_t& row, int64_t& col )
+{
+  bool found = false;
+  for ( int y = 0; y < fb.ds.get_height(); y++ ) {
+    for ( int x = 0; x < fb.ds.get_width(); x++ ) {
+      const Cell* cell = fb.get_cell( y, x );
+      const std::string& contents = cell->get_contents();
+      if ( contents.compare( 0, 4, "\xF4\x8E\xBB\xAE" ) != 0 ) {
+        continue;
+      }
+      const uint32_t color = cell->get_renditions().get_foreground_color();
+      uint32_t id = Renditions::is_true_color( color ) ? color & 0xffffff : color >= 30 ? color - 30 : 0;
+      const std::vector<uint32_t> codes = code_points( contents );
+      if ( codes.size() >= 4 && diacritic_to_num( codes[3] ) > 0 ) {
+        id |= uint32_t( diacritic_to_num( codes[3] ) - 1 ) << 24;
+      }
+      if ( id != virtual_placement.image_id ) {
+        continue;
+      }
+      row = found ? std::min<int64_t>( row, y ) : y;
+      col = found ? std::min<int64_t>( col, x ) : x;
+      found = true;
+    }
+  }
+  return found;
+}
+}
+
+std::string kitty_check_parent( const Framebuffer& fb, KittyPlacement& p )
+{
+  if ( !p.parent_image ) {
+    return std::string();
+  }
+  char reply[256];
+  if ( !fb.find_kitty_image( p.parent_image ) ) {
+    snprintf( reply, sizeof reply, "ENOPARENT:Put command refers to a parent image with id: %u that does not exist",
+              p.parent_image );
+    return reply;
+  }
+  const KittyPlacement* parent = nullptr;
+  for ( const auto& candidate : fb.get_kitty_placements() ) {
+    if ( candidate.image_id == p.parent_image && ( !p.parent_placement || candidate.placement_id == p.parent_placement ) ) {
+      parent = &candidate;
+      break;
+    }
+  }
+  if ( !parent && !p.parent_placement ) {
+    snprintf( reply, sizeof reply, "ENOPARENT:Put command refers to a parent image with id: %u that has no placements",
+              p.parent_image );
+    return reply;
+  }
+  if ( !parent ) {
+    snprintf( reply, sizeof reply,
+              "ENOPARENT:Put command refers to a parent image placement with id: %u and placement id: %u that does not "
+              "exist",
+              p.parent_image, p.parent_placement );
+    return reply;
+  }
+  p.parent_placement = parent->placement_id;
+  /* A placement with an id that exists already is the one put moves. */
+  const bool replaces = p.placement_id && find_placement( fb, p.image_id, p.placement_id );
+  if ( replaces && p.parent_image == p.image_id && p.parent_placement == p.placement_id ) {
+    return "EINVAL:Put command refers to itself as its own parent";
+  }
+  const KittyPlacement* r = &p;
+  for ( unsigned depth = 0; r->parent_image; ) {
+    if ( r == &p && depth ) {
+      return "ECYCLE:This parent reference creates a cycle";
+    }
+    if ( depth++ >= KITTY_PARENT_DEPTH_LIMIT ) {
+      return "ETOODEEP:Too many levels of parent references";
+    }
+    if ( !fb.find_kitty_image( r->parent_image ) ) {
+      snprintf( reply, sizeof reply, "ENOENT:One of the ancestors of this ref with image id: %u not found",
+                r->parent_image );
+      return reply;
+    }
+    const KittyPlacement* next = replaces && r->parent_image == p.image_id && r->parent_placement == p.placement_id
+                                   ? &p
+                                   : find_placement( fb, r->parent_image, r->parent_placement );
+    if ( !next ) {
+      snprintf( reply, sizeof reply,
+                "ENOENT:One of the ancestors of this ref with image id: %u and ref id: %u not found", r->parent_image,
+                r->parent_placement );
+      return reply;
+    }
+    r = next;
+  }
+  return std::string();
+}
+
+bool kitty_placement_cell( const Framebuffer& fb, const KittyPlacement& p, int64_t& row, int64_t& col )
+{
+  int64_t dx = 0, dy = 0;
+  const KittyPlacement* r = &p;
+  for ( unsigned depth = 0; r->parent_image; depth++ ) {
+    if ( depth >= KITTY_PARENT_DEPTH_LIMIT ) {
+      return false; /* a cycle, or too many ancestors */
+    }
+    const KittyPlacement* parent = find_placement( fb, r->parent_image, r->parent_placement );
+    if ( !parent ) {
+      return false;
+    }
+    dx += r->H;
+    dy += r->V;
+    if ( parent->unicode_placeholder ) {
+      if ( !placeholder_cell( fb, *parent, row, col ) ) {
+        return false;
+      }
+      row += dy;
+      col += dx;
+      return true;
+    }
+    r = parent;
+  }
+  if ( r->unicode_placeholder ) {
+    return false;
+  }
+  row = r->row + dy;
+  col = r->col + dx;
+  return true;
+}
+
+/* The cell a placement resolves to, as kitty resolves it, and where its cell
+   box starts in pixels; see Silkie's docs/viewport-protocol.rst. The chain
+   of parents is at most 8 long: that is a rule of the protocol (ETOODEEP). */
+namespace {
+struct PlacementOrigin
+{
+  int64_t row = 0, col = 0;
+  double x = 0, y = 0;
+  bool clipped = false;
+  double left = 0, top = 0, right = 0, bottom = 0;
+};
+
+bool placement_box( const Framebuffer& fb, const KittyPlacement& p, double cw, double ch, double x, double y,
+                    KittyPlacementRect& r )
+{
+  const KittyImage* image = fb.find_kitty_image( p.image_id );
+  if ( !image ) {
+    return false;
+  }
+  r.sx = p.src_x;
+  r.sy = p.src_y;
+  r.sw = std::min<double>( p.src_w ? p.src_w : image->width,
+                           double( image->width ) - std::min<double>( p.src_x, image->width ) );
+  r.sh = std::min<double>( p.src_h ? p.src_h : image->height,
+                           double( image->height ) - std::min<double>( p.src_y, image->height ) );
+  if ( !( r.sw > 0 ) || !( r.sh > 0 ) ) {
+    return false;
+  }
+  /* An offset into the cell is at most the cell, less a pixel. */
+  r.left = x + std::min<double>( p.cell_x, cw - 1 );
+  r.top = y + std::min<double>( p.cell_y, ch - 1 );
+  if ( p.rows ) {
+    r.height = y + double( p.rows ) * ch - r.top;
+    r.width = p.columns ? x + double( p.columns ) * cw - r.left : r.height * r.sw / r.sh;
+  } else {
+    r.width = p.columns ? x + double( p.columns ) * cw - r.left : r.sw;
+    r.height = r.width * r.sh / r.sw;
+  }
+  return r.width > 0 && r.height > 0;
+}
+
+bool resolve_placement( const Framebuffer& fb, const KittyPlacement& p, double cw, double ch, unsigned depth,
+                        PlacementOrigin& out )
+{
+  if ( depth >= KITTY_PARENT_DEPTH_LIMIT ) {
+    return false; /* a cycle, or too many ancestors */
+  }
+  const KittyPlacement* parent = find_placement( fb, p.parent_image, p.parent_placement );
+  if ( !parent ) {
+    return false;
+  }
+  PlacementOrigin above;
+  if ( parent->unicode_placeholder ) {
+    /* A virtual parent is where kitty puts the cells of its placeholders. */
+    if ( !placeholder_cell( fb, *parent, above.row, above.col ) ) {
+      return false;
+    }
+    above.x = double( above.col ) * cw;
+    above.y = double( above.row ) * ch;
+  } else if ( parent->parent_image ) {
+    if ( !resolve_placement( fb, *parent, cw, ch, depth + 1, above ) ) {
+      return false;
+    }
+  } else {
+    above.row = parent->row;
+    above.col = parent->col;
+    above.x = above.col * cw;
+    above.y = above.row * ch;
+  }
+  if ( ( parent->flags & KITTY_PLACE_VIEWPORT ) && !parent->unicode_placeholder ) {
+    KittyPlacementRect box;
+    if ( !placement_box( fb, *parent, cw, ch, above.x, above.y, box ) ) {
+      return false;
+    }
+    const double right = box.left + box.width, bottom = box.top + box.height;
+    above.left = above.clipped ? std::max( above.left, box.left ) : box.left;
+    above.top = above.clipped ? std::max( above.top, box.top ) : box.top;
+    above.right = above.clipped ? std::min( above.right, right ) : right;
+    above.bottom = above.clipped ? std::min( above.bottom, bottom ) : bottom;
+    above.clipped = true;
+  }
+  out = above;
+  out.row = above.row + p.V;
+  out.col = above.col + p.H;
+  if ( p.flags & KITTY_PLACE_PIXEL_RELATIVE ) {
+    out.x = above.x + std::min<double>( parent->cell_x, cw - 1 ) + double( p.H ) * cw;
+    out.y = above.y + std::min<double>( parent->cell_y, ch - 1 ) + double( p.V ) * ch;
+  } else {
+    out.x = out.col * cw;
+    out.y = out.row * ch;
+  }
+  return true;
+}
+}
+
+bool kitty_placement_rect( const Framebuffer& fb, const KittyPlacement& p, double cw, double ch, KittyPlacementRect& out )
+{
+  if ( p.unicode_placeholder ) {
+    return false;
+  }
+  PlacementOrigin origin;
+  if ( p.parent_image ) {
+    if ( !resolve_placement( fb, p, cw, ch, 0, origin ) ) {
+      return false;
+    }
+  } else {
+    origin.x = double( p.col ) * cw;
+    origin.y = double( p.row ) * ch;
+  }
+  if ( !placement_box( fb, p, cw, ch, origin.x, origin.y, out ) ) {
+    return false;
+  }
+  out.clipped = origin.clipped;
+  out.clip_left = origin.left;
+  out.clip_top = origin.top;
+  out.clip_right = origin.right;
+  out.clip_bottom = origin.bottom;
+  return true;
 }
 
 }

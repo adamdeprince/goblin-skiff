@@ -562,6 +562,11 @@ static void CSI_SGR( Framebuffer* fb, Dispatcher* dispatch )
       continue;
     }
 
+    if ( rendition >= 10 && rendition <= 19 ) {
+      dispatch->ext_relay.font_slot( *fb, rendition - 10 );
+      continue;
+    }
+
     fb->ds.add_rendition( rendition );
   }
 }
@@ -737,6 +742,7 @@ static void Esc_RIS( Framebuffer* fb, Dispatcher* dispatch )
      the client compares keep counting, so it never mistakes a new brush for
      one it has. */
   dispatch->ext_relay.hard_reset( *fb, dispatch->terminal_to_host );
+  dispatch->ext_relay.notices.push_back( "\033]7501;state=clear\033\\" );
   const uint32_t brush_gen = fb->ds.ext.brush_gen, frame_output = fb->ds.ext.frame_output;
   fb->reset();
   fb->ds.ext.brush_gen = brush_gen;
@@ -749,9 +755,11 @@ static void Esc_RIS( Framebuffer* fb, Dispatcher* dispatch )
 
 static Function func_Esc_RIS( ESCAPE, "c", Esc_RIS );
 
-/* soft reset */
-static void CSI_DECSTR( Framebuffer* fb, Dispatcher* dispatch __attribute( ( unused ) ) )
+/* soft reset. Silkie resets the extension modes, the brush and the pointer
+   shapes on a soft reset as on RIS. */
+static void CSI_DECSTR( Framebuffer* fb, Dispatcher* dispatch )
 {
+  dispatch->ext_relay.hard_reset( *fb, dispatch->terminal_to_host );
   fb->soft_reset();
 }
 
@@ -823,13 +831,37 @@ void Dispatcher::finish_st_frame( bool complete, Framebuffer* fb )
   if ( complete && fb && !pending_pointer.empty() ) { pointer_dispatch( pending_pointer, fb ); }
   pending_pointer.clear();
   if ( complete && fb && !pending_extension.empty() ) {
-    ext_relay.program_frame( pending_extension, *fb, client_geometry, terminal_to_host );
+    if ( pending_extension.compare( 0, 5, "7501;" ) == 0 ) {
+      ext_relay.notices.push_back( "\033]" + pending_extension + "\033\\" );
+    } else if ( pending_extension == "133;A" ) {
+      ext_relay.reset_modes( *fb, terminal_to_host );
+      ext_relay.notices.push_back( "\033]7501;process-exited\033\\" );
+    } else {
+      ext_relay.program_frame( pending_extension, *fb, client_geometry, terminal_to_host );
+    }
   }
   pending_extension.clear();
 }
 
 void Dispatcher::OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb )
 {
+  /* Program Status is a one-shot event, delivered ahead of screen and image
+     traffic on the reliable notice channel. Let the terminal parse its fields. */
+  static const std::wstring status = L"7501;";
+  if ( OSC_string.size() >= status.size() && std::equal( status.begin(), status.end(), OSC_string.begin() ) ) {
+    if ( OSC_overflow ) { return; }
+    std::string payload;
+    for ( wchar_t c : OSC_string ) {
+      if ( c < 32 || c > 126 ) { return; }
+      payload += char( c );
+    }
+    if ( act->char_present && ( act->ch == 7 || act->ch == 0x9c ) ) {
+      ext_relay.notices.push_back( "\033]" + payload + "\033\\" );
+    } else if ( act->char_present && act->ch == 0x1b ) {
+      pending_extension = std::move( payload );
+    }
+    return;
+  }
   const auto prefix = goblin::pointer::prefix;
   if ( OSC_string.size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), OSC_string.begin() ) ) {
     if ( OSC_overflow || OSC_string.size() > goblin::pointer::max_frame ) { return; }
@@ -849,6 +881,31 @@ void Dispatcher::OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb )
     if ( act->char_present && ( act->ch == 0x07 || act->ch == 0x9c ) ) { download_events.push_back( std::move( body ) ); }
     else if ( act->char_present && act->ch == 0x1b ) { pending_download = std::move( body ); }
     return;
+  }
+  {
+    /* Desktop notifications: OSC 9, OSC 99 and OSC 777 notify, whose text is
+       whatever the program wrote. They are not terminal state and never
+       become any: the client's terminal is given each one once, ahead of the
+       screen. OSC 9;4 reports progress and goes with the other frames. */
+    static const std::wstring notify = L"777;notify;";
+    const bool osc9 = OSC_string.size() >= 2 && OSC_string[0] == L'9' && OSC_string[1] == L';';
+    const bool osc99 = OSC_string.size() >= 3 && OSC_string[0] == L'9' && OSC_string[1] == L'9' && OSC_string[2] == L';';
+    const bool osc777 = OSC_string.size() >= notify.size()
+                        && std::equal( notify.begin(), notify.end(), OSC_string.begin() );
+    if ( osc9 || osc99 || osc777 ) {
+      if ( OSC_overflow ) { return; }
+      std::string payload;
+      for ( wchar_t c : OSC_string ) {
+        if ( c < 32 || c == 127 || ( c >= 0x80 && c < 0xa0 ) ) { return; }
+        Cell::append_to_str( payload, c );
+      }
+      if ( is_progress_report( payload ) ) {
+        ext_relay.outputs.push_back( "\033]" + payload + "\033\\" );
+      } else {
+        ext_relay.notification( payload, terminal_to_host );
+      }
+      return;
+    }
   }
   if ( OSC_string.size() >= 4 && std::wstring( OSC_string.begin(), OSC_string.begin() + 4 ) == L"777;" ) {
     /* Silkie's extensions. A frame is acted on once it is complete, and never
@@ -870,7 +927,13 @@ void Dispatcher::OSC_dispatch( const Parser::OSC_End* act, Framebuffer* fb )
   }
   if ( OSC_string.size() >= 5 && std::wstring( OSC_string.begin(), OSC_string.begin() + 5 ) == L"133;A" ) {
     /* A shell prompt: whatever set the extension modes is no longer in charge. */
-    ext_relay.reset_modes( *fb, terminal_to_host );
+    if ( OSC_overflow ) { return; }
+    if ( act->char_present && ( act->ch == 7 || act->ch == 0x9c ) ) {
+      ext_relay.reset_modes( *fb, terminal_to_host );
+      ext_relay.notices.push_back( "\033]7501;process-exited\033\\" );
+    } else if ( act->char_present && act->ch == 0x1b ) {
+      pending_extension = "133;A";
+    }
     return;
   }
   if ( OSC_string.size() >= 5 && std::wstring( OSC_string.begin(), OSC_string.begin() + 5 ) == L"5522;" ) {

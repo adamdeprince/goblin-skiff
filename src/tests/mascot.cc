@@ -96,6 +96,34 @@ void tests()
   sixel_splash.start( {}, true );
   require( sixel_splash.filter( "\033[?62;4c", 0 ).empty() && sixel_splash.selected() == Mascot::Format::Sixel,
            "sixel capability" );
+  /* The G key of the wide gamut protocol: asked with a pixel, after the
+     Kitty query and before DA1, which bounds a terminal's silence. */
+  Mascot::Splash gamut;
+  const auto gamut_queries = gamut.start( {}, true );
+  const size_t gamut_query = gamut_queries.find( "\033_Gi=4294967292,s=1,v=1,a=q,t=d,f=24,G=1;AAAA\033\\" );
+  require( gamut_query != std::string::npos && gamut_query < gamut_queries.find( "\033[c" ), "gamut query before DA1" );
+  require( !gamut.image_gamut_known() && !gamut.supports_image_gamut(), "not known before an answer" );
+  const std::string gamut_replies = "\033_Gi=4294967294;OK\033\\\033_Gi=4294967292;OK\033\\\033[?62;4c";
+  for ( size_t split = 0; split <= gamut_replies.size(); split++ ) {
+    Mascot::Splash with_gamut;
+    with_gamut.start( {}, true );
+    require( with_gamut.filter( "a" + gamut_replies.substr( 0, split ), 0 )
+                 + with_gamut.filter( gamut_replies.substr( split ) + "b", 1 )
+               == "ab",
+             "the answer stays local" );
+    require( with_gamut.image_gamut_known() && with_gamut.supports_image_gamut() && with_gamut.supports_sixel(),
+             "a terminal that takes G" );
+  }
+  Mascot::Splash without_gamut;
+  without_gamut.start( {}, true );
+  require( without_gamut.filter( "\033_Gi=4294967294;OK\033\\\033[?62c", 0 ).empty()
+             && without_gamut.image_gamut_known() && !without_gamut.supports_image_gamut(),
+           "DA1 with no answer before it: no G" );
+  Mascot::Splash refused_gamut;
+  refused_gamut.start( {}, true );
+  require( refused_gamut.filter( "\033_Gi=4294967292;EINVAL:bad key\033\\\033[?62c", 0 ).empty()
+             && refused_gamut.image_gamut_known() && !refused_gamut.supports_image_gamut(),
+           "an error: no G" );
   Mascot::Splash dumb;
   require( dumb.start( {}, false ).empty() && !dumb.active(), "noninteractive no probes" );
   require( dumb.cursor_ready( 0 ) && dumb.start_row() == -1, "no cursor wait without a tty" );
@@ -125,7 +153,8 @@ void tests()
       Mascot::Splash limited( Mascot::Format::Auto, allow_kitty, allow_sixel );
       const auto queries = limited.start( {}, true );
       require( ( queries.find( "\033_G" ) != std::string::npos ) == allow_kitty, "Kitty probe override" );
-      require( ( queries.find( "\033[c" ) != std::string::npos ) == allow_sixel, "sixel DA probe override" );
+      require( ( queries.find( "\033[c" ) != std::string::npos ) == ( allow_sixel || allow_kitty ),
+               "DA bounds the sixel and gamut probes" );
       require( ( queries.find( "\033[16t" ) != std::string::npos ) == ( allow_sixel || allow_kitty ), "graphics size probe override" );
       std::string allowed_replies;
       if ( allow_kitty ) {

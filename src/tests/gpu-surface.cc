@@ -14,6 +14,7 @@
 #include <dlfcn.h>
 #endif
 #if defined( __linux__ )
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -53,9 +54,22 @@ void refusals()
   std::string reply = terminal.act( "\033_Ga=t,t=g,i=5;" + base64( "dmabuf:1:AB24:0:3,0,8" ) + "\033\\" );
   require( reply.find( "EINVAL" ) != std::string::npos, "a surface that is not this platform's: " + reply );
   reply = terminal.act( "\033_Ga=t,t=g,i=5,m=1;" + base64( "iosurface:1" ) + "\033\\\033_Gm=0;\033\\" );
-  require( reply.find( "EINVAL: chunking" ) != std::string::npos, "no chunking with t=g: " + reply );
+  require( reply.find( "EINVAL:chunking" ) != std::string::npos, "no chunking with t=g: " + reply );
   reply = terminal.act( "\033_Ga=r,i=77\033\\" );
   require( reply.find( "ENOENT" ) != std::string::npos, "refresh of no image: " + reply );
+}
+
+/* The gpu_surfaces spec: an image backed by a surface has no frames. */
+[[maybe_unused]] void frames_refused( Complete& terminal )
+{
+  std::string reply = terminal.act( "\033_Ga=f,i=5,r=1,f=32,s=1,v=1,m=1;AAAA\033\\\033_Gm=0;AAAA\033\\" );
+  require( reply.find( "EINVAL:Animation frames are not supported for GPU surface images" ) != std::string::npos,
+           "no frames for a surface: " + reply );
+  reply = terminal.act( "\033_Ga=c,i=5,r=1,c=1,x=1,w=1,h=1\033\\" );
+  require( reply.find( "EINVAL:Composition is not supported for GPU surface images" ) != std::string::npos,
+           "nor composition: " + reply );
+  require( terminal.get_fb().get_kitty_images().size() >= 1 && !terminal.get_fb().find_kitty_image( 1 ),
+           "and the chunks made no image" );
 }
 
 #if defined( __APPLE__ )
@@ -125,6 +139,29 @@ void iosurface()
   require( terminal.get_fb().get_kitty_placements().size() == 1, "placed" );
 
   refreshes( terminal, [&]( unsigned char value ) { s.base[6] = value; } ); /* R of the second pixel, in BGRA */
+  frames_refused( terminal );
+
+  /* The surface is held from the first t=g: the program may let go of it,
+     and a=r still reads the same buffer. */
+  void* cf = dlopen( "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY );
+  void* io = dlopen( "/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_LAZY );
+  auto release = reinterpret_cast<void ( * )( const void* )>( dlsym( cf, "CFRelease" ) );
+  auto lookup = reinterpret_cast<void* ( * )( uint32_t )>( dlsym( io, "IOSurfaceLookup" ) );
+  require( release && lookup, "symbols" );
+  unsigned char* base = s.base;
+  release( s.ref );
+  base[6] = 77;
+  reply = terminal.act( "\033_Ga=r,i=5\033\\" );
+  require( reply.find( "OK" ) != std::string::npos && kitty_image_to_rgba( *terminal.get_fb().find_kitty_image( 5 ), rgba )
+             && static_cast<unsigned char>( rgba[4] ) == 77,
+           "refreshed from the surface it holds, after the program let go: " + reply );
+  /* Deleting the image lets go of the surface, which then goes. */
+  terminal.act( "\033_Ga=d,d=I,i=5,q=2\033\\" );
+  void* gone = lookup( s.id );
+  if ( gone ) {
+    release( gone );
+  }
+  require( !gone, "the surface is let go with its image" );
 }
 #endif
 
@@ -207,7 +244,29 @@ void dmabuf()
              "a reason for GBM: " + reply );
     std::cout << "GBM could not read the dma-buf here: " << reply.substr( reply.find( ';' ) + 1 ) << "\n";
   }
+  frames_refused( terminal );
+
+  /* The descriptors are held from the first t=g: the program may close its
+     own, and a=r still reads the same buffer. */
   close( buffer );
+  memory[4] = 77;
+  reply = terminal.act( "\033_Ga=r,i=5\033\\" );
+  require( reply.find( "OK" ) != std::string::npos && kitty_image_to_rgba( *terminal.get_fb().find_kitty_image( 5 ), rgba )
+             && static_cast<unsigned char>( rgba[4] ) == 77,
+           "refreshed from the descriptors it holds, after the program closed its own: " + reply );
+  const auto open_descriptors = []() {
+    size_t count = 0;
+    if ( DIR* dir = opendir( "/proc/self/fd" ) ) {
+      while ( readdir( dir ) ) {
+        count++;
+      }
+      closedir( dir );
+    }
+    return count;
+  };
+  const size_t held = open_descriptors();
+  terminal.act( "\033_Ga=d,d=I,i=5,q=2\033\\" );
+  require( open_descriptors() == held - 1, "and closed when the image is deleted" );
   munmap( memory, page );
   close( memfd );
   close( device );

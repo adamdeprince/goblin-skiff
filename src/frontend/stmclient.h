@@ -47,11 +47,14 @@
 #include "src/frontend/mascot.h"
 #include "src/terminal/goblin_pointer.hpp"
 #include "src/terminal/extensions.h"
+#include "src/terminal/ssh_agent.hpp"
+#include "src/terminal/handmotion.h"
 #include "src/frontend/controlpanel.h"
 #include "src/frontend/mimeclipboard.h"
 #include "src/frontend/download.h"
 #include "src/frontend/terminaloverlay.h"
 #include "src/network/bulkcontrol.h"
+#include "src/network/noticechannel.h"
 #include "src/network/networktransport.h"
 #include "src/statesync/completeterminal.h"
 #include "src/statesync/user.h"
@@ -75,8 +78,24 @@ private:
   /* Reports and replies from this terminal's OSC 777 and OSC 22, apart from
      the keystrokes they arrive among. */
   Terminal::Ext::InputDemux ext_demux;
+  /* Desktop notifications from the server, and what the terminal answers of
+     them, cross ahead of everything else: see src/network/noticechannel.h.
+     Answers given before the server has said whether it takes that channel
+     wait for it to say. */
+  Network::NoticeChannel notices;
+  std::deque<std::string> notice_answers_waiting;
+  void flush_notice_answers( void );
   uint64_t ext_demux_at = 0;
   Terminal::ExtensionClient ext_client;
+  terminal_agent::Client agent;
+  bool agent_output(const std::string &);
+  bool agent_input(const std::string &);
+  void agent_tick();
+  /* What a hand reports is smoothed, then thinned, then collected for the link. */
+  Terminal::Motion::Settings hand_settings { Terminal::Motion::Settings::from_environment() };
+  Terminal::Motion::Smoother hand_smoother { hand_settings };
+  Terminal::Motion::PointerCollector pointer_collector { hand_settings };
+  FILE* record_input = nullptr; /* GOBLIN_SKIFF_RECORD_INPUT: every frame of this terminal, with its time */
   bool ext_info_dirty = false;
   bool sixel_state = getenv( "GOBLIN_SKIFF_SIXEL_STATE" ) && !strcmp( getenv( "GOBLIN_SKIFF_SIXEL_STATE" ), "1" );
   bool mime_negotiated = getenv( "GOBLIN_SKIFF_CLIPBOARD" ) && !strcmp( getenv( "GOBLIN_SKIFF_CLIPBOARD" ), "1" );
@@ -133,6 +152,11 @@ private:
   bool process_demuxed( const Terminal::Ext::InputDemux::Output& output );
   void push_extension_input( const Terminal::ExtensionInput& input );
   void process_terminal_frame( const std::string& frame );
+  bool process_plain_input( const std::string& bytes );
+  bool send_collected( const std::vector<Terminal::Motion::PointerCollector::Item>& items );
+  void collect_smoothed( const std::vector<Terminal::ExtensionInput>& inputs );
+  void record_frame( const std::string& kind, const std::string& bytes );
+  bool flush_collected( void );
   bool process_user_keys( const std::string& bytes, bool paste );
   bool is_command_key( const std::string& key );
   void dismiss_mascot();
@@ -205,10 +229,7 @@ public:
         exit( 1 );
       }
     }
-    if ( agent_forwarding && !forwarder.enable_agent_forwarding( error ) ) {
-      fprintf( stderr, "Cannot enable agent forwarding: %s\n", error.c_str() );
-      exit( 1 );
-    }
+    agent.allow_local(agent_forwarding);
     if ( x11_forwarding && !forwarder.enable_x11_forwarding( error ) ) {
       fprintf( stderr, "Cannot enable X11 forwarding: %s\n", error.c_str() );
       exit( 1 );

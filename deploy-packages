@@ -1,0 +1,1394 @@
+#!/usr/bin/env python3
+"""deploy-packages: build goblin-skiff on naamah (amd64), graviton5 (arm64),
+loongson (Kylin loongarch64) and this Mac, then publish the packages to
+https://apt.goblinreactor.com/ and https://brew.goblinreactor.com/.
+
+    ./deploy-packages plan                  show what would be built where
+    ./deploy-packages                       source snapshot, all builds, publish
+    ./deploy-packages source                only make the source snapshot
+    ./deploy-packages build [--host H]      build (or retry) targets
+    ./deploy-packages publish [--check]     publish a complete stage
+
+The release source is a snapshot of the committed tree, and the upstream
+GitHub repository must be public. Artifacts are staged in
+~/goblin-deploy/<name>/<version>/. Publishing goes through hail (signing
+key, reprepro, Homebrew tap, signed catalogs), then the changed files are
+uploaded to the Cloudflare R2 buckets that serve both sites. Published
+files are immutable: bump the version in the repository for a new release.
+
+Only the PROJECT block differs between repositories; the shared driver
+below it is identical everywhere.
+"""
+
+# ======================================================================
+# PROJECT: the only part of this file that differs between repositories.
+# ======================================================================
+PROJECT = {
+    # Release identity: source archives are NAME-VERSION.tar.gz.
+    'name': 'goblin-skiff',
+    # Must be a public repository; deploy-packages checks before building.
+    'github': 'adamdeprince/goblin-skiff',
+    'license': 'GPL-3.0-or-later AND ISC',
+    'homepage': 'https://skiff.goblinreactor.com/',
+    'description': 'Fork of Mosh optimized for bandwidth-constrained links.',
+    # (file, regex): the non-empty groups, joined with +, from the committed file.
+    'version': ('GOBLIN_VERSION', r'^([0-9][0-9.]*)-(\S+)'),
+    # Debian packages every Linux target must produce.
+    'debs': ['goblin-skiff'],
+    # Tap entries the Mac build writes as $DEPLOY_OUT/NAME.rb: formula (prebuilt archive),
+    # bottle (built with "$DEPLOY_SELF" brew-bottle) or cask.
+    'brew': {'goblin-skiff': 'bottle'},
+    # Targets this project cannot build yet, and why.
+    'unsupported': {},
+    'hosts': {
+        'naamah': {'jobs': 16},
+        'loongson': {'env': {'CC': '/opt/loongson-gcc-15.2.0/bin/gcc',
+                             'CXX': '/opt/loongson-gcc-15.2.0/bin/g++'}},
+    },
+    # Runs on each Linux target in the extracted source; writes .deb files to $DEPLOY_OUT.
+    'linux_build': r'''
+if [ "$DEPLOY_HOST" = loongson ]; then
+    . packaging/loongson/build-release.sh
+else
+version="$DEPLOY_VERSION+$DEPLOY_SUITE$DEPLOY_DEB_REVISION"
+sed -i "1s/^goblin-skiff ([^)]*) [^;]*;/goblin-skiff ($version) $DEPLOY_SUITE;/" debian/changelog
+grep -q "^goblin-skiff ($version) $DEPLOY_SUITE;" debian/changelog || deploy_die "could not set the changelog version"
+dpkg-checkbuilddeps || deploy_die "install the missing Build-Depends on $(hostname)"
+dpkg-buildpackage -us -uc -b -j"$DEPLOY_JOBS"
+mv ../goblin-skiff_*.deb "$DEPLOY_OUT/"
+cp src/tests/test-suite.log "$DEPLOY_OUT/test-suite.log"
+fi
+''',
+    # Runs on this Mac in the extracted source; writes NAME.rb and artifacts to $DEPLOY_OUT.
+    'mac_build': r'''
+bash packaging/homebrew/build-isolated.sh
+''',
+}
+
+# ======================================================================
+# Shared driver. Everything below this line is identical in every
+# repository that has a deploy-packages script; change it everywhere at once.
+# ======================================================================
+DRIVER_VERSION = 1
+
+import argparse
+import concurrent.futures
+import contextlib
+import datetime
+import fcntl
+import gzip
+import hashlib
+import json
+import mimetypes
+import os
+from pathlib import Path
+import platform
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import threading
+from urllib.error import HTTPError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+ROOT = Path(__file__).resolve().parent
+TARGETS = ('naamah', 'graviton5', 'loongson', 'localhost')
+APT_SITE = 'apt.goblinreactor.com'
+BREW_SITE = 'brew.goblinreactor.com'
+SIGNING_KEY = 'B7B61E8CB85A9270530364F23273CB62402FC793'
+TAP = 'goblinreactor/tap'
+BUILD_TAP = 'goblin-deploy/build'
+# Native build hosts. A project's HOSTS entries are merged over these.
+HOST_DEFAULTS = {
+    'naamah': {'ssh': 'adam@naamah'},
+    'graviton5': {'ssh': 'graviton5'},
+    'loongson': {
+        'ssh': 'loongson',
+        # The old naamah jump is obsolete; connect directly.
+        'ssh_options': ['-o', 'ProxyJump=none'],
+        # Transfers to the Loongson box are capped at 100 KiB/s and must be
+        # resumable (see stride-align/docs/loongson-build.md).
+        'rsync_options': ['--partial', '--append-verify', '--bwlimit=100'],
+        # Kylin V10 SP1 (old-world loongarch64) publishes to the kylin suite.
+        'suite': 'kylin',
+        # Kylin's system Python is too old for the packaging scripts.
+        'python': '/home/adam/.pyenv/versions/3.12.13/bin/python3.12',
+        'env': {'PATH': '/home/adam/.pyenv/versions/3.12.13/bin:/opt/loongson-cmake-4.3.2/bin:$PATH'},
+    },
+    'localhost': {},
+}
+# hail holds the signing key, the reprepro database and the staging mirror.
+# The public sites have been served from Cloudflare R2 since 2026-10-15.
+PUBLISHER = {
+    'ssh': 'hail',
+    'admin': '/home/adam/.local/share/goblin-apt',
+    'mount': '/mnt/distribution',
+    'rsync_module': 'distribution',
+    # hail's rsync daemon only listens on its trusted LAN/VPN address.
+    'rsync_host': '192.168.1.50',
+}
+R2_CONFIG = '~/.config/goblin-deploy/r2.json'
+IMMUTABLE_PREFIXES = ('sources/', 'pool/', 'releases/', 'homebrew-tap.git/objects/')
+CATALOG_FILES = ('packages.json', 'packages.json.asc')
+
+# Helpers available to LINUX_BUILD and MAC_BUILD hooks.
+SHELL_HELPERS = r'''
+deploy_die() { printf 'deploy-packages: %s\n' "$*" >&2; exit 1; }
+
+# deploy_make_deb PACKAGE VERSION ROOT SUMMARY [EXTRA_DEPENDS]
+# Builds $DEPLOY_OUT/PACKAGE_VERSION_ARCH.deb from the file tree ROOT.
+# Depends comes from dpkg-shlibdeps over the ELF files in ROOT plus
+# EXTRA_DEPENDS. DEPLOY_DEB_ARCH overrides the architecture (e.g. all),
+# DEPLOY_DEB_SECTION sets the section, DEPLOY_DEB_EXTRA_FIELDS adds control
+# lines (e.g. Recommends: kitty) and DEPLOY_SHLIBDEPS_ARGS adds dpkg-shlibdeps
+# arguments such as -l<private library directory>.
+deploy_make_deb() {
+  local package=$1 version=$2 root=$3 summary=$4 extra=${5:-}
+  local arch=${DEPLOY_DEB_ARCH:-$DEPLOY_ARCH} work depends='' file size
+  test -d "$root" || deploy_die "deploy_make_deb: $root is not a directory"
+  rm -rf "$root/DEBIAN"
+  mkdir -p "$root/DEBIAN"
+  work=$(mktemp -d "$DEPLOY_WORK/deb.XXXXXX")
+  mkdir -p "$work/debian"
+  printf 'Source: %s\n\nPackage: %s\nArchitecture: any\nDescription: %s\n' \
+    "$package" "$package" "$summary" > "$work/debian/control"
+  local elfs=()
+  while IFS= read -r -d '' file; do
+    if [ "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" = 7f454c46 ]; then
+      elfs+=("-e$file")
+    fi
+  done < <(find "$root" -type f ! -path "$root/DEBIAN/*" -print0)
+  if [ "${#elfs[@]}" -gt 0 ]; then
+    # shellcheck disable=SC2086
+    depends=$(cd "$work" && dpkg-shlibdeps -O ${DEPLOY_SHLIBDEPS_ARGS:-} "${elfs[@]}" |
+      sed -n 's/^shlibs:Depends=//p')
+  fi
+  if [ -n "$extra" ]; then depends=${depends:+$depends, }$extra; fi
+  size=$(du -sk --exclude=DEBIAN "$root" | cut -f1)
+  {
+    printf 'Package: %s\nVersion: %s\nArchitecture: %s\n' "$package" "$version" "$arch"
+    printf 'Maintainer: %s\nSection: %s\nPriority: optional\n' "$DEPLOY_MAINTAINER" "${DEPLOY_DEB_SECTION:-misc}"
+    printf 'Installed-Size: %s\n' "$size"
+    if [ -n "$DEPLOY_HOMEPAGE" ]; then printf 'Homepage: %s\n' "$DEPLOY_HOMEPAGE"; fi
+    if [ -n "$depends" ]; then printf 'Depends: %s\n' "$depends"; fi
+    if [ -n "${DEPLOY_DEB_EXTRA_FIELDS:-}" ]; then printf '%s\n' "$DEPLOY_DEB_EXTRA_FIELDS"; fi
+    printf 'Description: %s\n' "$summary"
+    printf '%s\n' "$DEPLOY_DESCRIPTION" | fold -s -w 74 | sed 's/^/ /; s/^ $/ ./'
+  } > "$root/DEBIAN/control"
+  (cd "$root" && find . -type f ! -path './DEBIAN/*' -printf '%P\0' | sort -z |
+    xargs -0 -r md5sum) > "$root/DEBIAN/md5sums"
+  dpkg-deb --root-owner-group -Zxz --build "$root" \
+    "$DEPLOY_OUT/${package}_${version#*:}_${arch}.deb"
+  rm -rf "$work"
+}
+'''
+
+COLLECT_DEBS = r'''
+cd "$DEPLOY_OUT"
+{
+  printf 'arch\t%s\n' "$DEPLOY_ARCH"
+  printf 'suite\t%s\n' "$DEPLOY_SUITE"
+  printf 'os\t%s\n' "$( (. /etc/os-release && printf %s "${PRETTY_NAME:-$NAME}") 2>/dev/null || uname -s)"
+  printf 'kernel\t%s\n' "$(uname -srm)"
+  printf 'compiler\t%s\n' "$( (${CXX:-c++} --version || ${CC:-cc} --version) 2>/dev/null | head -n 1)"
+} > deploy-host.tsv
+: > deploy-debs.tsv
+for deb in *.deb; do
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$deb" \
+    "$(dpkg-deb -f "$deb" Package)" "$(dpkg-deb -f "$deb" Version)" \
+    "$(dpkg-deb -f "$deb" Architecture)" "$(sha256sum "$deb" | cut -d' ' -f1)" \
+    "$(dpkg-deb -f "$deb" Depends | tr '\n\t' '  ')" >> deploy-debs.tsv
+done
+'''
+
+
+class DeployError(RuntimeError):
+    pass
+
+
+# ---------------------------------------------------------------- utilities
+
+def log(*parts):
+    print('deploy-packages:', *parts, flush=True)
+
+
+def run(*command, **kwargs):
+    return subprocess.run([str(x) for x in command], check=True, **kwargs)
+
+
+def output(*command, **kwargs):
+    return run(*command, text=True, stdout=subprocess.PIPE, **kwargs).stdout.strip()
+
+
+def digest(path):
+    result = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        while True:
+            block = stream.read(1 << 20)  # Streaming chunk size, not an input limit.
+            if not block:
+                return result.hexdigest()
+            result.update(block)
+
+
+def write_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.new')
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+    temporary.replace(path)
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text())
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def brew_version(version):
+    # Debian marks local version suffixes with +; Homebrew and file names use -.
+    return version.replace('+', '-').replace('~', '-')
+
+
+def extract_archive(archive, destination):
+    with tarfile.open(archive) as tar:
+        if hasattr(tarfile, 'data_filter'):
+            tar.extractall(destination, filter='data')
+        else:
+            tar.extractall(destination)
+
+
+def is_git_checkout():
+    try:
+        top = output('git', '-C', ROOT, 'rev-parse', '--show-toplevel', stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    return Path(top).resolve() == ROOT
+
+
+def project_version(allow_dirty=False):
+    """VERSION is (file, regex); the regex's non-empty groups are joined with +.
+
+    The committed file is read, matching the snapshot that will be built,
+    unless --allow-dirty publishes the working tree.
+    """
+    filename, pattern = PROJECT['version']
+    if is_git_checkout() and not allow_dirty:
+        try:
+            text = output('git', '-C', ROOT, 'show', 'HEAD:' + filename, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError:
+            raise DeployError('%s is not committed; the release source is the committed tree' % filename)
+    else:
+        text = (ROOT / filename).read_text()
+    match = re.search(pattern, text, re.M)
+    if not match:
+        raise DeployError('Cannot find the version in %s with %r' % (filename, pattern))
+    version = '+'.join(g.strip() for g in match.groups() if g)
+    if not re.fullmatch(r'[0-9][0-9A-Za-z.+~-]*', version):
+        raise DeployError('Unusable version string: %r' % version)
+    return version
+
+
+def maintainer():
+    value = os.environ.get('DEPLOY_MAINTAINER')
+    if value:
+        return value
+    try:
+        user = output('git', '-C', ROOT, 'config', 'user.name')
+        address = output('git', '-C', ROOT, 'config', 'user.email')
+    except subprocess.CalledProcessError:
+        raise DeployError('Set DEPLOY_MAINTAINER="Name <address>" or git config user.name/user.email')
+    return '%s <%s>' % (user, address)
+
+
+def host_config(target):
+    config = json.loads(json.dumps(HOST_DEFAULTS.get(target, {})))
+    for key, value in PROJECT.get('hosts', {}).get(target, {}).items():
+        if key == 'env':
+            config.setdefault('env', {}).update(value)
+        else:
+            config[key] = value
+    return config
+
+
+def ssh_base(config):
+    return ['ssh', '-S', 'none', '-o', 'BatchMode=yes'] + config.get('ssh_options', [])
+
+
+def rsync_ssh(config):
+    return ' '.join(shlex.quote(part) for part in ssh_base(config))
+
+
+def deploy_root():
+    base = Path(os.environ.get('GOBLIN_DEPLOY_ROOT', '~/goblin-deploy')).expanduser()
+    return base / PROJECT['name']
+
+
+def release_identity(release):
+    return '%s-%s-%s' % (release['name'], release['brew_version'], release['source']['sha256'][:16])
+
+
+def unsupported_targets():
+    return dict(PROJECT.get('unsupported', {}))
+
+
+def selected_targets(skip):
+    return [t for t in TARGETS if t not in unsupported_targets() and t not in set(skip or ())]
+
+
+# --------------------------------------------------------------- preflight
+
+def github_refs():
+    """Return the commit ids advertised by the public GitHub repository, or fail.
+
+    Credential helpers and prompts are disabled, so this only succeeds for a
+    repository that anyone can read.
+    """
+    url = 'https://github.com/%s.git' % PROJECT['github']
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='/bin/false', SSH_ASKPASS='/bin/false')
+    try:
+        listing = output('git', '-c', 'credential.helper=', '-c', 'core.askPass=/bin/false',
+                         'ls-remote', url, env=env, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError:
+        raise DeployError(url + ' is not publicly readable. Only public repositories are deployed.')
+    return {line.split()[0] for line in listing.splitlines() if line.strip()}
+
+
+def check_public(allow_unpublished):
+    refs = github_refs()
+    log('upstream is public: https://github.com/' + PROJECT['github'])
+    if not is_git_checkout():
+        log('WARNING: %s is not a git checkout; cannot confirm the source matches GitHub.' % ROOT)
+        return None
+    head = output('git', '-C', ROOT, 'rev-parse', 'HEAD')
+    published = head in refs
+    for sha in sorted(refs):
+        if published:
+            break
+        known = subprocess.run(['git', '-C', str(ROOT), 'cat-file', '-e', sha + '^{commit}'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        published = known and subprocess.run(
+            ['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', head, sha]).returncode == 0
+    if not published:
+        message = ('HEAD %s is not on https://github.com/%s (push it, or git fetch if it is already there)'
+                   % (head[:12], PROJECT['github']))
+        if not allow_unpublished:
+            raise DeployError(message + '. Pass --allow-unpublished to deploy anyway.')
+        log('WARNING:', message)
+    return head
+
+
+# ------------------------------------------------------------------ source
+
+def deterministic_targz(directory, archive, mtime):
+    """Write directory to archive with sorted entries and fixed metadata."""
+    def normalize(info):
+        info.uid = info.gid = 0
+        info.uname = info.gname = 'root'
+        info.mtime = mtime
+        if info.isdir() or info.isfile():
+            info.mode = 0o755 if (info.isdir() or info.mode & 0o111) else 0o644
+        return info
+    base = directory.parent
+    paths = [directory] + sorted(directory.rglob('*'), key=lambda p: p.relative_to(base).as_posix())
+    with archive.open('wb') as raw:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0, compresslevel=9) as compressed:
+            with tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as tar:
+                for path in paths:
+                    tar.add(path, arcname=path.relative_to(base).as_posix(), recursive=False, filter=normalize)
+
+
+def git_snapshot_commit(allow_dirty):
+    """Return (HEAD, commit to archive, has uncommitted changes)."""
+    head = output('git', '-C', ROOT, 'rev-parse', 'HEAD')
+    status = output('git', '-C', ROOT, 'status', '--porcelain', '--untracked-files=normal')
+    tracked = [line for line in status.splitlines() if not line.startswith('??')]
+    untracked = [line for line in status.splitlines() if line.startswith('??')]
+    if untracked:
+        log('note: %d untracked file(s) are not part of the release source' % len(untracked))
+    if not tracked:
+        return head, head, False
+    if not allow_dirty:
+        raise DeployError('The working tree has uncommitted changes:\n  ' + '\n  '.join(tracked[:40]) +
+                          ('\n  ...' if len(tracked) > 40 else '') +
+                          '\nCommit and push them, or pass --allow-dirty to publish the working tree.')
+    log('WARNING: publishing uncommitted changes to tracked files')
+    with tempfile.TemporaryDirectory(prefix='deploy-index-') as temporary:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / 'index'))
+        run('git', '-C', ROOT, 'read-tree', 'HEAD', env=env)
+        run('git', '-C', ROOT, 'add', '-u', env=env)
+        tree = output('git', '-C', ROOT, 'write-tree', env=env)
+        date = output('git', '-C', ROOT, 'log', '-1', '--format=%cI', 'HEAD')
+        env.update(GIT_AUTHOR_NAME='deploy-packages', GIT_AUTHOR_EMAIL='deploy-packages@localhost',
+                   GIT_COMMITTER_NAME='deploy-packages', GIT_COMMITTER_EMAIL='deploy-packages@localhost',
+                   GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+        snapshot = output('git', '-C', ROOT, 'commit-tree', tree, '-p', head, '-m',
+                          'deploy-packages working-tree snapshot', env=env)
+    return head, snapshot, True
+
+
+def make_source(version, allow_dirty, allow_unpublished):
+    """Return (archive in a temporary directory, metadata)."""
+    head = check_public(allow_unpublished)
+    temporary = Path(tempfile.mkdtemp(prefix='deploy-source-'))
+    prefix = '%s-%s' % (PROJECT['name'], brew_version(version))
+    env = dict(os.environ, DEPLOY_NAME=PROJECT['name'], DEPLOY_VERSION=version,
+               DEPLOY_BREW_VERSION=brew_version(version), DEPLOY_REPO=str(ROOT),
+               DEPLOY_SOURCE_PREFIX=prefix)
+    if PROJECT.get('source_command'):
+        out = temporary / 'out'
+        out.mkdir()
+        env['DEPLOY_SOURCE_DIR'] = str(out)
+        dirty = git_snapshot_commit(allow_dirty)[2] if head else None
+        log('running SOURCE_COMMAND')
+        run('bash', '-euo', 'pipefail', '-c', PROJECT['source_command'], cwd=ROOT, env=env)
+        archives = sorted(out.glob('*.tar.gz'))
+        if len(archives) != 1:
+            raise DeployError('SOURCE_COMMAND must write exactly one .tar.gz to $DEPLOY_SOURCE_DIR')
+        return archives[0], {'commit': head, 'snapshot_commit': None, 'dirty': dirty}
+    if head is None:
+        raise DeployError('Not a git checkout; this project needs a SOURCE_COMMAND.')
+    if (ROOT / '.gitmodules').exists():
+        raise DeployError('git snapshots do not include submodules; give this project a SOURCE_COMMAND.')
+    head, snapshot, dirty = git_snapshot_commit(allow_dirty)
+    tree = temporary / 'tree'
+    tree.mkdir()
+    exported = temporary / 'export.tar'
+    with exported.open('wb') as stream:
+        run('git', '-C', ROOT, 'archive', '--format=tar', '--prefix=' + prefix + '/', snapshot, stdout=stream)
+    extract_archive(exported, tree)
+    exported.unlink()
+    source_root = tree / prefix
+    if PROJECT.get('source_hook'):
+        log('running SOURCE_HOOK in the snapshot')
+        run('bash', '-euo', 'pipefail', '-c', PROJECT['source_hook'], cwd=source_root, env=env)
+    mtime = int(output('git', '-C', ROOT, 'log', '-1', '--format=%ct', 'HEAD'))
+    result = temporary / (prefix + '.tar.gz')
+    deterministic_targz(source_root, result, mtime)
+    shutil.rmtree(tree)
+    return result, {'commit': head, 'snapshot_commit': snapshot, 'dirty': dirty}
+
+
+def stage_path(args, version):
+    if args.stage:
+        return Path(args.stage).expanduser().resolve()
+    return deploy_root() / brew_version(version)
+
+
+def command_source(args):
+    version = project_version(args.allow_dirty)
+    stage = stage_path(args, version)
+    if (stage / 'published.json').exists():
+        raise DeployError('%s %s is already published (%s). Bump the version first.'
+                          % (PROJECT['name'], version, stage))
+    if args.fresh and stage.exists():
+        log('discarding unpublished stage', stage)
+        shutil.rmtree(stage)
+    archive, meta = make_source(version, args.allow_dirty, args.allow_unpublished)
+    sha = digest(archive)
+    release_file = stage / 'release.json'
+    if release_file.exists():
+        release = read_json(release_file)
+        shutil.rmtree(archive.parent, ignore_errors=True)
+        if release['source']['sha256'] != sha:
+            raise DeployError('A different source for %s %s is already staged in %s.\n'
+                              'Bump the version, or pass --fresh to discard that unpublished stage.'
+                              % (PROJECT['name'], version, stage))
+        log('reusing staged source', stage / 'source' / release['source']['file'])
+        return stage, release
+    (stage / 'source').mkdir(parents=True, exist_ok=True)
+    destination = stage / 'source' / archive.name
+    shutil.move(str(archive), str(destination))
+    shutil.rmtree(archive.parent, ignore_errors=True)
+    (stage / 'source' / (archive.name + '.sha256')).write_text(sha + '  ' + archive.name + '\n')
+    release = {
+        'name': PROJECT['name'], 'version': version, 'brew_version': brew_version(version),
+        'github': 'https://github.com/' + PROJECT['github'], 'license': PROJECT['license'],
+        'homepage': PROJECT.get('homepage', ''), 'debs': PROJECT.get('debs', []),
+        'brew': PROJECT.get('brew', {}), 'unsupported': unsupported_targets(),
+        'maintainer': maintainer(),
+        'source': {'file': archive.name, 'sha256': sha, 'size': destination.stat().st_size},
+        'source_commit': meta['commit'], 'snapshot_commit': meta['snapshot_commit'],
+        'source_has_uncommitted_changes': meta['dirty'], 'created': now(),
+        'driver_version': DRIVER_VERSION,
+    }
+    write_json(release_file, release)
+    log('source', destination)
+    log('sha256', sha)
+    return stage, release
+
+
+def load_stage(args):
+    version = project_version(args.allow_dirty)
+    stage = stage_path(args, version)
+    if not (stage / 'release.json').exists():
+        raise DeployError('No staged source for %s %s in %s; run ./deploy-packages source first.'
+                          % (PROJECT['name'], version, stage))
+    return stage, read_json(stage / 'release.json')
+
+
+# ------------------------------------------------------------------- build
+
+def hook_environment(release, target, config):
+    env = {
+        'DEPLOY_NAME': release['name'], 'DEPLOY_VERSION': release['version'],
+        'DEPLOY_BREW_VERSION': release['brew_version'], 'DEPLOY_HOST': target,
+        'DEPLOY_SOURCE_SHA256': release['source']['sha256'],
+        'DEPLOY_SOURCE_URL': 'https://%s/sources/%s' % (BREW_SITE, release['source']['file']),
+        'DEPLOY_BREW_URL': 'https://%s/releases/%s-%s/' % (BREW_SITE, release['name'], release['brew_version']),
+        'DEPLOY_DEB_REVISION': str(release.get('deb_revision', 1)),
+        'DEPLOY_MAINTAINER': release['maintainer'],
+        'DEPLOY_HOMEPAGE': PROJECT.get('homepage', ''),
+        'DEPLOY_DESCRIPTION': PROJECT.get('description', ''),
+        'DEPLOY_GITHUB': 'https://github.com/' + PROJECT['github'],
+        'DEPLOY_PYTHON': config.get('python', 'python3'),
+    }
+    if config.get('jobs'):
+        env['DEPLOY_JOBS'] = str(config['jobs'])
+    return env
+
+
+def linux_script(release, target, config, remote_dir):
+    archive = release['source']['file']
+    lines = [
+        '#!/bin/bash', 'set -euo pipefail', 'shopt -s nullglob',
+        'cd "$HOME"/' + shlex.quote(remote_dir),
+        'printf "%s  %s\\n" ' + shlex.quote(release['source']['sha256']) + ' ' + shlex.quote(archive) +
+        ' | sha256sum -c -',
+        'rm -rf src out work', 'mkdir -p src out work',
+        'tar -xzf ' + shlex.quote(archive) + ' -C src',
+        'set -- src/*/',
+        'test "$#" -eq 1 || { echo "the source archive must have one top-level directory" >&2; exit 1; }',
+        'export DEPLOY_OUT="$PWD/out" DEPLOY_WORK="$PWD/work" DEPLOY_SOURCE="$PWD/"' + shlex.quote(archive),
+    ]
+    for key, value in sorted(hook_environment(release, target, config).items()):
+        lines.append('export %s=%s' % (key, shlex.quote(value)))
+    lines.append('export DEPLOY_ARCH="$(dpkg --print-architecture)"')
+    if config.get('suite'):
+        lines.append('export DEPLOY_SUITE=' + shlex.quote(config['suite']))
+    else:
+        lines.append('export DEPLOY_SUITE="$(. /etc/os-release && printf %s "${VERSION_CODENAME:-}")"')
+    lines.append('test -n "$DEPLOY_SUITE" || { echo "cannot determine the suite; set it in HOSTS" >&2; exit 1; }')
+    if not config.get('jobs'):
+        lines.append('export DEPLOY_JOBS="$(nproc)"')
+    for key, value in config.get('env', {}).items():
+        # Host environment values are expanded by the remote shell, so $PATH and $HOME work.
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or re.search(r'["`\\]', value):
+            raise DeployError('Bad host environment entry for %s: %s' % (target, key))
+        lines.append('export %s="%s"' % (key, value))
+    lines.append(SHELL_HELPERS)
+    lines.append('cd "$1"')
+    lines.append('echo "deploy-packages: building on $(hostname) for $DEPLOY_SUITE/$DEPLOY_ARCH"')
+    lines.append('(\n' + PROJECT['linux_build'].strip('\n') + '\n)')
+    lines.append(COLLECT_DEBS)
+    lines.append('cd "$HOME"/' + shlex.quote(remote_dir) + ' && rm -rf src work')
+    return '\n'.join(lines) + '\n'
+
+
+def parse_tsv(path):
+    return [line.split('\t') for line in path.read_text().splitlines() if line]
+
+
+def check_linux_build(release, info):
+    target = info['target']
+    packages = [d['package'] for d in info['debs']]
+    for name in release['debs']:
+        if packages.count(name) != 1:
+            raise DeployError('%s: expected one %s package, found %d' % (target, name, packages.count(name)))
+    extra = sorted(set(packages) - set(release['debs']))
+    if extra:
+        raise DeployError('%s: unexpected packages %s; list them in DEBS' % (target, ', '.join(extra)))
+    for deb in info['debs']:
+        if deb['architecture'] not in (info['architecture'], 'all'):
+            raise DeployError('%s: %s has architecture %s on a %s host'
+                              % (target, deb['file'], deb['architecture'], info['architecture']))
+
+
+def build_linux(stage, release, target):
+    config = host_config(target)
+    destination = config['ssh']
+    remote_dir = 'goblin-deploy/' + release_identity(release)
+    out = stage / target
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    script = out / 'remote-build.sh'
+    script.write_text(linux_script(release, target, config, remote_dir))
+    ssh = ssh_base(config)
+    run(*ssh, destination, shlex.join(['mkdir', '-p', remote_dir]))
+    rsync = ['rsync', '-a', '-e', rsync_ssh(config)] + config.get('rsync_options', [])
+    run(*rsync, stage / 'source' / release['source']['file'], script, destination + ':' + remote_dir + '/')
+    log('%s: building (log %s)' % (target, out / 'build.log'))
+    with (out / 'build.log').open('w') as stream:
+        status = subprocess.run(ssh + [destination, 'bash -l ' + shlex.quote(remote_dir + '/remote-build.sh')],
+                                stdout=stream, stderr=subprocess.STDOUT).returncode
+    if status != 0:
+        raise DeployError('%s: build failed with status %d; see %s' % (target, status, out / 'build.log'))
+    run(*rsync, destination + ':' + remote_dir + '/out/', str(out) + '/')
+    host = dict(row[:2] for row in parse_tsv(out / 'deploy-host.tsv'))
+    debs = []
+    for row in parse_tsv(out / 'deploy-debs.tsv'):
+        filename, package, version, architecture, sha = row[:5]
+        if digest(out / filename) != sha:
+            raise DeployError('%s: %s changed in transfer' % (target, filename))
+        debs.append({'file': filename, 'package': package, 'version': version, 'architecture': architecture,
+                     'sha256': sha, 'size': (out / filename).stat().st_size,
+                     'depends': row[5].strip() if len(row) > 5 else ''})
+    info = {'target': target, 'kind': 'deb', 'os': host.get('os'), 'kernel': host.get('kernel'),
+            'compiler': host.get('compiler'), 'suite': host['suite'], 'architecture': host['arch'],
+            'source_sha256': release['source']['sha256'], 'debs': debs, 'built': now()}
+    check_linux_build(release, info)
+    write_json(out / 'deploy-build.json', info)
+    log('%s: built %s' % (target, ', '.join(d['file'] for d in debs)))
+
+
+def fill_placeholders(text, out):
+    def sha(match):
+        path = out / match.group(1)
+        if not path.is_file():
+            raise DeployError('@DEPLOY_SHA256:%s@ names a missing file' % match.group(1))
+        return digest(path)
+    return re.sub(r'@DEPLOY_SHA256:([^@/]+)@', sha, text)
+
+
+def build_mac(stage, release, target='localhost'):
+    if platform.system() != 'Darwin' or platform.machine() != 'arm64':
+        raise DeployError('The Homebrew build must run on Apple Silicon macOS')
+    product = platform.mac_ver()[0]
+    if product.split('.')[0] != '26':
+        raise DeployError('Homebrew artifacts are published as arm64_tahoe; this Mac runs macOS ' + product)
+    out = stage / target
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    work = Path(tempfile.mkdtemp(prefix='deploy-mac-%s-' % release['name']))
+    source = stage / 'source' / release['source']['file']
+    extract_archive(source, work / 'src')
+    roots = [p for p in (work / 'src').iterdir() if p.is_dir()]
+    if len(roots) != 1:
+        raise DeployError('The source archive must contain one top-level directory')
+    env = dict(os.environ)
+    env.update(hook_environment(release, target, host_config(target)))
+    env.update(DEPLOY_OUT=str(out), DEPLOY_WORK=str(work), DEPLOY_SOURCE=str(source), DEPLOY_ARCH='arm64',
+               DEPLOY_SUITE='arm64_tahoe', DEPLOY_SELF=str(Path(__file__).resolve()), DEPLOY_REPO=str(ROOT))
+    env.setdefault('DEPLOY_JOBS', str(os.cpu_count() or 1))
+    script = 'set -euo pipefail\nshopt -s nullglob\n' + SHELL_HELPERS + '\n' + PROJECT['mac_build']
+    log('localhost: building (log %s)' % (out / 'build.log'))
+    with (out / 'build.log').open('w') as stream:
+        status = subprocess.run(['bash', '-c', script], cwd=roots[0], env=env,
+                                stdout=stream, stderr=subprocess.STDOUT).returncode
+    if status != 0:
+        raise DeployError('localhost: build failed with status %d; see %s' % (status, out / 'build.log'))
+    shutil.rmtree(work, ignore_errors=True)
+    entries = []
+    for name, kind in release['brew'].items():
+        recipe = out / (name + '.rb')
+        if not recipe.is_file():
+            raise DeployError('localhost: MAC_BUILD did not write %s.rb' % name)
+        text = fill_placeholders(recipe.read_text(), out)
+        leftover = re.search(r'@DEPLOY_[A-Z0-9_]+(:[^@]*)?@', text)
+        if leftover:
+            raise DeployError('localhost: %s.rb still has the placeholder %s' % (name, leftover.group(0)))
+        recipe.write_text(text)
+        run('ruby', '-c', recipe, stdout=subprocess.DEVNULL)
+        is_cask = re.search(r'^\s*cask\s+"', text, re.M) is not None
+        if is_cask != (kind == 'cask'):
+            raise DeployError('localhost: %s.rb is a %s but BREW says %s'
+                              % (name, 'cask' if is_cask else 'formula', kind))
+        match = re.search(r'^\s*version\s+"([^"]+)"', text, re.M)
+        entries.append({'name': name, 'kind': kind, 'file': recipe.name,
+                        'version': match.group(1) if match else release['brew_version']})
+    recipes = '\n'.join((out / e['file']).read_text() for e in entries)
+    artifacts = []
+    for path in sorted(out.iterdir()):
+        if not path.is_file() or path.suffix in ('.rb', '.json', '.log', '.sha256'):
+            continue
+        sha = digest(path)
+        if sha not in recipes:
+            raise DeployError('localhost: no recipe has the sha256 of %s' % path.name)
+        artifacts.append({'file': path.name, 'sha256': sha, 'size': path.stat().st_size})
+    info = {'target': target, 'kind': 'brew', 'os': 'macOS ' + product, 'distribution': 'macOS 26 Tahoe',
+            'architecture': 'arm64', 'platform_tag': 'arm64_tahoe',
+            'compiler': output('cc', '--version').splitlines()[0],
+            'source_sha256': release['source']['sha256'], 'brew': entries, 'artifacts': artifacts, 'built': now()}
+    write_json(out / 'deploy-build.json', info)
+    log('localhost: built', ', '.join([e['file'] for e in entries] + [a['file'] for a in artifacts]))
+
+
+def command_build(args, stage=None, release=None):
+    if stage is None:
+        stage, release = load_stage(args)
+    release['deb_revision'] = args.deb_revision
+    write_json(stage / 'release.json', release)
+    targets = args.host or selected_targets(args.skip_host)
+    for target in targets:
+        if target in unsupported_targets():
+            raise DeployError('%s is unsupported for this project: %s' % (target, unsupported_targets()[target]))
+    for target, reason in unsupported_targets().items():
+        log('skipping %s: %s' % (target, reason))
+    if not args.rebuild:
+        done = [t for t in targets if (stage / t / 'deploy-build.json').exists() and
+                read_json(stage / t / 'deploy-build.json').get('source_sha256') == release['source']['sha256']]
+        for target in done:
+            log('%s: already built from this source (pass --rebuild to build again)' % target)
+        targets = [t for t in targets if t not in done]
+    failures = []
+    if targets:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            futures = {}
+            for target in targets:
+                function = build_mac if target == 'localhost' else build_linux
+                futures[pool.submit(function, stage, release, target)] = target
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except (DeployError, subprocess.CalledProcessError, OSError, KeyError) as error:
+                    failures.append(futures[future])
+                    log('FAILED %s: %s' % (futures[future], error))
+    if failures:
+        raise DeployError('Builds failed: ' + ', '.join(sorted(failures)))
+    return stage, release
+
+
+# ------------------------------------------------------------ stage checks
+
+def validate_stage(stage, release, targets):
+    source = stage / 'source' / release['source']['file']
+    if digest(source) != release['source']['sha256']:
+        raise DeployError('The staged source archive does not match release.json')
+    builds = {}
+    for target in targets:
+        path = stage / target / 'deploy-build.json'
+        if not path.exists():
+            raise DeployError('%s has not been built; run ./deploy-packages build --host %s' % (target, target))
+        info = read_json(path)
+        if info['source_sha256'] != release['source']['sha256']:
+            raise DeployError('%s was built from a different source; rebuild it' % target)
+        for item in info.get('debs', []) + info.get('artifacts', []):
+            if digest(stage / target / item['file']) != item['sha256']:
+                raise DeployError('%s/%s does not match its build record' % (target, item['file']))
+        if info['kind'] == 'deb':
+            check_linux_build(release, info)
+        elif sorted(e['name'] for e in info['brew']) != sorted(release['brew']):
+            raise DeployError('localhost recipes do not match BREW')
+        builds[target] = info
+    return builds
+
+
+# ---------------------------------------------------------------- R2 / CDN
+
+class R2:
+    """Cloudflare R2 object API; the token is read into memory only."""
+
+    def __init__(self):
+        path = Path(os.environ.get('GOBLIN_R2_CONFIG', R2_CONFIG)).expanduser()
+        if not path.exists():
+            raise DeployError('Missing %s ({"account_id": "...", "token_file": "~/r2-god.txt"})' % path)
+        config = read_json(path)
+        self.account = config['account_id']
+        self.token = Path(config.get('token_file', '~/r2-god.txt')).expanduser().read_text().strip()
+        self.buckets = config.get('buckets', {})
+
+    def request(self, method, site, key, body=None, headers=None):
+        bucket = self.buckets.get(site, 'site-' + site.replace('.', '-'))
+        url = ('https://api.cloudflare.com/client/v4/accounts/%s/r2/buckets/%s/objects/%s'
+               % (self.account, bucket, quote(key, safe='/')))
+        request = Request(url, data=body, method=method,
+                          headers=dict({'Authorization': 'Bearer ' + self.token}, **(headers or {})))
+        try:
+            return urlopen(request, timeout=300)
+        except HTTPError as error:
+            if error.code == 404 and method == 'GET':
+                return None
+            try:
+                details = json.load(error).get('errors', [])
+            except ValueError:
+                details = []
+            raise DeployError('R2 %s %s/%s: HTTP %d %s' % (method, site, key, error.code, details)) from None
+
+    def sha256(self, site, key):
+        response = self.request('GET', site, key)
+        if response is None:
+            return None
+        result = hashlib.sha256()
+        with response:
+            while True:
+                block = response.read(1 << 20)  # Streaming chunk size, not an input limit.
+                if not block:
+                    return result.hexdigest()
+                result.update(block)
+
+    def put(self, site, key, path):
+        with path.open('rb') as stream:
+            self.request('PUT', site, key, stream, {
+                'Content-Type': content_type(key), 'Cache-Control': 'no-cache',
+                'Content-Length': str(path.stat().st_size)}).close()
+
+
+def content_type(key):
+    if key.endswith(('.rb', '.asc')) or key.rsplit('/', 1)[-1] in ('InRelease', 'Release', 'Packages', 'SHA256SUMS'):
+        return 'text/plain; charset=utf-8'
+    if key.endswith('.md'):
+        return 'text/markdown; charset=utf-8'
+    kind = mimetypes.guess_type(key)[0] or 'application/octet-stream'
+    if key.endswith(('.html', '.css', '.txt', '.json')):
+        kind += '; charset=utf-8'
+    return kind
+
+
+def upload_priority(key):
+    if key.startswith('homebrew-tap.git/'):
+        return 0 if key.startswith('homebrew-tap.git/objects/') else 2
+    if key.startswith('dists/'):
+        return 2 if key.endswith(('InRelease', '/Release', 'Release.gpg')) else 1
+    if key in CATALOG_FILES:
+        return 3
+    return 0
+
+
+def r2_upload(r2, site, root, keys, expected_catalog):
+    """Upload in dependency order: artifacts, indexes, signed indexes, catalog."""
+    lock = threading.Lock()
+    changed = []
+
+    def one(key):
+        path = root / key
+        local = digest(path)
+        remote = r2.sha256(site, key)
+        if remote == local:
+            return
+        if remote is not None and key.startswith(IMMUTABLE_PREFIXES):
+            raise DeployError('Refusing to replace published artifact %s/%s' % (site, key))
+        r2.put(site, key, path)
+        if r2.sha256(site, key) != local:
+            raise DeployError('R2 verification failed for %s/%s' % (site, key))
+        with lock:
+            changed.append(key)
+        log('uploaded %s/%s' % (site, key))
+
+    for level in range(4):
+        group = sorted(k for k in keys if upload_priority(k) == level)
+        if not group:
+            continue
+        if level == 3:
+            live = r2.sha256(site, 'packages.json')
+            if live not in (expected_catalog, digest(root / 'packages.json')):
+                raise DeployError('%s/packages.json changed during this publication. The new artifacts are '
+                                  'uploaded but not yet listed; reconcile the catalog by hand.' % site)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(one, group))
+    return sorted(changed)
+
+
+def public_sha256(site, key):
+    request = Request('https://%s/%s' % (site, key), headers={'Cache-Control': 'no-cache',
+                                                             'User-Agent': 'deploy-packages'})
+    result = hashlib.sha256()
+    with urlopen(request, timeout=120) as response:
+        while True:
+            block = response.read(1 << 20)  # Streaming chunk size, not an input limit.
+            if not block:
+                return result.hexdigest()
+            result.update(block)
+
+
+# ----------------------------------------------------------------- publish
+
+def mirror_digests(paths):
+    """sha256 of files on hail's mirror; None for missing files."""
+    script = 'for f in "$@"; do if [ -f "$f" ]; then sha256sum "$f"; else echo "- $f"; fi; done'
+    listing = output(*ssh_base({}), PUBLISHER['ssh'], shlex.join(['bash', '-c', script, 'mirror'] + paths))
+    digests = {}
+    for line in listing.splitlines():
+        value, path = line.split(None, 1)
+        digests[path] = None if value == '-' else value
+    return digests
+
+
+def check_mirror_matches_r2(r2, builds):
+    """The hail mirror must equal live R2 metadata, or merging would drop releases."""
+    checks = {(APT_SITE, k) for k in CATALOG_FILES} | {(BREW_SITE, k) for k in CATALOG_FILES}
+    checks.add((BREW_SITE, 'homebrew-tap.git/info/refs'))
+    for info in builds.values():
+        if info['kind'] == 'deb':
+            checks.add((APT_SITE, 'dists/%s/InRelease' % info['suite']))
+    checks = sorted(checks)
+    paths = ['%s/%s/%s' % (PUBLISHER['mount'], site, key) for site, key in checks]
+    mirror = mirror_digests(paths)
+    expected = {}
+    for (site, key), path in zip(checks, paths):
+        live = r2.sha256(site, key)
+        if live != mirror.get(path):
+            raise DeployError('hail:%s differs from the live https://%s/%s.\nReconcile the mirror with R2 '
+                              'before publishing; nothing was changed.' % (path, site, key))
+        expected[(site, key)] = live
+    return expected
+
+
+def command_publish(args, stage=None, release=None):
+    if stage is None:
+        stage, release = load_stage(args)
+    if (stage / 'published.json').exists():
+        raise DeployError('Already published: ' + str(stage))
+    targets = selected_targets(args.skip_host)
+    builds = validate_stage(stage, release, targets)
+    for target in args.skip_host or ():
+        log('WARNING: not publishing %s (--skip-host)' % target)
+    log('%s %s is ready to publish:' % (release['name'], release['version']))
+    for target in targets:
+        info = builds[target]
+        files = [d['file'] for d in info.get('debs', [])] + [e['file'] for e in info.get('brew', [])]
+        log('  %-10s %s' % (target, ', '.join(files)))
+    if args.check:
+        log('the stage is complete and consistent (--check: nothing uploaded)')
+        return
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise DeployError('Refusing to publish without confirmation; pass --yes')
+        answer = input('Publish to https://%s/ and https://%s/? [y/N] ' % (BREW_SITE, APT_SITE))
+        if answer.strip().lower() not in ('y', 'yes'):
+            raise DeployError('Not published')
+    r2 = R2()
+    expected = check_mirror_matches_r2(r2, builds)
+    release['publish_targets'] = targets
+    write_json(stage / 'release.json', release)
+    shutil.copy2(Path(__file__).resolve(), stage / 'deploy-packages')
+    identity = release_identity(release)
+    remote = '%s/%s/.incoming/%s/' % (PUBLISHER['mount'], APT_SITE, identity)
+    run(*ssh_base({}), PUBLISHER['ssh'], shlex.join(['mkdir', '-p', remote]))
+    rsync_host = os.environ.get('GOBLIN_RSYNC_HOST', PUBLISHER['rsync_host'])
+    upload = [stage / 'release.json', stage / 'deploy-packages', stage / 'source'] + [stage / t for t in targets]
+    # .incoming is a hidden area of the mirror; it is never uploaded to R2.
+    run('rsync', '-a', '--checksum', *upload,
+        '%s::%s/%s/.incoming/%s/' % (rsync_host, PUBLISHER['rsync_module'], APT_SITE, identity))
+    run(*ssh_base({}), PUBLISHER['ssh'],
+        shlex.join(['python3', remote + 'deploy-packages', 'hail-publish', '--stage', remote]))
+    r2_root = stage / 'r2'
+    if r2_root.exists():
+        shutil.rmtree(r2_root)
+    changed = {}
+    for site in (APT_SITE, BREW_SITE):
+        keys_file = stage / ('r2-keys-%s.json' % site)
+        run('rsync', '-a', '-e', rsync_ssh({}), '%s:%s%s' % (PUBLISHER['ssh'], remote, keys_file.name), str(keys_file))
+        keys = read_json(keys_file)
+        if not keys:
+            continue
+        listing = stage / ('r2-keys-%s.txt' % site)
+        listing.write_text(''.join(k + '\n' for k in keys))
+        (r2_root / site).mkdir(parents=True)
+        run('rsync', '-a', '--files-from=' + str(listing), '-e', rsync_ssh({}),
+            '%s:%s/%s/' % (PUBLISHER['ssh'], PUBLISHER['mount'], site), str(r2_root / site) + '/')
+        changed[site] = r2_upload(r2, site, r2_root / site, keys, expected[(site, 'packages.json')])
+    for site in changed:
+        want = digest(r2_root / site / 'packages.json')
+        try:
+            got = public_sha256(site, 'packages.json')
+        except OSError as error:
+            got = 'unavailable (%s)' % error
+        if got == want:
+            log('verified https://%s/packages.json' % site)
+        else:
+            log('WARNING: https://%s/packages.json does not match the upload yet (CDN cache?)' % site)
+    write_json(stage / 'published.json', {'published': now(), 'targets': targets, 'r2_changed': changed})
+    log('published %s %s. Index pages and READMEs on the sites were not edited.' % (release['name'], release['version']))
+
+
+# -------------------------------------------------------- hail publication
+
+def immutable_copy(source, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if digest(source) != digest(destination):
+            raise DeployError('A different file is already published at ' + str(destination))
+        return
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        with source.open('rb') as content:
+            shutil.copyfileobj(content, stream)
+    temporary.chmod(0o644)
+    temporary.replace(destination)
+
+
+def reprepro_distributions(conf):
+    result, codename = {}, None
+    for line in (conf / 'distributions').read_text().splitlines():
+        if ':' not in line:
+            continue
+        key, value = (x.strip() for x in line.split(':', 1))
+        if key == 'Codename':
+            codename = value
+            result[codename] = set()
+        elif key == 'Architectures' and codename:
+            result[codename] = set(value.split())
+    return result
+
+
+def tree_state(directory):
+    if not directory.exists():
+        return {}
+    return {p.relative_to(directory).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns)
+            for p in directory.rglob('*') if p.is_file()}
+
+
+def site_artifact(site, path):
+    relative = path.relative_to(site).as_posix()
+    return {'path': relative, 'url': 'https://%s/%s' % (site.name, relative), 'filename': path.name,
+            'size': path.stat().st_size, 'sha256': digest(path)}
+
+
+def sign_catalog(admin, site, catalog, stage):
+    candidate = stage / (site.name + '-packages.json')
+    candidate.write_text(json.dumps(catalog, indent=2) + '\n')
+    signature = stage / (site.name + '-packages.json.asc')
+    run('gpg', '--homedir', admin / 'gnupg', '--batch', '--yes', '--local-user', SIGNING_KEY,
+        '--armor', '--detach-sign', '--output', signature, candidate)
+    run('gpgv', '--keyring', site / 'goblinreactor-archive-keyring.gpg', signature, candidate)
+    for source, destination in ((candidate, site / 'packages.json'), (signature, site / 'packages.json.asc')):
+        temporary = destination.with_name(destination.name + '.deploy-new')
+        shutil.copy2(source, temporary)
+        temporary.replace(destination)
+
+
+def version_greater(new, old):
+    return subprocess.run(['dpkg', '--compare-versions', new, 'gt', old]).returncode == 0
+
+
+def check_apt_targets(stage, builds, linux, distributions, catalog, conf):
+    for target in linux:
+        info = builds[target]
+        if info['suite'] not in distributions:
+            raise DeployError('reprepro has no %s suite; add it to %s first' % (info['suite'], conf))
+        for deb in info['debs']:
+            if deb['architecture'] != 'all' and deb['architecture'] not in distributions[info['suite']]:
+                raise DeployError('reprepro suite %s lacks architecture %s' % (info['suite'], deb['architecture']))
+            path = stage / target / deb['file']
+            for field, value in (('Package', deb['package']), ('Version', deb['version']),
+                                 ('Architecture', deb['architecture'])):
+                if output('dpkg-deb', '-f', path, field) != value:
+                    raise DeployError('%s: the %s field does not match the build record' % (deb['file'], field))
+            for record in catalog['packages']:
+                if (record.get('name'), record.get('suite'), record.get('architecture')) != (
+                        deb['package'], info['suite'], deb['architecture']):
+                    continue
+                old = record.get('version', '0')
+                if old != deb['version'] and not version_greater(deb['version'], old):
+                    raise DeployError('%s %s is not newer than the published %s for %s/%s; bump the version'
+                                      % (deb['package'], deb['version'], old, info['suite'], deb['architecture']))
+
+
+def command_hail_publish(args):
+    stage = Path(args.stage).resolve()
+    release = read_json(stage / 'release.json')
+    targets = release['publish_targets']
+    builds = validate_stage(stage, release, targets)
+    admin, mount = Path(args.admin), Path(args.mount)
+    apt, brew = mount / APT_SITE, mount / BREW_SITE
+    name = release['name']
+    for tool in ('reprepro', 'gpg', 'gpgv', 'dpkg-deb', 'git'):
+        if not shutil.which(tool):
+            raise DeployError('hail is missing ' + tool)
+    run('gpg', '--homedir', admin / 'gnupg', '--batch', '--list-secret-keys', SIGNING_KEY, stdout=subprocess.DEVNULL)
+    linux = [t for t in targets if builds[t]['kind'] == 'deb']
+    conf = admin / 'reprepro/conf'
+    check_apt_targets(stage, builds, linux, reprepro_distributions(conf), read_json(apt / 'packages.json'), conf)
+    source = stage / 'source' / release['source']['file']
+    keys = {APT_SITE: set(), BREW_SITE: set()}
+    common = {'source_snapshot_sha256': release['source']['sha256'], 'source_commit': release['source_commit'],
+              'source_has_uncommitted_changes': release['source_has_uncommitted_changes'],
+              'license': release['license'], 'upstream': release['github'],
+              'verification': {'native_build': 'passed', 'public_install': 'pending'},
+              'published_by': 'deploy-packages %d' % DRIVER_VERSION}
+    with contextlib.ExitStack() as stack:
+        # The same locks every Goblin publisher takes.
+        for site in ('apt', 'brew'):
+            lock = stack.enter_context((admin / (site + '-publish.lock')).open('a'))
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        backup = admin / 'deploy-packages-backups' / (name + '-' + datetime.datetime.now(
+            datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ'))
+        backup.mkdir(parents=True, mode=0o700)
+        for site in (apt, brew):
+            (backup / site.name).mkdir()
+            for filename in CATALOG_FILES:
+                shutil.copy2(site / filename, backup / site.name / filename)
+        shutil.copytree(admin / 'reprepro/db', backup / 'reprepro-db')
+        shutil.copytree(conf, backup / 'reprepro-conf')
+        shutil.copytree(apt / 'dists', backup / 'apt-dists', symlinks=True)
+        tap = brew / 'homebrew-tap.git'
+        git = ['git', '-c', 'safe.directory=' + str(tap)]
+        (backup / 'tap-main.txt').write_text(output(*git, '--git-dir', tap, 'rev-parse', 'refs/heads/main') + '\n')
+        log('backup', backup)
+        for site in (apt, brew):
+            immutable_copy(source, site / 'sources' / source.name)
+            keys[site.name].add('sources/' + source.name)
+
+        brew_records = []
+        if 'localhost' in targets:
+            info = builds['localhost']
+            release_dir = brew / 'releases' / ('%s-%s' % (name, release['brew_version']))
+            files = []
+            for item in info['artifacts']:
+                immutable_copy(stage / 'localhost' / item['file'], release_dir / item['file'])
+                files.append(release_dir / item['file'])
+            immutable_copy(stage / 'localhost' / 'deploy-build.json', release_dir / 'deploy-build.json')
+            files.append(release_dir / 'deploy-build.json')
+            tap_before = tree_state(tap)
+            with tempfile.TemporaryDirectory(prefix='deploy-tap-') as temporary:
+                checkout = Path(temporary) / 'tap'
+                run(*git, 'clone', '--quiet', tap, checkout)
+                for entry in info['brew']:
+                    folder = 'Casks' if entry['kind'] == 'cask' else 'Formula'
+                    (checkout / folder).mkdir(exist_ok=True)
+                    shutil.copy2(stage / 'localhost' / entry['file'], checkout / folder / entry['file'])
+                    run('git', '-C', checkout, 'add', folder + '/' + entry['file'])
+                if output('git', '-C', checkout, 'diff', '--cached', '--name-only'):
+                    author = re.match(r'(.*?)\s*<([^>]*)>', release['maintainer'])
+                    run('git', '-C', checkout, '-c', 'user.name=' + author.group(1), '-c', 'user.email=' + author.group(2),
+                        'commit', '--quiet', '-m', 'Release %s %s' % (name, release['brew_version']))
+                parent = output(*git, '--git-dir', tap, 'rev-parse', 'refs/heads/main')
+                run('git', '-C', checkout, 'merge-base', '--is-ancestor', parent, 'HEAD')
+                run(*git, '--git-dir', tap, 'fetch', '--quiet', '--no-tags', checkout, 'refs/heads/main:refs/heads/main')
+            run(*git, '--git-dir', tap, 'update-server-info')
+            tap_after = tree_state(tap)
+            keys[BREW_SITE].update('homebrew-tap.git/' + k for k, v in tap_after.items() if tap_before.get(k) != v)
+            tap_commit = output(*git, '--git-dir', tap, 'rev-parse', 'refs/heads/main')
+            for entry in info['brew']:
+                record = dict(common, name=entry['name'], version=entry['version'],
+                              format={'cask': 'homebrew-cask', 'bottle': 'homebrew-bottle',
+                                      'formula': 'homebrew-binary'}[entry['kind']],
+                              distribution=info['distribution'], architecture=info['architecture'],
+                              platform_tag=info['platform_tag'], build_host='localhost', tap_commit=tap_commit,
+                              source='https://%s/sources/%s' % (BREW_SITE, source.name),
+                              artifacts=[site_artifact(brew, p) for p in files + [brew / 'sources' / source.name]])
+                record['cask' if entry['kind'] == 'cask' else 'formula'] = TAP + '/' + entry['name']
+                brew_records.append(record)
+            keys[BREW_SITE].update(p.relative_to(brew).as_posix() for p in files)
+
+        apt_records = []
+        suites = set()
+        dists_before = tree_state(apt / 'dists')
+        env = dict(os.environ, GNUPGHOME=str(admin / 'gnupg'))
+        included = set()
+        for target in linux:
+            info = builds[target]
+            for deb in info['debs']:
+                identity = (info['suite'], deb['package'], deb['version'], deb['architecture'])
+                if deb['architecture'] == 'all' and identity in included:
+                    log('%s: %s is already included from another host' % (target, deb['file']))
+                    continue
+                included.add(identity)
+                run('reprepro', '--keepunreferencedfiles', '-b', admin / 'reprepro', '--export=never',
+                    'includedeb', info['suite'], stage / target / deb['file'], env=env)
+                suites.add(info['suite'])
+                matches = [p for p in (apt / 'pool').rglob(deb['file']) if digest(p) == deb['sha256']]
+                if len(matches) != 1:
+                    raise DeployError('Cannot find %s in the pool after inclusion' % deb['file'])
+                keys[APT_SITE].add(matches[0].relative_to(apt).as_posix())
+                apt_records.append(dict(common, name=deb['package'], format='deb', suite=info['suite'],
+                                        distribution=info['os'], architecture=deb['architecture'],
+                                        version=deb['version'], depends=deb['depends'], build_host=target,
+                                        source='https://%s/sources/%s' % (APT_SITE, source.name),
+                                        artifacts=[site_artifact(apt, matches[0]),
+                                                   site_artifact(apt, apt / 'sources' / source.name)]))
+        if suites:
+            reprepro = ['reprepro', '--keepunreferencedfiles', '-b', admin / 'reprepro']
+            run(*reprepro, 'check', *sorted(suites), env=env)
+            run(*reprepro, 'export', *sorted(suites), env=env)
+            for suite in sorted(suites):
+                run('gpgv', '--keyring', apt / 'goblinreactor-archive-keyring.gpg', apt / 'dists' / suite / 'InRelease')
+            dists_after = tree_state(apt / 'dists')
+            keys[APT_SITE].update('dists/' + k for k, v in dists_after.items() if dists_before.get(k) != v)
+
+        def same_apt(a, b):
+            return (a.get('name'), a.get('suite'), a.get('architecture')) == (b['name'], b['suite'], b['architecture'])
+
+        def same_brew(a, b):
+            return a.get('name') == b['name']
+
+        for site, records, same in ((apt, apt_records, same_apt), (brew, brew_records, same_brew)):
+            if not records:
+                continue
+            catalog = read_json(site / 'packages.json')
+            catalog['packages'] = records + [old for old in catalog['packages']
+                                             if not any(same(old, new) for new in records)]
+            if site == brew:
+                catalog['tap_commit'] = records[0]['tap_commit']
+            artifacts = catalog.get('artifacts', [])
+            inventory = {a['path']: a for a in artifacts if isinstance(a, dict) and 'path' in a}
+            legacy = [a for a in artifacts if not (isinstance(a, dict) and 'path' in a)]
+            for key in sorted(keys[site.name]):
+                if not key.startswith('homebrew-tap.git/'):
+                    inventory[key] = site_artifact(site, site / key)
+            catalog['artifacts'] = legacy + sorted(inventory.values(), key=lambda a: a['path'])
+            catalog['updated'] = now()
+            sign_catalog(admin, site, catalog, stage)
+            keys[site.name].update(CATALOG_FILES)
+        for site_name, site_keys in keys.items():
+            write_json(stage / ('r2-keys-%s.json' % site_name), sorted(site_keys))
+        log('hail mirror updated: %d apt and %d brew files to upload'
+            % (len(keys[APT_SITE]), len(keys[BREW_SITE])))
+
+
+# ------------------------------------------------------------- brew bottle
+
+def set_formula_line(text, key, value, after=None):
+    pattern = re.compile(r'^  %s\s+"[^"]*".*$' % key, re.M)
+    line = '  %s "%s"' % (key, value)
+    if pattern.search(text):
+        return pattern.sub(lambda _: line, text, count=1)
+    if after is None:
+        raise DeployError('The formula has no top-level %s line' % key)
+    anchor = re.compile(r'^  %s\s+"[^"]*".*$' % after, re.M).search(text)
+    return text[:anchor.end()] + '\n' + line + text[anchor.end():]
+
+
+def command_brew_bottle(args):
+    """MAC_BUILD helper: build, test and bottle a source formula in a scratch tap.
+
+    The formula's stable url, sha256 and version are pointed at this release's
+    source archive, which is not public yet, so Homebrew's download cache is
+    seeded with it. Any previous bottle block and revision are removed. The
+    bottled formula and the bottle are written to $DEPLOY_OUT, with root_url at
+    this release's directory on brew.goblinreactor.com.
+    """
+    for key in ('DEPLOY_SOURCE', 'DEPLOY_SOURCE_URL', 'DEPLOY_SOURCE_SHA256', 'DEPLOY_BREW_URL',
+                'DEPLOY_BREW_VERSION', 'DEPLOY_OUT'):
+        if not os.environ.get(key):
+            raise DeployError('brew-bottle runs from MAC_BUILD; %s is not set' % key)
+    formula = Path(args.formula).resolve()
+    name = formula.stem
+    out = Path(os.environ['DEPLOY_OUT'])
+    full = BUILD_TAP + '/' + name
+    env = dict(os.environ, HOMEBREW_NO_INSTALL_FROM_API='1', HOMEBREW_NO_AUTO_UPDATE='1',
+               HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK='1', HOMEBREW_NO_ENV_HINTS='1')
+    installed = subprocess.run(['brew', 'list', '--formula', '--versions', name], env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
+    if installed:
+        raise DeployError('%s is installed (%s). Bottling needs it absent: brew uninstall %s, deploy, '
+                          'then reinstall it.' % (name, installed, name))
+    text = formula.read_text()
+    text = set_formula_line(text, 'url', os.environ['DEPLOY_SOURCE_URL'])
+    text = set_formula_line(text, 'sha256', os.environ['DEPLOY_SOURCE_SHA256'], after='url')
+    text = set_formula_line(text, 'version', os.environ['DEPLOY_BREW_VERSION'], after='url')
+    text = re.sub(r'^  bottle do\n.*?^  end\n\n?', '', text, flags=re.M | re.S)
+    text = re.sub(r'^  revision\s+\d+\n', '', text, flags=re.M)
+    user, repository = BUILD_TAP.split('/')
+    tap_dir = Path(output('brew', '--repository', env=env)) / 'Library/Taps' / user / ('homebrew-' + repository)
+    if tap_dir.exists():
+        run('brew', 'untap', '--force', BUILD_TAP, env=env)
+    run('brew', 'tap-new', '--no-git', BUILD_TAP, env=env, stdout=subprocess.DEVNULL)
+    try:
+        (tap_dir / 'Formula').mkdir(exist_ok=True)
+        tapped = tap_dir / 'Formula' / formula.name
+        tapped.write_text(text)
+        cache = Path(output('brew', '--cache', '--build-from-source', full, env=env))
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(os.environ['DEPLOY_SOURCE'], cache)
+        run('brew', 'install', '--build-bottle', '--formula', full, env=env)
+        try:
+            if re.search(r'^  test do', text, re.M):
+                run('brew', 'test', full, env=env)
+            with tempfile.TemporaryDirectory(prefix='deploy-bottle-') as temporary:
+                work = Path(temporary)
+                run('brew', 'bottle', '--json', '--root-url=' + os.environ['DEPLOY_BREW_URL'].rstrip('/'), full,
+                    cwd=work, env=env)
+                manifests = sorted(work.glob('*.bottle.json'))
+                if len(manifests) != 1:
+                    raise DeployError('brew bottle did not write one JSON manifest')
+                run('brew', 'bottle', '--merge', '--write', '--no-commit', manifests[0], env=env)
+                tags = next(iter(read_json(manifests[0]).values()))['bottle']['tags']
+                if list(tags) != ['arm64_tahoe']:
+                    raise DeployError('Unexpected bottle tags %s' % list(tags))
+                tag = tags['arm64_tahoe']
+                shutil.move(str(work / tag['local_filename']), str(out / tag['filename']))
+                shutil.copy2(manifests[0], out / manifests[0].name)
+            shutil.copy2(tapped, out / formula.name)
+        finally:
+            run('brew', 'uninstall', '--formula', '--ignore-dependencies', full, env=env)
+    finally:
+        run('brew', 'untap', '--force', BUILD_TAP, env=env)
+    log('bottled', name)
+
+
+# -------------------------------------------------------------------- plan
+
+def command_plan(args):
+    version = project_version(args.allow_dirty)
+    log('project   %s %s (file/Homebrew version %s)' % (PROJECT['name'], version, brew_version(version)))
+    log('upstream  https://github.com/%s' % PROJECT['github'])
+    log('source    %s' % ('SOURCE_COMMAND' if PROJECT.get('source_command') else
+                         'git snapshot of HEAD' + (' + SOURCE_HOOK' if PROJECT.get('source_hook') else '')))
+    log('stage     %s' % stage_path(args, version))
+    for target in TARGETS:
+        if target in unsupported_targets():
+            log('%-10s not built: %s' % (target, unsupported_targets()[target]))
+        elif target == 'localhost':
+            log('%-10s Homebrew %s' % (target, ', '.join('%s (%s)' % kv for kv in PROJECT['brew'].items())))
+        else:
+            log('%-10s apt via ssh %s: %s' % (target, host_config(target)['ssh'], ', '.join(PROJECT['debs'])))
+    log('publish   hail mirror, then Cloudflare R2 for %s and %s' % (APT_SITE, BREW_SITE))
+
+
+# -------------------------------------------------------------------- main
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='deploy-packages',
+        description='Build %s on naamah, graviton5, loongson and this Mac, then publish it to '
+                    'https://%s/ and https://%s/. With no command: source, build, then publish.'
+                    % (PROJECT['name'], BREW_SITE, APT_SITE))
+    parser.add_argument('command', nargs='?', default='all',
+                        choices=('all', 'plan', 'source', 'build', 'publish', 'hail-publish', 'brew-bottle'))
+    parser.add_argument('formula', nargs='?', help=argparse.SUPPRESS)
+    parser.add_argument('--host', action='append', choices=TARGETS, help='build only this target (repeatable)')
+    parser.add_argument('--skip-host', action='append', choices=TARGETS,
+                        help='build and publish without this target (repeatable)')
+    parser.add_argument('--rebuild', action='store_true', help='rebuild targets that already have artifacts')
+    parser.add_argument('--fresh', action='store_true', help='discard an unpublished stage for this version')
+    parser.add_argument('--allow-dirty', action='store_true',
+                        help='publish uncommitted changes to tracked files (recorded in the catalog)')
+    parser.add_argument('--allow-unpublished', action='store_true',
+                        help='deploy a HEAD that is not on the public GitHub repository yet')
+    parser.add_argument('--deb-revision', type=int, default=1,
+                        help='Debian revision for hooks that use $DEPLOY_DEB_REVISION (default 1)')
+    parser.add_argument('--stage', help='stage directory (default ~/goblin-deploy/NAME/VERSION)')
+    parser.add_argument('--check', action='store_true', help='publish: only validate the stage')
+    parser.add_argument('--yes', action='store_true', help='publish without asking for confirmation')
+    parser.add_argument('--admin', default=PUBLISHER['admin'], help=argparse.SUPPRESS)
+    parser.add_argument('--mount', default=PUBLISHER['mount'], help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.host and args.skip_host:
+        parser.error('use either --host or --skip-host')
+    try:
+        if args.command == 'plan':
+            command_plan(args)
+        elif args.command == 'source':
+            command_source(args)
+        elif args.command == 'build':
+            command_build(args)
+        elif args.command == 'publish':
+            command_publish(args)
+        elif args.command == 'hail-publish':
+            command_hail_publish(args)
+        elif args.command == 'brew-bottle':
+            if not args.formula:
+                parser.error('brew-bottle needs a formula path')
+            command_brew_bottle(args)
+        else:
+            if args.host:
+                parser.error('--host selects a subset; use it with the build command')
+            stage, release = command_source(args)
+            command_build(args, stage, release)
+            command_publish(args, stage, release)
+    except (DeployError, subprocess.CalledProcessError) as error:
+        sys.exit('deploy-packages: error: %s' % error)
+    except KeyboardInterrupt:
+        sys.exit('deploy-packages: interrupted')
+
+
+if __name__ == '__main__':
+    main()

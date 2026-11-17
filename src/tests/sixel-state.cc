@@ -6,6 +6,7 @@
 #include "src/protobufs/hostinput.pb.h"
 #include "src/statesync/completeterminal.h"
 #include "src/statesync/kitty.h"
+#include "src/terminal/inputlimits.h"
 #include "src/terminal/sixel.h"
 
 namespace {
@@ -110,7 +111,12 @@ void limits()
     require( !decode( dcs, image, error ) && image.rgba.empty() && !error.empty(),
              "malformed or oversized image rejected" );
   }
-  require( !decode( std::string( MAX_ENCODED_BYTES + 1, '~' ), image, error ), "encoded byte quota" );
+  const std::string wide = "\033Pq" + std::string( 100, '~' ) + "\033\\";
+  Terminal::escape_byte_limit = 64;
+  require( !decode( wide, image, error ), "optional encoded byte limit" );
+  Terminal::escape_byte_limit = 0;
+  require( decode( wide, image, error ),
+           "no encoded byte limit by default" );
   std::string costly = "\033P7;1q";
   for ( unsigned i = 0; i < 12000; i++ ) {
     costly += "!4096?$";

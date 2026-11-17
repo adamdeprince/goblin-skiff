@@ -51,6 +51,8 @@ public:
   Hyperlink current_hyperlink;
   bool cursor_visible;
   bool extended_sgr = true; /* Silkie's SGR attributes are written */
+  bool font_sgr = true;     /* and the selections of its font protocol */
+  bool depth_sgr = true;    /* and the depth of its depth protocol */
 
   const Framebuffer& last_frame;
 
@@ -102,6 +104,8 @@ private:
   bool render_sized_text = true;
   bool render_extensions = false; /* only the client's own terminal is sent extension modes */
   bool render_extended_sgr = true; /* brightness, gamut and alpha of cells */
+  bool render_fonts = true;        /* the font a cell's text was selected in */
+  bool render_depth = true;        /* the depth a cell's text, or a placement, was given */
   ClientExtensions extensions {};
   uint32_t ink_next_hint = 0;
   /* What the last frame did to the client's terminal, for ExtensionClient. */
@@ -121,6 +125,7 @@ private:
                 bool wrap ) const;
 
   bool can_use_erase( const FrameState& frame ) const;
+  bool hdr_supported( void ) const { return render_extensions && extensions.has_format( "64" ); }
 
 public:
   std::string open() const;
@@ -153,7 +158,16 @@ public:
     extensions = info;
     render_extensions = true;
     render_extended_sgr = info.listing;
+    render_fonts = info.speaks( Selector::FONT );
+    render_depth = info.speaks( Selector::DEPTH );
   }
+  bool renders_fonts( void ) const { return render_fonts; }
+  /* Whether what the client's terminal now says of itself changes how the
+     screen it shows is drawn: the extended attributes and the fonts of cells,
+     and images in a wide gamut or HDR, which state keeps as they were sent
+     and which are drawn for the terminal at hand. The screen is drawn again
+     then, or the terminal would keep what it was sent before. */
+  bool needs_repaint( const ClientExtensions& info, const Framebuffer& shown ) const;
   /* The next ink id the client saw its terminal hand out, for a repaint. */
   void set_ink_hint( uint32_t next ) { ink_next_hint = next; }
   /* What the frames since the last call did: the modes they set, the brush

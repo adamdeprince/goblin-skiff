@@ -354,9 +354,10 @@ Usage
   limited separately from terminal updates.  The coalescing delay and stream
   payload cap can be tuned with `--stream-delay=MS` and
   `--stream-bandwidth=BPS`.  Terminal screen updates and keystrokes are
-  scheduled ahead of forwarded streams.  X11 and SSH agent forwarding are
+  scheduled ahead of forwarded streams.  X11 forwarding is
   medium priority with their own stream token bucket; TCP and SOCKS
-  forwarding are low priority with a separate bucket.  Skiff emits at most one
+  forwarding are low priority with a separate bucket. Agent packets use the
+  reliable terminal event channel instead of forwarded streams.  Skiff emits at most one
   forwarded stream event per reliable send opportunity and caps stream chunks
   below the path-MTU payload budget.  `goblin-skiffcp` bulk datagrams are sent only
   when no reliable terminal or forwarded stream traffic is queued.
@@ -403,8 +404,14 @@ Usage
   status counters unless `--quiet` is used.
 
   Terminal state compression is a core part of this branch's low-bandwidth
-  strategy.  After both peers advertise zstd support, every serialized state
-  update uses zstd level 22.  There is no size threshold or zlib comparison.
+  strategy.  After both peers advertise zstd support, state updates use zstd
+  level 22 unless the CPU cannot keep up with the wire: unless making an update
+  would take longer than the measured link takes to carry it, and longer than
+  the time until the next send.  Then the highest level that keeps up is used,
+  predicted from how fast each level has been lately, and level 22 comes back as
+  soon as it keeps up again.  On a slow link, or before the link has been
+  measured, the level is always 22.  The receiver needs nothing for this.
+  There is no zlib comparison.
   Initial packets remain zlib-compressed for compatibility with older Mosh
   peers.  For very slow links, you can train a session-specific zstd
   dictionary from received state samples:
@@ -665,7 +672,9 @@ a kitty fork, when the client runs in it. These cover tablets, touch and pads;
 scroll deltas and trackpad gestures; frame presentation and low-latency
 reports; display information and haptic feedback; ink drawn by the terminal
 into vector images (`f=200`); HDR and wide-gamut colors for text and images;
-translucent cell backgrounds; GPU surfaces; and image pointers. The server
+translucent cell backgrounds; GPU surfaces; image pointers; packed grayscale
+and RGB565 images, kept packed and exact; the stereo depth of text and images;
+and desktop notifications with their return routes. The server
 answers each extension's queries from what the client learnt of its terminal.
 It keeps each mode with the terminal state and cancels strokes when needed.
 A vector image changes over the link as small patches. CSI sequences, OSC,
@@ -675,5 +684,41 @@ default of `--csi-limit`, `--escape-limit` and `--vector-depth-limit` (also
 no limit. See
 [SILKIE_EXTENSIONS.md](SILKIE_EXTENSIONS.md) and `man goblin-skiff`. Upgrade both client and server.
 
+Desktop notifications (`OSC 9`, `OSC 99`, `OSC 777 ; notify`) travel ahead of
+everything else: in datagrams of their own, which each end writes before the
+screen and the rest of an update already on its way, so a slow link busy with
+an image still says at once that the build finished. The terminal's answers,
+a click or a close, return to the program the same way.
+
+Everything a hand moves is smoothed and thinned on the client before it crosses
+the link: a pen, a finger, a mouse, a scroll, a gesture, xterm mouse motion and
+the Goblin pointer protocol alike. The sensor's noise comes out with a Kalman
+smoother (15 ms of lag), and the points a program receives stay within a quarter
+of a pixel of the hand's path, with every down, up, button change and
+correction kept in order. A moving hand is reported at least every 25 ms
+however straight its path, so a program sees the pace of the motion and not
+one position per frame of the link. Between a client and a server that both
+support it, the reports cross the link as binary records, each value predicted
+from the last ones and only the difference sent, and the server writes
+Silkie's text again byte for byte. `GOBLIN_SKIFF_HAND_SMOOTHING` (ms, `0`
+off), `GOBLIN_SKIFF_HAND_TOLERANCE` (1/256 px) and
+`GOBLIN_SKIFF_HAND_INTERVAL` (ms, `0` keeps every report) tune the client's
+side; `--exact-mouse` sends every report as it came, nothing smoothed or
+merged. `GOBLIN_SKIFF_RECORD_INPUT` records the terminal's frames for
+`tools/hand-motion/evaluate.py`.
+
 Inkline's `tools/goblin-draw/goblin_draw.py` is a portable client: its Kitty images
 are individual character-cell tiles, and a stroke retransmits only dirty tiles.
+
+### Terminal SSH agents
+
+The remote shell receives a stable `SSH_AUTH_SOCK`. With
+`ssh_agent_forwarding yes` in Silkie, agent requests follow the current terminal
+through Skiff and nested Odin Seat sessions. Keys are enumerated on demand and
+signing requests name the provider generation, so reconnecting cannot silently
+reuse another client's agent or lose OpenSSH session bindings. `-A` additionally
+authorizes the local `SSH_AUTH_SOCK` as a fallback on terminals without a
+provider. No private keys are sent, and key mutation/locking is refused.
+
+See [the agent transport](docs/SSH_AGENT_PROTOCOL.md) and
+[Silkie extension relay behavior](SILKIE_EXTENSIONS.md).

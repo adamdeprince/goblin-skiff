@@ -58,6 +58,7 @@ message ExtensionInputMessage {
   optional uint32 ink_image = 2;
   optional bytes ink_records = 3;
   optional sint64 clock = 4; // the terminal's clock in ms, as the client reckons it
+  optional bytes service_reply = 5; // its answer to a request of the vector service
 }
 
 // What the client's terminal said of Silkie's extensions.
@@ -69,6 +70,12 @@ message ClientExtensionsMessage {
   optional string display = 5;
   optional bool image_gamut = 6;
   optional string pointer_shapes = 7;
+  optional string graphics = 8;
+  optional bool vector_service = 9;
+  // The terminal's answer to the OSC 99 query, and whether it keeps Silkie's
+  // return route (the r key).
+  optional string notifications = 10;
+  optional bool notification_routes = 11;
 }
 
 extend Instruction {
@@ -82,4 +89,7 @@ extend Instruction {
   optional ClientGraphicsMessage client_graphics = 13;
   optional ClientExtensionsMessage client_extensions = 14;
   optional ExtensionInputMessage ext_input = 15;
+  // A run of ext_input reports as one binary record (src/terminal/motioncodec.h),
+  // for a peer that advertised motion_records_supported.
+  optional bytes motion_records = 16;
 }

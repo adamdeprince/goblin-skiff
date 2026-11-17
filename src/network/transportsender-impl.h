@@ -72,6 +72,12 @@ unsigned int TransportSender<MyState>::send_interval( void ) const
   if ( low_latency ) {
     return LOW_LATENCY_SEND_INTERVAL;
   }
+  return normal_interval();
+}
+
+template<class MyState>
+unsigned int TransportSender<MyState>::normal_interval( void ) const
+{
   int SEND_INTERVAL = lrint( ceil( connection->get_SRTT() / 2.0 ) );
   if ( SEND_INTERVAL < SEND_INTERVAL_MIN ) {
     SEND_INTERVAL = SEND_INTERVAL_MIN;
@@ -175,6 +181,18 @@ void TransportSender<MyState>::tick( void )
   }
 
   /* Determine if a new diff or empty ack needs to be sent */
+
+  /* A state that writes its diffs differently for a peer that takes binary
+     records changes over only while nothing is in flight: a diff written
+     again for a resend must be the same bytes. */
+  if constexpr ( requires( MyState& s ) { s.set_motion_records( true ); } ) {
+    if ( peer_motion_records_supported && !current_state.motion_records_enabled() && sent_states.size() == 1 ) {
+      current_state.set_motion_records( true );
+      for ( auto& sent : sent_states ) {
+        sent.state.set_motion_records( true ); /* so a state built from one writes as this one does */
+      }
+    }
+  }
 
   std::string diff = current_state.diff_from( assumed_receiver_state->state );
 
@@ -347,6 +365,9 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
   const bool advertise_zstd = get_compressor().zstd_available();
   inst.set_zstd_supported( advertise_zstd );
   inst.set_large_fragments_supported( true );
+  inst.set_motion_records_supported( true );
+  inst.set_raw_frames_supported( true );
+  inst.set_notices_supported( true );
   const std::string local_dictionary_id = get_compressor().zstd_dictionary_id();
   if ( advertise_zstd && !local_dictionary_id.empty() ) {
     inst.set_zstd_dict_id( local_dictionary_id );
@@ -359,12 +380,15 @@ void TransportSender<MyState>::send_in_fragments( const std::string& diff, uint6
     shutdown_tries++;
   }
 
+  const LinkBudget& link = connection->link_budget();
+  get_compressor().pace( send_interval(), link.active() && link.has_measurement() ? link.budget() : 0 );
   std::vector<Fragment> fragments = fragmenter.make_fragments( inst,
                                                                connection->get_MTU() - connection->packet_overhead(),
                                                                advertise_zstd && peer_zstd_supported,
                                                                allow_zstd_dictionary,
                                                                local_dictionary_id,
-                                                               peer_large_fragments_supported );
+                                                               peer_large_fragments_supported,
+                                                               peer_raw_frames_supported );
   for ( std::vector<Fragment>::iterator i = fragments.begin(); i != fragments.end(); i++ ) {
     pending_fragments.push_back( *i );
 

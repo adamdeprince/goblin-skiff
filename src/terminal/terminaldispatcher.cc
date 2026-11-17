@@ -37,11 +37,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
+#include <stdexcept>
 
 #include "src/terminal/colorspace.h"
 #include "src/terminal/inputlimits.h"
 #include "src/terminal/gpusurface.h"
 #include "src/terminal/kittygraphics.h"
+#include "src/terminal/packedimage.h"
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminalframebuffer.h"
 #include "terminaldispatcher.h"
@@ -403,8 +406,9 @@ static int hex_value( char c )
   return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
 }
 
-/* XTGETTCAP: names in hex, separated by semicolons. Only the names the
-   relay knows are answered; others are left unanswered as before. */
+/* XTGETTCAP: names in hex, separated by semicolons, each answered on its
+   own, as kitty answers: with the value of a name the relay knows, and with
+   DCS 0 + r for any other, so a program need not wait for a timeout. */
 void Dispatcher::finish_termcap()
 {
   static const char digits[] = "0123456789ABCDEF";
@@ -424,6 +428,8 @@ void Dispatcher::finish_termcap()
       std::string encoded;
       for ( unsigned char c : value ) { encoded += digits[c >> 4]; encoded += digits[c & 15]; }
       terminal_to_host += "\033P1+r" + hex + "=" + encoded + "\033\\";
+    } else {
+      terminal_to_host += "\033P0+r" + hex + "\033\\";
     }
     start = end + 1;
   }
@@ -452,7 +458,8 @@ void Dispatcher::reset_sixel()
   sixel_palette = Sixel::Palette();
 }
 
-static void kitty_reply( Dispatcher* dispatch, const KittyCommand& cmd, uint32_t image_id, const std::string& msg )
+static void kitty_reply( Dispatcher* dispatch, const KittyCommand& cmd, uint32_t image_id, const std::string& msg,
+                         uint32_t frame = 0 )
 {
   if ( cmd.quiet >= 2 ) {
     return;
@@ -461,7 +468,7 @@ static void kitty_reply( Dispatcher* dispatch, const KittyCommand& cmd, uint32_t
   if ( ok && cmd.quiet >= 1 ) {
     return;
   }
-  dispatch->terminal_to_host.append( kitty_response( image_id, cmd.placement_id, msg ) );
+  dispatch->terminal_to_host.append( kitty_response( image_id, cmd.placement_id, msg, frame ) );
 }
 
 static uint32_t resolve_kitty_id( Framebuffer* fb, const KittyCommand& cmd, bool creating )
@@ -537,50 +544,90 @@ static void advance_kitty_cursor( Framebuffer* fb, const KittyPlacement& place, 
    or, when one is malformed, not at all. */
 void Dispatcher::finish_vector_edit( const KittyCommand& cmd, const std::string& data, Framebuffer* fb )
 {
+  /* Silkie's answers, word for word: CODE:message, with no space. */
+  if ( !cmd.image_id && !cmd.image_number ) {
+    return; /* "Vector edit command without image id or number" is only logged */
+  }
   const uint32_t id = resolve_kitty_id( fb, cmd, false );
   const KittyImage* image = id ? fb->find_kitty_image( id ) : NULL;
   if ( !image ) {
-    kitty_reply( this, cmd, cmd.image_id, "ENOENT: image not found" );
+    kitty_reply( this, cmd, cmd.image_id,
+                 "ENOENT:Vector edit command refers to non-existent image with id: " + std::to_string( cmd.image_id )
+                   + " and number: " + std::to_string( cmd.image_number ) );
     return;
   }
   if ( image->format != KITTY_FORMAT_VECTOR ) {
-    kitty_reply( this, cmd, id, "EINVAL: not a vector image" );
+    kitty_reply( this, cmd, id, "EINVAL:Not a vector image" );
     return;
   }
   std::vector<Vector::Record> records;
   std::string error;
-  if ( !Vector::parse_records( data, records, error ) ) {
-    kitty_reply( this, cmd, id, "EINVAL: " + error );
+  const Vector::FontCheck fonts = ext_relay.font_check( *fb );
+  if ( !Vector::parse_records( data, records, error, &fonts ) ) {
+    kitty_reply( this, cmd, id, "EINVAL:" + error );
     return;
   }
   Vector::Step step;
   step.records = data;
   fb->edit_vector_image( id, step, error );
-  kitty_reply( this, cmd, id, error.empty() ? "OK" : "EINVAL: " + error );
+  fb->prune_vector_fonts();
+  kitty_reply( this, cmd, id, error.empty() ? "OK" : "EINVAL:" + error );
 }
 
-/* a=r: the surface behind an image is copied again. */
+bool Dispatcher::replace_image_pixels( const KittyImage& existing, const std::string& before,
+                                      const std::string& after, Framebuffer* fb, std::string& error )
+{
+  const uint32_t width = existing.width, height = existing.height;
+  KittyImage image;
+  /* An image that came packed stays exact through its edits. */
+  const ImageEncoding encoding
+    = kitty_image_is_packed( existing ) ? kitty_exact_encoding( fb->image_encoding ) : fb->image_encoding;
+  if ( !kitty_normalize_image( KITTY_FORMAT_RGBA, width, height, after, image, encoding, error ) ) {
+    return false;
+  }
+  uint32_t x = 0, y = 0, w = width, h = height;
+  if ( kitty_dirty_rect( before, after, width, height, x, y, w, h ) && uint64_t( w ) * h < uint64_t( width ) * height ) {
+    std::string pixels;
+    pixels.reserve( size_t( w ) * h * 4 );
+    for ( uint32_t row = y; row < y + h; row++ ) {
+      pixels.append( after, ( size_t( row ) * width + x ) * 4, size_t( w ) * 4 );
+    }
+    auto delta = std::make_shared<ImageDelta>();
+    delta->base_serial = existing.serial;
+    delta->x = x;
+    delta->y = y;
+    std::string ignored;
+    if ( kitty_normalize_image( KITTY_FORMAT_RGBA, w, h, pixels, delta->rect, encoding, ignored ) ) {
+      image.delta = delta;
+    }
+  }
+  image.id = existing.id;
+  image.number = existing.number;
+  image.origin = existing.origin;
+  image.gamut = existing.gamut;
+  image.surface = existing.surface;
+  return fb->refresh_kitty_image( image );
+}
+
+/* a=r: the surface behind an image is copied again, from the handle taken
+   when it was transmitted. */
 void Dispatcher::refresh_gpu_surface( const KittyCommand& cmd, Framebuffer* fb )
 {
   const uint32_t id = resolve_kitty_id( fb, cmd, false );
   const KittyImage* existing = id ? fb->find_kitty_image( id ) : NULL;
   if ( !existing ) {
-    kitty_reply( this, cmd, cmd.image_id, "ENOENT: image not found" );
+    kitty_reply( this, cmd, cmd.image_id, "ENOENT:image not found" );
     return;
   }
-  if ( existing->surface.empty() ) {
-    kitty_reply( this, cmd, id, "EINVAL: not a GPU surface" );
+  if ( !existing->surface ) {
+    kitty_reply( this, cmd, id, "EINVAL:not a GPU surface" );
     return;
   }
   std::string rgba, error;
   uint32_t width = 0, height = 0;
-  KittyImage image;
-  if ( !read_gpu_surface( existing->surface, existing->width, existing->height, rgba, width, height, error ) ) {
+  if ( !read_gpu_surface( *existing->surface, rgba, width, height, error ) ) {
     kitty_reply( this, cmd, id, error );
     return;
-  }
-  if ( existing->surface_gamut && !existing->gamut ) {
-    gamut_pixels_to_srgb( existing->surface_gamut, rgba, 4 );
   }
   /* A surface that did not change is not sent again; one that did, only
      where it did, to a client that has the version before. */
@@ -592,31 +639,354 @@ void Dispatcher::refresh_gpu_surface( const KittyCommand& cmd, Framebuffer* fb )
     kitty_reply( this, cmd, id, "OK" );
     return;
   }
-  if ( !kitty_normalize_image( KITTY_FORMAT_RGBA, width, height, rgba, image, fb->image_encoding, error ) ) {
-    kitty_reply( this, cmd, id, error );
+  if ( same_size ) {
+    if ( !replace_image_pixels( *existing, before, rgba, fb, error ) ) {
+      kitty_reply( this, cmd, id, error );
+      return;
+    }
+  } else {
+    KittyImage image;
+    if ( !kitty_normalize_image( KITTY_FORMAT_RGBA, width, height, rgba, image, fb->image_encoding, error ) ) {
+      kitty_reply( this, cmd, id, error );
+      return;
+    }
+    image.id = id;
+    image.number = existing->number;
+    image.gamut = existing->gamut;
+    image.surface = existing->surface;
+    fb->refresh_kitty_image( image );
+  }
+  kitty_reply( this, cmd, id, "OK" );
+}
+
+namespace {
+/* The pixels of a frame as an image keeps them: straight RGBA in the gamut of
+   the image, or RGBA half floats. False with the reply when they cannot be. */
+bool frame_pixels( const KittyCommand& cmd, const std::string& data, const KittyImage& image, std::string& pixels,
+                   uint32_t& width, uint32_t& height, std::string& error )
+{
+  char message[160];
+  if ( cmd.format == KITTY_FORMAT_PNG ) {
+    uint32_t gamut = 0;
+    if ( !kitty_png_to_rgba( data, pixels, width, height, gamut ) ) {
+      error = "EINVAL:invalid PNG image";
+      return false;
+    }
+    convert_pixels_between_gamuts( gamut, image.gamut, pixels, 4 );
+    return true;
+  }
+  if ( packed_format( cmd.format ) ) {
+    /* Packed pixels are expanded as they enter a frame, as Silkie expands
+       them; grayscale has no gamut. */
+    size_t row = 0, size = 0;
+    if ( !cmd.width || !cmd.height ) {
+      error = "EINVAL:Zero width/height not allowed";
+      return false;
+    }
+    if ( !packed_size( cmd.format, cmd.width, cmd.height, row, size ) ) {
+      error = "EINVAL:pixel data size does not match dimensions";
+      return false;
+    }
+    if ( data.size() < size ) {
+      snprintf( message, sizeof message, "ENODATA:Insufficient image data %zu < %zu", data.size(), size );
+      error = message;
+      return false;
+    }
+    if ( !packed_expand( cmd.format, cmd.width, cmd.height, data.substr( 0, size ), true, pixels ) ) {
+      error = "EINVAL:pixel data size does not match dimensions";
+      return false;
+    }
+    width = cmd.width;
+    height = cmd.height;
+    convert_pixels_between_gamuts( cmd.format == 516 && cmd.gamut <= 2 ? cmd.gamut : 0, image.gamut, pixels, 4 );
+    return true;
+  }
+  const size_t bytes_per_pixel = cmd.format == KITTY_FORMAT_RGB ? 3 : cmd.format == KITTY_FORMAT_HDR ? 8 : 4;
+  if ( cmd.format != KITTY_FORMAT_RGB && cmd.format != KITTY_FORMAT_RGBA && cmd.format != KITTY_FORMAT_HDR ) {
+    snprintf( message, sizeof message, "EINVAL:Unknown image format: %u", cmd.format );
+    error = message;
+    return false;
+  }
+  size_t size = 0;
+  if ( !cmd.width || !cmd.height ) {
+    error = "EINVAL:Zero width/height not allowed";
+    return false;
+  }
+  if ( !graphics_pixel_size( cmd.width, cmd.height, bytes_per_pixel, size ) ) {
+    error = "EINVAL:pixel data size does not match dimensions";
+    return false;
+  }
+  if ( data.size() < size ) {
+    snprintf( message, sizeof message, "ENODATA:Insufficient image data %zu < %zu", data.size(), size );
+    error = message;
+    return false;
+  }
+  width = cmd.width;
+  height = cmd.height;
+  if ( bytes_per_pixel != 3 ) {
+    pixels.assign( data, 0, size );
+  } else {
+    pixels.assign( size_t( width ) * height * 4, char( 0xff ) );
+    for ( size_t i = 0, n = size_t( width ) * height; i < n; i++ ) {
+      pixels.replace( i * 4, 3, data, i * 3, 3 );
+    }
+  }
+  if ( cmd.format != KITTY_FORMAT_HDR ) {
+    /* The frames of an image are in its gamut. */
+    convert_pixels_between_gamuts( cmd.gamut <= 2 ? cmd.gamut : 0, image.gamut, pixels, 4 );
+  }
+  return true;
+}
+
+/* The root frame of an image, to edit: RGBA, or half floats for HDR. */
+bool root_frame( const KittyImage& image, std::string& pixels, uint32_t& gamut )
+{
+  gamut = image.gamut;
+  if ( image.format == KITTY_FORMAT_HDR ) {
+    if ( !image.data ) {
+      return false;
+    }
+    pixels = *image.data;
+    return true;
+  }
+  if ( image.png_original && image.data ) {
+    uint32_t width = 0, height = 0;
+    return kitty_png_to_rgba( *image.data, pixels, width, height, gamut ) && width == image.width
+           && height == image.height;
+  }
+  return kitty_image_to_rgba( image, pixels );
+}
+
+/* Stores an edited root frame. */
+bool store_root_frame( Dispatcher* dispatch, const KittyImage& existing, const std::string& before,
+                       const std::string& after, uint32_t gamut, Framebuffer* fb, std::string& error )
+{
+  if ( existing.format == KITTY_FORMAT_HDR ) {
+    KittyImage image = existing;
+    image.data = std::make_shared<std::string>( after );
+    image.delta.reset();
+    return fb->refresh_kitty_image( image );
+  }
+  if ( gamut != existing.gamut || existing.png_original ) {
+    /* A PNG that kept its color profile is an RGB image in its gamut now. */
+    KittyImage image;
+    if ( !kitty_normalize_image( KITTY_FORMAT_RGBA, existing.width, existing.height, after, image, fb->image_encoding,
+                                 error ) ) {
+      return false;
+    }
+    image.id = existing.id;
+    image.number = existing.number;
+    image.origin = existing.origin;
+    image.gamut = gamut;
+    return fb->refresh_kitty_image( image );
+  }
+  return dispatch->replace_image_pixels( existing, before, after, fb, error );
+}
+}
+
+/* a=f: kitty adds a frame to an image, or edits one. An image here has only
+   its root frame, which a=f with r=1 edits; the terminal is sent the result. */
+void Dispatcher::finish_animation_frame( const KittyCommand& cmd, const std::string& data, Framebuffer* fb )
+{
+  const uint32_t id = resolve_kitty_id( fb, cmd, false );
+  const KittyImage* image = id ? fb->find_kitty_image( id ) : NULL;
+  char message[160];
+  if ( !image ) {
+    snprintf( message, sizeof message, "ENOENT:Animation command refers to non-existent image with id: %u and number: %u",
+              cmd.image_id, cmd.image_number );
+    kitty_reply( this, cmd, cmd.image_id, message, cmd.rows );
     return;
   }
-  if ( same_size && uint64_t( w ) * h < uint64_t( width ) * height ) {
-    std::string pixels;
-    pixels.reserve( size_t( w ) * h * 4 );
-    for ( uint32_t row = y; row < y + h; row++ ) {
-      pixels.append( rgba, ( size_t( row ) * width + x ) * 4, size_t( w ) * 4 );
-    }
-    auto delta = std::make_shared<ImageDelta>();
-    delta->base_serial = existing->serial;
-    delta->x = x;
-    delta->y = y;
-    if ( kitty_normalize_image( KITTY_FORMAT_RGBA, w, h, pixels, delta->rect, fb->image_encoding, error ) ) {
-      image.delta = delta;
-    }
+  if ( image->native || kitty_native_format( cmd.format ) || ( cmd.transfer && cmd.transfer != 13 ) ) {
+    kitty_reply( this, cmd, id, "EINVAL:Animation is not supported for indexed, palette or precision images", cmd.rows );
+    return;
   }
-  image.id = id;
-  image.number = existing->number;
-  image.gamut = existing->gamut;
-  image.surface_gamut = existing->surface_gamut;
-  image.surface = existing->surface;
-  fb->refresh_kitty_image( image );
+  if ( image->format == KITTY_FORMAT_VECTOR ) {
+    kitty_reply( this, cmd, id, "EINVAL:Animation frames are not supported for vector images", cmd.rows );
+    return;
+  }
+  /* The number of a frame: past the last, or none, is a new frame. */
+  const uint32_t frame = cmd.rows == 1 ? 1 : 2;
+  if ( ( image->format == KITTY_FORMAT_HDR ) != ( cmd.format == KITTY_FORMAT_HDR ) ) {
+    kitty_reply( this, cmd, id, "EINVAL:Animation frame format must match the image format", frame );
+    return;
+  }
+  if ( image->surface ) {
+    kitty_reply( this, cmd, id, "EINVAL:Animation frames are not supported for GPU surface images", frame );
+    return;
+  }
+  if ( frame != 1 ) {
+    kitty_reply( this, cmd, id, "EINVAL:Animation frames other than the root frame are not supported", frame );
+    return;
+  }
+  std::string pixels, error;
+  uint32_t width = 0, height = 0;
+  if ( !frame_pixels( cmd, data, *image, pixels, width, height, error ) ) {
+    kitty_reply( this, cmd, id, error, frame );
+    return;
+  }
+  if ( width > image->width ) {
+    snprintf( message, sizeof message, "EINVAL:Frame width %u larger than image width: %u", width, image->width );
+    kitty_reply( this, cmd, id, message, frame );
+    return;
+  }
+  if ( height > image->height ) {
+    snprintf( message, sizeof message, "EINVAL:Frame height %u larger than image height: %u", height, image->height );
+    kitty_reply( this, cmd, id, message, frame );
+    return;
+  }
+  std::string before, after;
+  uint32_t gamut = 0;
+  if ( !root_frame( *image, before, gamut ) ) {
+    kitty_reply( this, cmd, id, "EINVAL:No data associated with frame number: 1", frame );
+    return;
+  }
+  if ( gamut != image->gamut ) {
+    convert_pixels_between_gamuts( image->gamut, gamut, pixels, 4 );
+  }
+  after = before;
+  const bool half = image->format == KITTY_FORMAT_HDR;
+  /* X=1 replaces; otherwise a frame with alpha is blended over the root. */
+  kitty_compose( after, image->width, image->height, pixels, width, height, cmd.src_x, cmd.src_y,
+                 cmd.cell_x != 1 && cmd.format != KITTY_FORMAT_RGB, half );
+  if ( after != before && !store_root_frame( this, *image, before, after, gamut, fb, error ) ) {
+    kitty_reply( this, cmd, id, error.empty() ? "ENOSPC:Failed to cache data for image frame" : error, frame );
+    return;
+  }
+  kitty_reply( this, cmd, id, "OK", frame );
+}
+
+/* a=c: a rectangle of one frame composed onto another; here both are the
+   root frame. */
+void Dispatcher::compose_frames( const KittyCommand& cmd, Framebuffer* fb )
+{
+  const uint32_t id = resolve_kitty_id( fb, cmd, false );
+  const KittyImage* image = id ? fb->find_kitty_image( id ) : NULL;
+  char message[160];
+  if ( !image ) {
+    snprintf( message, sizeof message, "ENOENT:Animation command refers to non-existent image with id: %u and number: %u",
+              cmd.image_id, cmd.image_number );
+    kitty_reply( this, cmd, cmd.image_id, message );
+    return;
+  }
+  if ( image->native ) {
+    kitty_reply( this, cmd, id, "EINVAL:Composition is not supported for indexed, palette or precision images" );
+    return;
+  }
+  if ( image->format == KITTY_FORMAT_VECTOR ) {
+    kitty_reply( this, cmd, id, "EINVAL:Composition is not supported for vector images" );
+    return;
+  }
+  if ( cmd.rows != 1 ) {
+    snprintf( message, sizeof message, "ENOENT:No source frame number %u exists in image id: %u\n", cmd.rows, id );
+    kitty_reply( this, cmd, id, message );
+    return;
+  }
+  if ( cmd.columns != 1 ) {
+    snprintf( message, sizeof message, "ENOENT:No destination frame number %u exists in image id: %u\n", cmd.columns,
+              id );
+    kitty_reply( this, cmd, id, message );
+    return;
+  }
+  if ( image->surface ) {
+    kitty_reply( this, cmd, id, "EINVAL:Composition is not supported for GPU surface images" );
+    return;
+  }
+  const uint64_t width = cmd.src_w ? cmd.src_w : image->width, height = cmd.src_h ? cmd.src_h : image->height;
+  const uint64_t dest_x = cmd.src_x, dest_y = cmd.src_y, src_x = cmd.cell_x, src_y = cmd.cell_y;
+  if ( dest_x + width > image->width || dest_y + height > image->height ) {
+    kitty_reply( this, cmd, id, "EINVAL:The destination rectangle is out of bounds" );
+    return;
+  }
+  if ( src_x + width > image->width || src_y + height > image->height ) {
+    kitty_reply( this, cmd, id, "EINVAL:The source rectangle is out of bounds" );
+    return;
+  }
+  const bool x_overlaps = std::max( src_x, dest_x ) < std::min( src_x, dest_x ) + width;
+  const bool y_overlaps = std::max( src_y, dest_y ) < std::min( src_y, dest_y ) + height;
+  if ( x_overlaps && y_overlaps ) {
+    kitty_reply( this, cmd, id,
+                 "EINVAL:The source and destination rectangles overlap and the src and destination frames are the same" );
+    return;
+  }
+  std::string before, error;
+  uint32_t gamut = 0;
+  if ( !root_frame( *image, before, gamut ) ) {
+    kitty_reply( this, cmd, id, "EINVAL:Failed to get data for src frame: 0" );
+    return;
+  }
+  std::string after = before;
+  kitty_compose_within( after, image->width, uint32_t( src_x ), uint32_t( src_y ), uint32_t( dest_x ),
+                        uint32_t( dest_y ), uint32_t( width ), uint32_t( height ), !cmd.cursor_hold,
+                        image->format == KITTY_FORMAT_HDR );
+  if ( after != before && !store_root_frame( this, *image, before, after, gamut, fb, error ) ) {
+    kitty_reply( this, cmd, id, error.empty() ? "ENOSPC:Failed to store image data in cache" : error );
+    return;
+  }
   kitty_reply( this, cmd, id, "OK" );
+}
+
+/* a=a: with one frame there is nothing to animate, and kitty answers only
+   when the image does not exist. */
+void Dispatcher::control_animation( const KittyCommand& cmd, Framebuffer* fb )
+{
+  const uint32_t id = resolve_kitty_id( fb, cmd, false );
+  if ( !id || !fb->find_kitty_image( id ) ) {
+    char message[160];
+    snprintf( message, sizeof message, "ENOENT:Animation command refers to non-existent image with id: %u and number: %u",
+              cmd.image_id, cmd.image_number );
+    kitty_reply( this, cmd, cmd.image_id, message, cmd.rows );
+  }
+}
+
+/* The F key of a placement: a terminal behind the relay that does not know it
+   would drop the whole command, and bits nobody knows are refused. */
+static bool placement_flags_ok( Dispatcher* dispatch, const KittyCommand& cmd )
+{
+  if ( !cmd.flags ) {
+    return true;
+  }
+  if ( ( cmd.flags & ~KITTY_PLACE_KNOWN ) || cmd.unicode_placeholder ) {
+    kitty_reply( dispatch, cmd, cmd.image_id, "EINVAL:F has bits that cannot be used here" );
+    return false;
+  }
+  if ( !dispatch->ext_relay.client.has_graphics( "viewport" ) ) {
+    kitty_reply( dispatch, cmd, cmd.image_id, "EINVAL:the terminal has no viewport placements" );
+    return false;
+  }
+  return true;
+}
+
+/* The placement a=p or a=T makes, at the cursor. */
+static KittyPlacement placement_of( const KittyCommand& cmd, uint32_t image_id, Framebuffer* fb )
+{
+  KittyPlacement place;
+  place.image_id = image_id;
+  place.placement_id = cmd.placement_id;
+  place.row = fb->ds.get_cursor_row();
+  place.col = fb->ds.get_cursor_col();
+  place.columns = cmd.columns;
+  place.rows = cmd.rows;
+  place.src_x = cmd.src_x;
+  place.src_y = cmd.src_y;
+  place.src_w = cmd.src_w;
+  place.src_h = cmd.src_h;
+  place.cell_x = cmd.cell_x;
+  place.cell_y = cmd.cell_y;
+  place.z = cmd.z;
+  place.cursor_hold = cmd.cursor_hold != 0 || cmd.parent_image != 0;
+  place.unicode_placeholder = cmd.unicode_placeholder != 0;
+  place.parent_image = cmd.parent_image;
+  place.parent_placement = cmd.parent_placement;
+  place.H = cmd.H;
+  place.V = cmd.V;
+  place.flags = cmd.flags;
+  /* A placement is made at the depth and phase the text has just then. */
+  const TextStyle& style = text_style_of( fb->ds.get_renditions().get_text_style() );
+  place.depth = style.depth;
+  place.depth_pixels = style.depth_pixels;
+  place.phase = style.phase;
+  return place;
 }
 
 void Dispatcher::finish_kitty_upload( Framebuffer* fb )
@@ -627,158 +997,210 @@ void Dispatcher::finish_kitty_upload( Framebuffer* fb )
   kitty_uploading = false;
   kitty_chunked = false;
   kitty_payload.clear();
-  std::string surface;
 
-  std::string data, error;
-  if ( cmd.medium == 'g' ) {
-    /* A GPU surface is read here, where the program is, and its pixels are
-       what reach the client. */
-    if ( cmd.compression || chunked ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: chunking and compression are not allowed with t=g" );
+  if ( cmd.action == KittyService
+       && ( !cmd.image_id || cmd.format != KITTY_FORMAT_VECTOR || cmd.image_number || cmd.medium == 'g' ) ) {
+    kitty_reply( this, cmd, cmd.image_id, "EINVAL:Vector service requires a=v,f=200 and a request id" );
+    return;
+  }
+  if ( cmd.action == KittyQuery && !placement_flags_ok( this, cmd ) ) {
+    return;
+  }
+
+  try {
+    std::string data, error;
+    if ( !kitty_transfer_valid( cmd.format, cmd.transfer ) || ( cmd.medium == 'g' && cmd.transfer ) ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:transfer function is not supported for this format" );
       return;
     }
-    uint32_t width = 0, height = 0;
-    if ( !read_gpu_surface( cmd.payload, cmd.width, cmd.height, data, width, height, error ) ) {
+    std::shared_ptr<GpuSurface> surface;
+    if ( cmd.medium == 'g' && ( cmd.action == KittyFrame || cmd.action == KittyEdit || cmd.action == KittyService ) ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:Unknown transmission type: g" );
+      return;
+    }
+    if ( cmd.medium == 'g' ) {
+      /* A GPU surface is read here, where the program is, and its pixels are
+         what reach the client. The surface is held from now on, so that a=r
+         copies the same buffer however the program fares with its own handle. */
+      if ( cmd.compression || chunked ) {
+        kitty_reply( this, cmd, cmd.image_id, "EINVAL:chunking and compression are not allowed with t=g" );
+        return;
+      }
+      uint32_t width = 0, height = 0;
+      surface = open_gpu_surface( cmd.payload, cmd.width, cmd.height, error );
+      if ( !surface || !read_gpu_surface( *surface, data, width, height, error ) ) {
+        kitty_reply( this, cmd, cmd.image_id, error );
+        return;
+      }
+      cmd.format = KITTY_FORMAT_RGBA;
+      cmd.width = width;
+      cmd.height = height;
+    } else if ( !kitty_read_medium( cmd, data, error ) ) {
+      kitty_reply( this, cmd, cmd.image_id, error.empty() ? "EINVAL:transmit failed" : error );
+      return;
+    }
+
+    if ( cmd.compression == 'z' ) {
+      std::string inflated;
+      if ( !kitty_inflate( data, inflated, 0 ) ) {
+        kitty_reply( this, cmd, cmd.image_id, "EINVAL:zlib inflate failed" );
+        return;
+      }
+      data.swap( inflated );
+    } else if ( cmd.compression != 0 ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:unsupported compression" );
+      return;
+    }
+
+    if ( cmd.action == KittyEdit ) {
+      const uint32_t id = resolve_kitty_id( fb, cmd, false );
+      const KittyImage* old = id ? fb->find_kitty_image( id ) : nullptr;
+      if ( old && old->native && kitty_palette_format( old->format ) ) {
+        const uint32_t slots = 1u << ( old->format - 400 );
+        const uint32_t count = cmd.src_w ? cmd.src_w : ( cmd.src_x < slots ? slots - cmd.src_x : 0 );
+        if ( cmd.transfer || cmd.src_x >= slots || !count || count > slots - cmd.src_x || ( cmd.gamut_set && cmd.gamut != old->gamut ) ) {
+          kitty_reply( this, cmd, id, "EINVAL:palette range or gamut does not match" );
+        } else if ( data.size() != size_t( count ) * 4 ) {
+          kitty_reply( this, cmd, id, data.size() < size_t( count ) * 4 ? "ENODATA:palette slots missing" : "EFBIG:too many palette bytes" );
+        } else {
+          KittyImage updated = *old;
+          updated.data = std::make_shared<std::string>( *old->data );
+          updated.data->replace( size_t( cmd.src_x ) * 4, size_t( count ) * 4, data );
+          fb->refresh_kitty_image( updated );
+          kitty_reply( this, cmd, id, "OK" );
+        }
+        return;
+      }
+      finish_vector_edit( cmd, data, fb );
+      return;
+    }
+
+    if ( cmd.action == KittyFrame ) {
+      finish_animation_frame( cmd, data, fb );
+      return;
+    }
+
+    if ( cmd.action == KittyService ) {
+      ext_relay.vector_service( cmd.image_id, cmd.quiet, data, *fb, terminal_to_host );
+      return;
+    }
+
+    /* State keeps an image as the program sent it: HDR pixels with their T,
+       RGB pixels with their gamut. The client converts them for a terminal
+       that cannot take them as they are when it draws them, so a terminal
+       that turns out to take them later is sent them as they are. */
+    KittyImage image;
+    const bool wide = ( cmd.format == KITTY_FORMAT_RGB || cmd.format == KITTY_FORMAT_RGBA || cmd.format == 516 )
+                      && ( cmd.gamut == 1 || cmd.gamut == 2 );
+    const bool native = kitty_native_format( cmd.format ) || ( cmd.transfer && cmd.transfer != 13 && cmd.format != KITTY_FORMAT_HDR );
+    if ( native ) {
+      if ( !fb->image_encoding.native || ( ( cmd.format == 8 || cmd.format == 16 )
+           && !ext_relay.client.has_format( std::to_string( cmd.format ) ) ) ) {
+        kitty_reply( this, cmd, cmd.image_id, "ENOTSUP:client does not support this image format" );
+        return;
+      }
+      size_t size = 0;
+      if ( !kitty_native_size( cmd.format, cmd.width, cmd.height, size ) ) {
+        kitty_reply( this, cmd, cmd.image_id, !cmd.width || !cmd.height ? "EINVAL:s and v are required" : "EOVERFLOW:image size" );
+        return;
+      }
+      if ( data.size() != size ) {
+        kitty_reply( this, cmd, cmd.image_id, data.size() < size ? "ENODATA:pixel data missing" : "EFBIG:too many pixel bytes" );
+        return;
+      }
+      image.native = true;
+      image.format = cmd.format;
+      image.width = cmd.width;
+      image.height = cmd.height;
+      image.transfer = cmd.transfer;
+      image.tone_map = cmd.tone_map == 1;
+      image.gamut = ( cmd.format == 316 || ( cmd.format >= 301 && cmd.format <= 308 ) || cmd.format == 8 || cmd.format == 16 )
+                      ? 0 : cmd.gamut <= 2 ? cmd.gamut : 0;
+      image.data = std::make_shared<std::string>( std::move( data ) );
+    } else if ( cmd.format == KITTY_FORMAT_VECTOR || cmd.format == KITTY_FORMAT_HDR ) {
+      /* A vector image reaches the terminal as it was sent, so it is accepted
+         only when the client's terminal draws them. An HDR image sent anyway
+         is shown at SDR, so only a query says HDR is not there. */
+      if ( !ext_relay.accepts_format( cmd.format )
+           && ( cmd.format == KITTY_FORMAT_VECTOR || cmd.action == KittyQuery ) ) {
+        kitty_reply( this, cmd, cmd.image_id, "EINVAL:unsupported Kitty image format" );
+        return;
+      }
+      if ( !cmd.width || !cmd.height ) {
+        kitty_reply( this, cmd, cmd.image_id,
+                     cmd.format == KITTY_FORMAT_VECTOR ? "EINVAL:Zero width/height not allowed"
+                                                       : "EINVAL:s and v are required" );
+        return;
+      }
+      image.format = cmd.format;
+      image.width = cmd.width;
+      image.height = cmd.height;
+      if ( cmd.format == KITTY_FORMAT_VECTOR ) {
+        std::vector<Vector::Record> records;
+        auto table = std::make_shared<Vector::Table>();
+        const Vector::FontCheck fonts = ext_relay.font_check( *fb );
+        if ( !Vector::parse_records( data, records, error, &fonts ) || !( error = table->apply( records ) ).empty() ) {
+          kitty_reply( this, cmd, cmd.image_id, "EINVAL:" + error );
+          return;
+        }
+        image.vector = Vector::make_doc( Vector::new_lineage(), 0, cmd.width, cmd.height, table );
+      } else {
+        size_t size = 0;
+        if ( !graphics_pixel_size( cmd.width, cmd.height, 8, size ) || data.size() != size ) {
+          kitty_reply( this, cmd, cmd.image_id, "EINVAL:pixel data size does not match dimensions" );
+          return;
+        }
+        image.data = std::make_shared<std::string>( std::move( data ) );
+      }
+      image.tone_map = cmd.tone_map == 1;
+    } else if ( !kitty_normalize_image( cmd.format, cmd.width, cmd.height, data, image, fb->image_encoding, error ) ) {
       kitty_reply( this, cmd, cmd.image_id, error );
       return;
+    } else if ( wide ) {
+      image.gamut = cmd.gamut; /* any other value is sRGB */
     }
-    surface = cmd.payload;
-    cmd.format = KITTY_FORMAT_RGBA;
-    cmd.width = width;
-    cmd.height = height;
-  } else if ( !kitty_read_medium( cmd, data, error ) ) {
-    kitty_reply( this, cmd, cmd.image_id, error.empty() ? "EINVAL: transmit failed" : error );
-    return;
-  }
 
-  if ( cmd.compression == 'z' ) {
-    std::string inflated;
-    if ( !kitty_inflate( data, inflated, cmd.data_size ) ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: zlib inflate failed" );
+    if ( cmd.action == KittyTransmitAndDisplay && !placement_flags_ok( this, cmd ) ) {
       return;
     }
-    data.swap( inflated );
-  } else if ( cmd.compression != 0 ) {
-    kitty_reply( this, cmd, cmd.image_id, "EINVAL: unsupported compression" );
-    return;
-  }
 
-  if ( cmd.action == KittyEdit ) {
-    finish_vector_edit( cmd, data, fb );
-    return;
-  }
+    const bool query_only = cmd.action == KittyQuery;
+    if ( query_only ) {
+      kitty_reply( this, cmd, cmd.image_id ? cmd.image_id : 1, "OK" );
+      return;
+    }
 
-  KittyImage image;
-  if ( cmd.format == KITTY_FORMAT_HDR && !ext_relay.accepts_format( cmd.format ) && cmd.action != KittyQuery ) {
-    /* A terminal without HDR shows such an image at SDR; it is converted
-       here, so a program that sent it anyway is not refused. A query still
-       says the format is not there. */
-    std::string rgba;
-    if ( !hdr_to_srgb8( data, cmd.width, cmd.height, cmd.tone_map == 1, rgba ) ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: pixel data size does not match dimensions" );
+    if ( cmd.action != KittyTransmit && cmd.action != KittyTransmitAndDisplay ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:unexpected action at upload end" );
       return;
     }
-    data.swap( rgba );
-    cmd.format = KITTY_FORMAT_RGBA;
-  }
-  /* RGB pixels in a wide gamut, for a terminal that cannot be given the
-     gamut: shown as the nearest sRGB colors, as such a terminal would. */
-  const bool wide = ( cmd.format == KITTY_FORMAT_RGB || cmd.format == KITTY_FORMAT_RGBA )
-                    && ( cmd.gamut == 1 || cmd.gamut == 2 );
-  if ( wide && !ext_relay.client.image_gamut ) {
-    gamut_pixels_to_srgb( cmd.gamut, data, cmd.format == KITTY_FORMAT_RGB ? 3 : 4 );
-  }
-  if ( cmd.format == KITTY_FORMAT_VECTOR || cmd.format == KITTY_FORMAT_HDR ) {
-    /* These reach the terminal as they were sent, so they are accepted only
-       when the client's terminal accepts them. */
-    if ( !ext_relay.accepts_format( cmd.format ) ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: unsupported Kitty image format" );
+
+    image.id = cmd.image_id;
+    image.number = cmd.image_number;
+    image.surface = surface;
+    image.id = fb->put_kitty_image( image );
+    fb->prune_vector_fonts(); /* the scene it replaced may have named a released font */
+    if ( !image.id ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:could not store image" );
       return;
     }
-    if ( !cmd.width || !cmd.height ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: s and v are required" );
-      return;
-    }
-    image.format = cmd.format;
-    image.width = cmd.width;
-    image.height = cmd.height;
-    if ( cmd.format == KITTY_FORMAT_VECTOR ) {
-      std::vector<Vector::Record> records;
-      auto table = std::make_shared<Vector::Table>();
-      if ( !Vector::parse_records( data, records, error ) || !( error = table->apply( records ) ).empty() ) {
-        kitty_reply( this, cmd, cmd.image_id, "EINVAL: " + error );
+
+    kitty_reply( this, cmd, image.id, "OK" );
+
+    if ( cmd.action == KittyTransmitAndDisplay ) {
+      KittyPlacement place = placement_of( cmd, image.id, fb );
+      /* kitty has answered for the image by now: a placement it may not make
+         is not made, and nothing more is said. */
+      if ( ( cmd.unicode_placeholder && cmd.parent_image ) || !kitty_check_parent( *fb, place ).empty() ) {
         return;
       }
-      image.vector = Vector::make_doc( Vector::new_lineage(), 0, cmd.width, cmd.height, table );
-    } else {
-      size_t size = 0;
-      if ( !graphics_pixel_size( cmd.width, cmd.height, 8, size ) || data.size() != size ) {
-        kitty_reply( this, cmd, cmd.image_id, "EINVAL: pixel data size does not match dimensions" );
-        return;
-      }
-      image.data = std::make_shared<std::string>( std::move( data ) );
-      image.tone_map = cmd.tone_map == 1;
+      fb->put_kitty_placement( place );
+      advance_kitty_cursor( fb, place, client_geometry );
     }
-  } else if ( !kitty_normalize_image( cmd.format, cmd.width, cmd.height, data, image, fb->image_encoding, error ) ) {
-    kitty_reply( this, cmd, cmd.image_id, error );
-    return;
-  } else if ( wide && ext_relay.client.image_gamut ) {
-    image.gamut = cmd.gamut; /* any other value is sRGB */
-  }
-  image.surface_gamut = wide ? cmd.gamut : 0;
-
-  const bool query_only = cmd.action == KittyQuery;
-  if ( query_only ) {
-    kitty_reply( this, cmd, cmd.image_id ? cmd.image_id : 1, "OK" );
-    return;
-  }
-
-  if ( cmd.action != KittyTransmit && cmd.action != KittyTransmitAndDisplay ) {
-    kitty_reply( this, cmd, cmd.image_id, "EINVAL: unexpected action at upload end" );
-    return;
-  }
-
-  image.id = cmd.image_id;
-  image.number = cmd.image_number;
-  image.surface = surface;
-  if ( image.id == 0 && image.number == 0 ) {
-    /* assign internally so the image can live in terminal state */
-  }
-  image.id = fb->put_kitty_image( image );
-  if ( !image.id ) {
-    kitty_reply( this, cmd, cmd.image_id, "EINVAL: could not store image" );
-    return;
-  }
-
-  std::string ok = "OK";
-  if ( cmd.image_number != 0 ) {
-    /* include assigned id; kitty_response already has i= */
-  }
-  kitty_reply( this, cmd, image.id, ok );
-
-  if ( cmd.action == KittyTransmitAndDisplay ) {
-    KittyPlacement place;
-    place.image_id = image.id;
-    place.placement_id = cmd.placement_id;
-    place.row = fb->ds.get_cursor_row();
-    place.col = fb->ds.get_cursor_col();
-    place.columns = cmd.columns;
-    place.rows = cmd.rows;
-    place.src_x = cmd.src_x;
-    place.src_y = cmd.src_y;
-    place.src_w = cmd.src_w;
-    place.src_h = cmd.src_h;
-    place.cell_x = cmd.cell_x;
-    place.cell_y = cmd.cell_y;
-    place.z = cmd.z;
-    place.cursor_hold = cmd.cursor_hold != 0 || cmd.parent_image != 0;
-    place.unicode_placeholder = cmd.unicode_placeholder != 0;
-    place.parent_image = cmd.parent_image;
-    place.parent_placement = cmd.parent_placement;
-    place.H = cmd.H;
-    place.V = cmd.V;
-    fb->put_kitty_placement( place );
-    advance_kitty_cursor( fb, place, client_geometry );
+  } catch ( const std::bad_alloc& ) {
+    kitty_reply( this, cmd, cmd.image_id, "ENOMEM:image allocation failed" );
+  } catch ( const std::length_error& ) {
+    kitty_reply( this, cmd, cmd.image_id, "EOVERFLOW:image allocation size" );
   }
 }
 
@@ -795,7 +1217,7 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
   KittyCommand cmd;
   if ( !parse_kitty_command( APC_string, cmd ) ) {
     if ( kitty_uploading ) {
-      kitty_reply( this, kitty_partial, kitty_partial.image_id, "EINVAL: malformed Kitty continuation" );
+      kitty_reply( this, kitty_partial, kitty_partial.image_id, "EINVAL:malformed Kitty continuation" );
       kitty_uploading = false;
       kitty_payload.clear();
     }
@@ -804,11 +1226,58 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
   }
   APC_string.clear();
 
+  if ( cmd.feature ) {
+    // A feature query must not complete or interrupt a chunked upload.
+    if ( cmd.action != KittyQuery || !cmd.image_id ) { return; }
+    std::string reply = "\033_Gi=" + std::to_string( cmd.image_id );
+    const char action = cmd.feature;
+    if ( std::string( "tTpqdefacrv" ).find( action ) != std::string::npos ) {
+      reply += std::string( ",e=" ) + action;
+      const auto key = [&]( const char* name, uint64_t value ) {
+        if ( value ) { reply += std::string( "," ) + name + "=" + std::to_string( value ); }
+      };
+      const bool upload = action == 't' || action == 'T' || action == 'q' || action == 'f';
+      const bool indexed = cmd.format == 8 || cmd.format == 16;
+      const bool native = kitty_native_format( cmd.format );
+      const bool format = ( ext_relay.accepts_format( cmd.format )
+                            || ( native && fb->image_encoding.native && ( !indexed || ext_relay.client.has_format( std::to_string( cmd.format ) ) ) ) )
+                          && ( action != 'f' || ( !native && cmd.format != KITTY_FORMAT_VECTOR ) );
+      if ( upload ) {
+        if ( format && cmd.format != KITTY_FORMAT_RGBA ) { key( "f", cmd.format ); }
+        key( "s", cmd.width ); key( "v", cmd.height );
+        if ( std::string( "dfts" ).find( cmd.medium ) != std::string::npos || ( cmd.medium == 'g' && gpu_surfaces_supported() && action != 'f' ) ) {
+          if ( cmd.medium != 'd' ) { reply += std::string( ",t=" ) + cmd.medium; }
+          key( "S", cmd.data_size ); key( "O", cmd.data_offset );
+        }
+        if ( cmd.compression == 'z' ) { reply += ",o=z"; }
+        if ( format && !indexed ) { key( "G", cmd.gamut <= 2 ? cmd.gamut : 0 ); }
+        if ( format && cmd.medium != 'g' && kitty_transfer_valid( cmd.format, cmd.transfer )
+             && ( !cmd.transfer || cmd.format == KITTY_FORMAT_HDR || cmd.transfer == 13 || fb->image_encoding.native ) ) {
+          key( "E", cmd.transfer );
+        }
+        if ( format && !indexed && !kitty_palette_format( cmd.format ) ) { key( "T", cmd.tone_map == 1 ? 1 : 0 ); }
+      }
+      if ( action == 'T' || action == 'p' || action == 'f' || ( action == 'e' && fb->image_encoding.native ) ) {
+        key( "x", cmd.src_x ); key( "y", cmd.src_y ); key( "w", cmd.src_w ); key( "h", cmd.src_h );
+      }
+      if ( action == 'T' || action == 'p' ) {
+        key( "p", cmd.placement_id ); key( "c", cmd.columns ); key( "r", cmd.rows );
+        key( "C", cmd.cursor_hold ); key( "U", cmd.unicode_placeholder );
+        key( "P", cmd.parent_image ); key( "Q", cmd.parent_placement );
+        if ( ext_relay.client.has_graphics( "viewport" ) && !( cmd.flags & ~KITTY_PLACE_KNOWN ) ) { key( "F", cmd.flags ); }
+      }
+      if ( action == 'f' || action == 'a' || action == 'c' ) { key( "r", cmd.rows == 1 ? 1 : 0 ); }
+    }
+    terminal_to_host += reply + ";OK\033\\";
+    return;
+  }
+
   if ( kitty_uploading ) {
     if ( cmd.action == KittyDelete ) {
       kitty_uploading = false;
       kitty_payload.clear();
-      fb->delete_kitty( cmd );
+      fb->delete_kitty( cmd, client_geometry );
+      fb->prune_vector_fonts();
       return;
     }
     kitty_payload.append( cmd.payload );
@@ -820,36 +1289,34 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
   }
 
   if ( cmd.action == KittyDelete ) {
-    fb->delete_kitty( cmd );
+    fb->delete_kitty( cmd, client_geometry );
+    fb->prune_vector_fonts();
     return;
   }
 
   if ( cmd.action == KittyPut ) {
-    uint32_t id = resolve_kitty_id( fb, cmd, false );
-    if ( id == 0 || fb->find_kitty_image( id ) == NULL ) {
-      kitty_reply( this, cmd, cmd.image_id, "ENOENT: image not found" );
+    if ( cmd.unicode_placeholder && cmd.parent_image ) {
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:Put command creating a virtual placement cannot refer to a parent" );
       return;
     }
-    KittyPlacement place;
-    place.image_id = id;
-    place.placement_id = cmd.placement_id;
-    place.row = fb->ds.get_cursor_row();
-    place.col = fb->ds.get_cursor_col();
-    place.columns = cmd.columns;
-    place.rows = cmd.rows;
-    place.src_x = cmd.src_x;
-    place.src_y = cmd.src_y;
-    place.src_w = cmd.src_w;
-    place.src_h = cmd.src_h;
-    place.cell_x = cmd.cell_x;
-    place.cell_y = cmd.cell_y;
-    place.z = cmd.z;
-    place.cursor_hold = cmd.cursor_hold != 0 || cmd.parent_image != 0;
-    place.unicode_placeholder = cmd.unicode_placeholder != 0;
-    place.parent_image = cmd.parent_image;
-    place.parent_placement = cmd.parent_placement;
-    place.H = cmd.H;
-    place.V = cmd.V;
+    uint32_t id = resolve_kitty_id( fb, cmd, false );
+    if ( id == 0 || fb->find_kitty_image( id ) == NULL ) {
+      char message[160];
+      snprintf( message, sizeof message, "ENOENT:Put command refers to non-existent image with id: %u and number: %u",
+                cmd.image_id, cmd.image_number );
+      kitty_reply( this, cmd, cmd.image_id, message );
+      return;
+    }
+    if ( !placement_flags_ok( this, cmd ) ) {
+      return;
+    }
+    KittyPlacement place = placement_of( cmd, id, fb );
+    /* What the terminal would refuse is refused here, as kitty words it. */
+    const std::string refused = kitty_check_parent( *fb, place );
+    if ( !refused.empty() ) {
+      kitty_reply( this, cmd, cmd.image_id, refused );
+      return;
+    }
     fb->put_kitty_placement( place );
     kitty_reply( this, cmd, id, "OK" );
     advance_kitty_cursor( fb, place, client_geometry );
@@ -857,9 +1324,9 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
   }
 
   if ( cmd.action == KittyQuery || cmd.action == KittyTransmit || cmd.action == KittyTransmitAndDisplay
-       || cmd.action == KittyEdit ) {
+       || cmd.action == KittyEdit || cmd.action == KittyService || cmd.action == KittyFrame ) {
     if ( cmd.image_id != 0 && cmd.image_number != 0 ) {
-      kitty_reply( this, cmd, cmd.image_id, "EINVAL: both i and I specified" );
+      kitty_reply( this, cmd, cmd.image_id, "EINVAL:both i and I specified" );
       return;
     }
     kitty_uploading = true;
@@ -877,5 +1344,12 @@ void Dispatcher::APC_dispatch( const Parser::APC_End* act __attribute( ( unused 
     return;
   }
 
-  /* animation / compose: ignore for now */
+  if ( cmd.action == KittyCompose ) {
+    compose_frames( cmd, fb );
+    return;
+  }
+
+  if ( cmd.action == KittyAnimate ) {
+    control_animation( cmd, fb );
+  }
 }

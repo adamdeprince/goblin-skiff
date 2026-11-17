@@ -126,11 +126,20 @@ private:
   void finish_kitty_upload( Framebuffer* fb );
   void finish_vector_edit( const KittyCommand& cmd, const std::string& data, Framebuffer* fb );
   void refresh_gpu_surface( const KittyCommand& cmd, Framebuffer* fb );
+  /* a=f, a=c and a=a: the frames of an image, as far as an image of one
+     frame has them. */
+  void finish_animation_frame( const KittyCommand& cmd, const std::string& data, Framebuffer* fb );
+  void compose_frames( const KittyCommand& cmd, Framebuffer* fb );
+  void control_animation( const KittyCommand& cmd, Framebuffer* fb );
   void finish_sixel( Framebuffer* fb );
   void finish_dcs( Framebuffer* fb );
   void finish_termcap();
 
 public:
+  /* An image whose pixels were edited in place, sent as the rectangle that
+     changed to a peer that has the version before. */
+  bool replace_image_pixels( const KittyImage& existing, const std::string& before, const std::string& after,
+                             Framebuffer* fb, std::string& error );
   bool sixel_enabled = false;
   bool mime_clipboard_enabled = false;
   bool pointer_available = false;

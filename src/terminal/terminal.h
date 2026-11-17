@@ -102,11 +102,20 @@ public:
   std::string set_client_extensions( const ClientExtensions& info );
   std::string extension_detach( void );
   bool extension_contacts_live( void ) const { return dispatch.ext_relay.live_contacts(); }
+  /* The terminal has owed an answer to the vector service this long. */
+  bool extension_service_overdue( uint64_t ms ) const { return dispatch.ext_relay.service_overdue( ms ); }
   void extension_output_written( void ) { dispatch.ext_relay.note_output( fb ); }
   std::vector<std::string> take_extension_outputs( void )
   {
     std::vector<std::string> out;
     out.swap( dispatch.ext_relay.outputs );
+    return out;
+  }
+  /* The desktop notifications programs wrote since the last call. */
+  std::vector<std::string> take_notices( void )
+  {
+    std::vector<std::string> out;
+    out.swap( dispatch.ext_relay.notices );
     return out;
   }
   void set_relay_timing( uint64_t input_us, uint64_t repaint_us, uint64_t rtt_ms )

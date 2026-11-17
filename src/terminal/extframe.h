@@ -22,16 +22,12 @@
 
    Fields are ASCII, unordered and case sensitive. A program's frame is
    rejected as a whole when a key repeats, a value is malformed or out of
-   range, a required field is missing, or the fields exceed 127 bytes. Unknown
-   keys are ignored, which is how the extensions grow without new versions. */
+   range, or a required field is missing. The fields have no length limit of
+   their own; --escape-limit can bound a whole OSC. Unknown keys are ignored,
+   which is how the extensions grow without new versions. */
 
 namespace Terminal {
 namespace Ext {
-
-/* The limit the framing puts on what a program sends, counted from after
-   the selector. It keeps relays and terminals in agreement about which frames
-   exist; nothing here stores a frame in a buffer of this size. */
-const size_t PROGRAM_FIELDS_LIMIT = 127;
 
 class Fields
 {
@@ -72,6 +68,10 @@ bool parse_program( const std::string& payload, Frame& out );
 /* A decimal integer from lo to hi, with no leading +. */
 bool parse_integer( const std::string& text, int64_t lo, int64_t hi, int64_t& out );
 Value integer( const Fields& fields, const std::string& key, int64_t lo, int64_t hi, int64_t& out );
+/* An unsigned decimal integer of at most max: digits alone, as Silkie reads
+   a device id. */
+bool parse_unsigned( const std::string& text, uint64_t max, uint64_t& out );
+Value unsigned_integer( const Fields& fields, const std::string& key, uint64_t max, uint64_t& out );
 
 /* The frame as the terminal writes it, terminated by ST. */
 std::string encode( const std::string& selector, const Fields& fields );
@@ -94,8 +94,9 @@ public:
   CNumbers& operator=( const CNumbers& ) = delete;
 };
 
-/* Separates OSC 777 and OSC 22 frames a terminal writes from the rest of
-   its input, in order. Inside bracketed paste everything is literal. Frames
+/* Separates OSC 777 and OSC 22 frames a terminal writes, and its OSC 99
+   answers about notifications and OSC 7501 Program Status replies, from the
+   rest of its input, in order. Inside bracketed paste everything is literal. Frames
    are held whole, however long, until they end; a prefix that does not become
    a frame, such as a lone Escape key, is released by expire(). */
 class InputDemux
@@ -105,8 +106,12 @@ class InputDemux
   bool paste_ = false;
   bool matched_ = false;
   bool escape_ = false;
+  bool graphics_ = false;
 
 public:
+  /* While on, a graphics protocol reply (ESC _ G) is held whole like a frame,
+     for the replies a program's request is waiting on. */
+  void capture_graphics( bool on ) { graphics_ = on; }
   struct Output
   {
     /* Each item is either ordinary input or a whole frame, in input order. */
@@ -119,7 +124,8 @@ public:
   bool in_frame() const { return matched_; }
 };
 
-/* The payload of a frame from InputDemux: the text between OSC and ST. */
+/* The payload of a frame from InputDemux: the text between OSC and ST, or
+   APC and ST. */
 std::string frame_payload( const std::string& frame );
 
 }

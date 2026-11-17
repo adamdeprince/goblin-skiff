@@ -89,6 +89,44 @@ static int startup_unused_rows( const Framebuffer& f )
   return f.ds.get_height() - used;
 }
 
+bool Display::needs_repaint( const ClientExtensions& info, const Framebuffer& shown ) const
+{
+  const bool sgr_changes = info.listing != render_extended_sgr;
+  const bool fonts_change = info.speaks( Selector::FONT ) != render_fonts;
+  const bool depth_changes = info.speaks( Selector::DEPTH ) != render_depth;
+  const bool gamut_changes = info.image_gamut != ( render_extensions && extensions.image_gamut );
+  const bool hdr_changes = info.has_format( "64" ) != hdr_supported();
+  const bool raster_changes = kitty_packed_formats( info.format ) != kitty_packed_formats( render_extensions ? extensions.format : "" );
+  if ( depth_changes ) {
+    for ( const auto& placement : shown.get_kitty_placements() ) {
+      if ( placement.has_depth() ) {
+        return true;
+      }
+    }
+  }
+  if ( sgr_changes || fonts_change || depth_changes ) {
+    for ( int y = 0; y < shown.ds.get_height(); y++ ) {
+      for ( int x = 0; x < shown.ds.get_width(); x++ ) {
+        const Renditions& renditions = shown.get_cell( y, x )->get_renditions();
+        if ( ( sgr_changes && renditions.has_extended() ) || ( fonts_change && renditions.has_font() )
+             || ( depth_changes && renditions.has_depth() ) ) {
+          return true;
+        }
+      }
+    }
+  }
+  if ( render_kitty && ( gamut_changes || hdr_changes || raster_changes ) ) {
+    for ( const auto& image : shown.get_kitty_images() ) {
+      if ( ( gamut_changes && kitty_image_needs_gamut( image.second ) )
+           || ( hdr_changes && kitty_image_needs_hdr( image.second ) )
+           || ( raster_changes && ( image.second.native || kitty_image_is_packed( image.second ) ) ) ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 std::string Display::new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f,
                                 StartupScreen* startup ) const
 {
@@ -119,6 +157,8 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
   }
   FrameState frame( last, row_offset );
   frame.extended_sgr = render_extended_sgr;
+  frame.font_sgr = render_fonts;
+  frame.depth_sgr = render_depth;
   bool have_sized_text = false, redraw_sized_text = !initialized || resized;
   for ( int y = 0; y < f.ds.get_height(); y++ ) {
     for ( int x = 0; x < f.ds.get_width(); x++ ) {
@@ -452,10 +492,26 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
 
   if ( render_kitty ) {
     const size_t before_kitty = frame.str.size();
+    /* A placement is made at the depth of the terminal's cursor, which is
+       that of the text last drawn. */
+    const TextStyle& text = text_style_of( frame.current_rendition.get_text_style() );
+    CursorDepth cursor_depth;
+    cursor_depth.known = true;
+    cursor_depth.depth = render_depth ? text.depth : 0;
+    cursor_depth.depth_pixels = render_depth ? text.depth_pixels : 0;
+    cursor_depth.phase = render_depth ? text.phase : 0;
     append_kitty_frame( frame.str, initialized && !redraw_sixel, frame.last_frame, f, convert_sixel,
-                        render_extensions && extensions.image_gamut, &vector_resent );
+                        render_extensions && extensions.image_gamut, &vector_resent,
+                        render_extensions && extensions.has_graphics( "viewport" ), hdr_supported(),
+                        render_extensions ? kitty_packed_formats( extensions.format ) : 0,
+                        render_extensions && extensions.speaks( Selector::DEPTH ), &cursor_depth );
     if ( frame.str.size() != before_kitty ) {
       frame.cursor_x = frame.cursor_y = -1;
+    }
+    if ( cursor_depth.depth != text.depth || cursor_depth.depth_pixels != text.depth_pixels
+         || cursor_depth.phase != text.phase ) {
+      /* The placements left the terminal at their depth, not the text's. */
+      frame.append_string( depth_frame( text.depth, text.depth_pixels, text.phase ) );
     }
   }
 
@@ -759,7 +815,7 @@ void FrameState::update_rendition( const Renditions& r, bool force )
 {
   if ( force || !( current_rendition == r ) ) {
     /* print renditions */
-    append_string( r.sgr( extended_sgr ) );
+    append_string( r.sgr( extended_sgr, font_sgr, depth_sgr ) );
     current_rendition = r;
   }
 }

@@ -118,6 +118,9 @@ void Transport<MyState, RemoteState>::recv( void )
     sender.set_peer_zstd_capabilities( inst.has_zstd_supported() && inst.zstd_supported(),
                                        inst.has_zstd_dict_id() ? inst.zstd_dict_id() : "" );
     sender.set_peer_large_fragments_supported( inst.large_fragments_supported() );
+    sender.set_peer_motion_records_supported( inst.motion_records_supported() );
+    sender.set_peer_raw_frames_supported( inst.raw_frames_supported() );
+    peer_notices = inst.notices_supported() ? 1 : 0;
 
     sender.process_acknowledgment_through( inst.ack_num() );
 

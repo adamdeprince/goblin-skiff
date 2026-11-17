@@ -28,6 +28,7 @@ const char MAGIC[] = { 'M', 'O', 'S', 'H', 'C', 'P', '1', '\0' };
 const size_t MAGIC_LEN = sizeof( MAGIC );
 const uint8_t WIRE_VERSION = 1;
 const size_t HEADER_LEN = MAGIC_LEN + 1 + 1 + 8 + 4 + 4 + 4;
+static_assert( HEADER_LEN == Network::Bulk::DATAGRAM_HEADER_LEN, "the header is as bulkdatagram.h says" );
 
 void append_u8( std::string& out, uint8_t value )
 {
@@ -121,7 +122,7 @@ bool Network::Bulk::decode_datagram( const std::string& packet, Datagram& datagr
     return false;
   }
   if ( !read_u8( packet, offset, type ) || type < static_cast<uint8_t>( PacketType::Manifest )
-       || type > static_cast<uint8_t>( PacketType::FileAck ) ) {
+       || type > static_cast<uint8_t>( PacketType::NoticeAck ) ) {
     return false;
   }
   if ( !read_u64( packet, offset, datagram.transfer_id ) || !read_u32( packet, offset, datagram.block_id )

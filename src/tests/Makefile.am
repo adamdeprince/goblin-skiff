@@ -225,3 +225,5 @@ gpu_surface_CPPFLAGS = $(terminal_geometry_CPPFLAGS)
 gpu_surface_LDADD = $(terminal_geometry_LDADD)
 TESTS += silkie-integration.test
 EXTRA_DIST += silkie-integration.py silkie-integration.test
+TESTS += silkie-notify-integration.test
+EXTRA_DIST += silkie-notify-integration.py silkie-notify-integration.test

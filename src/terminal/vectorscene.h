@@ -12,10 +12,14 @@
 #define VECTORSCENE_HPP
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "src/terminal/vectorfonts.h"
 
 /* A vector image is a scene of records, one per line, that the terminal at
    the far end rasterizes. Skiff never draws one: it keeps the scene as a table
@@ -48,12 +52,17 @@ struct Record
   std::vector<std::string> d_parts;      /* each d of the record */
   std::string pts;
   std::string line;
+  std::vector<std::string> fonts; /* the session fonts a text record names with "@" */
 };
 
 /* A color as the records write one, that paints something: not none. */
 bool color_paints( const std::string& color );
-/* Every record or none: the error of the first malformed one is "Line N: why". */
-bool parse_records( const std::string& text, std::vector<Record>& out, std::string& error );
+/* Every record or none: the error of the first malformed one is "Line N: why".
+   With fonts, a text record may name only those session fonts. */
+bool parse_records( const std::string& text,
+                    std::vector<Record>& out,
+                    std::string& error,
+                    const FontCheck* fonts = nullptr );
 
 struct Element
 {
@@ -65,6 +74,7 @@ struct Element
   std::string line;               /* the record as given, without pts for a pen stroke */
   std::string pts;                /* a pen stroke's points, with every append */
   std::vector<std::string> paths; /* path data appended to a path or a symbol */
+  std::vector<std::string> fonts; /* the session fonts a text record names */
   size_t bytes() const;
 };
 
@@ -77,7 +87,9 @@ class Table
   bool root_has_t = false;
   Matrix root_t;
   size_t element_bytes = 0;
+  std::map<std::string, size_t> font_refs; /* session font: the text records that name it */
 
+  void count_fonts( const Element& e, bool adding );
   const Element* lookup( uint32_t id ) const;
   bool is_descendant( const Element& e, uint32_t group ) const;
   void remove( uint32_t id );
@@ -90,11 +102,21 @@ public:
      the ones before it applied, as the terminal does; the error says why. */
   std::string apply( const std::vector<Record>& records );
   std::string text() const;
+  /* Without the text records that name a session font for which font_ok
+     is false. */
+  std::string text( const std::function<bool( const std::string& )>& font_ok ) const;
   size_t bytes() const { return element_bytes + root_line.size(); }
   size_t size() const { return live; }
+  /* Whether text in the scene names a session font. */
+  bool names_font( const std::string& name ) const { return font_refs.count( name ) != 0; }
+  const std::map<std::string, size_t>& fonts() const { return font_refs; }
   /* Takes a point in the user units of the image into the coordinate system
      of a group, through the transforms of the groups above it. */
   bool point_to_group( uint32_t group, double& x, double& y ) const;
+  /* The matrix that takes a point in the user units of the image into the
+     coordinate system of a group; false when the group is not one, or the
+     transforms on the way down cannot be inverted. */
+  bool group_inverse( uint32_t group, Matrix& out ) const;
 };
 
 struct Step

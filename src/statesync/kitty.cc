@@ -29,10 +29,18 @@ void image_to_proto( const KittyImage& image, KittyBuffers::Image* output )
   }
   output->set_width( image.width );
   output->set_height( image.height );
-  if ( image.format == KITTY_FORMAT_VECTOR ) {
+  if ( image.native ) {
+    output->set_native( image.data ? *image.data : std::string() );
+    output->set_native_format( image.format );
+    output->set_transfer( image.transfer );
+    output->set_tone_map( image.tone_map );
+  } else if ( image.format == KITTY_FORMAT_VECTOR ) {
     output->set_vector( kitty_vector_records( image ) );
     output->set_vector_lineage( image.vector ? image.vector->lineage : 0 );
     output->set_vector_version( image.vector ? image.vector->version : 0 );
+    if ( image.tone_map ) {
+      output->set_tone_map( true );
+    }
   } else if ( image.format == KITTY_FORMAT_HDR ) {
     output->set_hdr( image.data ? *image.data : std::string() );
     if ( image.tone_map ) {
@@ -46,6 +54,9 @@ void image_to_proto( const KittyImage& image, KittyBuffers::Image* output )
     if ( image.png_original ) {
       output->set_png_original( true );
     }
+  } else if ( kitty_image_is_packed( image ) ) {
+    output->set_packed( image.data ? *image.data : std::string() );
+    output->set_packed_format( image.format );
   } else {
     output->set_webp( image.data ? *image.data : std::string() );
   }
@@ -128,29 +139,62 @@ void placement_to_proto( const KittyPlacement& placement, KittyBuffers::Placemen
   if ( placement.H != 0 ) {
     output->set_horizontal_offset( placement.H );
   }
+  if ( placement.flags != 0 ) {
+    output->set_flags( placement.flags );
+  }
   if ( placement.V != 0 ) {
     output->set_vertical_offset( placement.V );
+  }
+  if ( placement.depth != 0 ) {
+    output->set_depth( placement.depth );
+  }
+  if ( placement.depth_pixels != 0 ) {
+    output->set_depth_pixels( placement.depth_pixels );
+  }
+  if ( placement.phase != 0 ) {
+    output->set_phase( placement.phase );
   }
 }
 
 /* A raster image as the wire has it: WebP, palette DjVu or PNG. */
 bool image_from_proto( const KittyBuffers::Image& source, KittyImage& image )
 {
-  if ( int( source.has_webp() ) + int( source.has_djvu() ) + int( source.has_png() ) != 1
-       || source.has_palette() != source.has_djvu() || source.palette().size() > GRAPHICS_MAX_PALETTE * 4 ) {
+  if ( int( source.has_webp() ) + int( source.has_djvu() ) + int( source.has_png() ) + int( source.has_packed() ) + int( source.has_native() ) != 1
+       || source.has_palette() != source.has_djvu() || source.palette().size() > GRAPHICS_MAX_PALETTE * 4
+       || source.has_packed() != source.has_packed_format() || source.has_native() != source.has_native_format() ) {
     return false;
   }
   image.id = source.id();
   image.number = source.number();
-  image.format = source.has_djvu() ? KITTY_FORMAT_DJVU : source.has_png() ? KITTY_FORMAT_PNG : KITTY_FORMAT_WEBP;
+  image.format = source.has_native()   ? source.native_format()
+                 : source.has_djvu()     ? KITTY_FORMAT_DJVU
+                 : source.has_png()    ? KITTY_FORMAT_PNG
+                 : source.has_packed() ? source.packed_format()
+                                       : KITTY_FORMAT_WEBP;
   image.width = source.width();
   image.height = source.height();
   image.origin = source.origin() == KittyBuffers::Image::SIXEL ? ImageOrigin::Sixel : ImageOrigin::Kitty;
-  image.data = std::make_shared<std::string>(
-    source.has_djvu() ? source.djvu() : source.has_png() ? source.png() : source.webp() );
+  image.data = std::make_shared<std::string>( source.has_native()   ? source.native()
+                                              : source.has_djvu()     ? source.djvu()
+                                              : source.has_png()    ? source.png()
+                                              : source.has_packed() ? source.packed()
+                                                                    : source.webp() );
+  if ( source.has_packed() && !kitty_image_is_packed( image ) ) {
+    return false;
+  }
   image.palette = source.palette();
   image.gamut = source.gamut();
   image.png_original = source.has_png() && source.png_original();
+  image.native = source.has_native();
+  image.transfer = source.transfer();
+  image.tone_map = source.tone_map();
+  if ( image.native ) {
+    size_t size = 0;
+    if ( !kitty_transfer_valid( image.format, image.transfer )
+         || !kitty_native_size( image.format, image.width, image.height, size ) || image.data->size() != size ) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -176,6 +220,10 @@ KittyPlacement placement_from_proto( const KittyBuffers::Placement& input )
   placement.parent_placement = input.parent_placement();
   placement.H = input.horizontal_offset();
   placement.V = input.vertical_offset();
+  placement.flags = input.flags();
+  placement.depth = input.depth();
+  placement.depth_pixels = input.depth_pixels();
+  placement.phase = input.phase();
   return placement;
 }
 }
@@ -239,6 +287,35 @@ bool kitty_state_delta_to_proto( const Framebuffer& existing,
     }
   }
 
+  /* Session fonts: the upload itself only for a generation the receiver
+     lacks. */
+  const Vector::SessionFonts& old_fonts = existing.get_vector_fonts();
+  for ( const auto& font : current.get_vector_fonts() ) {
+    const auto old = old_fonts.find( font.first );
+    if ( old != old_fonts.end() && old->second == font.second ) {
+      continue;
+    }
+    KittyBuffers::SessionFont* out = output->add_font();
+    out->set_name( font.first );
+    out->set_generation( font.second.generation );
+    if ( ( old == old_fonts.end() || old->second.generation != font.second.generation ) && font.second.upload ) {
+      out->set_upload( *font.second.upload );
+    }
+    if ( font.second.released ) {
+      out->set_released( true );
+    }
+    if ( font.second.request ) {
+      out->set_request( font.second.request );
+    }
+    changed = true;
+  }
+  for ( const auto& font : old_fonts ) {
+    if ( !current.get_vector_fonts().count( font.first ) ) {
+      output->add_delete_font( font.first );
+      changed = true;
+    }
+  }
+
   if ( force_placements || image_change_invalidates_placement
        || existing.get_kitty_placements() != current.get_kitty_placements() ) {
     output->set_replace_placements( true );
@@ -256,6 +333,25 @@ void apply_kitty_state_delta( const KittyBuffers::StateDelta& input, Framebuffer
 {
   for ( int i = 0; i < input.delete_image_id_size(); i++ ) {
     framebuffer.erase_kitty_image( input.delete_image_id( i ) );
+  }
+
+  for ( const auto& name : input.delete_font() ) {
+    framebuffer.erase_vector_font( name );
+  }
+  for ( const auto& source : input.font() ) {
+    const auto old = framebuffer.get_vector_fonts().find( source.name() );
+    Vector::SessionFont font;
+    font.generation = source.generation();
+    font.released = source.released();
+    font.request = source.request();
+    if ( source.has_upload() ) {
+      font.upload = std::make_shared<const std::string>( source.upload() );
+    } else if ( old != framebuffer.get_vector_fonts().end() && old->second.generation == font.generation ) {
+      font.upload = old->second.upload;
+    } else {
+      continue; /* not the generation the sender meant */
+    }
+    framebuffer.put_vector_font( source.name(), font );
   }
 
   for ( const auto& patch : input.image_patch() ) {
@@ -306,6 +402,7 @@ void apply_kitty_state_delta( const KittyBuffers::StateDelta& input, Framebuffer
         }
         table->apply( records );
         image.format = KITTY_FORMAT_VECTOR;
+        image.tone_map = source.tone_map();
         image.vector = Vector::make_doc( source.vector_lineage(), source.vector_version(), image.width,
                                          image.height, table );
       } else {
@@ -318,7 +415,7 @@ void apply_kitty_state_delta( const KittyBuffers::StateDelta& input, Framebuffer
     }
     KittyImage image;
     std::string rgba;
-    if ( source.id() == 0 || !image_from_proto( source, image ) || !kitty_image_to_rgba( image, rgba ) ) {
+    if ( source.id() == 0 || !image_from_proto( source, image ) || ( !image.native && !kitty_image_to_rgba( image, rgba ) ) ) {
       continue;
     }
     framebuffer.put_kitty_image( image );

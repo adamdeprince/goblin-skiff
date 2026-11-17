@@ -117,10 +117,14 @@ private:
   bool peer_zstd_supported;
   std::string peer_zstd_dictionary_id;
   bool peer_large_fragments_supported = false;
+  bool peer_motion_records_supported = false;
+  bool peer_raw_frames_supported = false;
   bool low_latency = false; /* a program asked for its output as soon as it is written */
 
 public:
   void set_peer_large_fragments_supported( bool supported ) { peer_large_fragments_supported = supported; }
+  void set_peer_motion_records_supported( bool supported ) { peer_motion_records_supported = supported; }
+  void set_peer_raw_frames_supported( bool supported ) { peer_raw_frames_supported = supported; }
   /* constructor */
   TransportSender( Connection* s_connection, MyState& initial_state, bool s_compact_keepalive = false );
 
@@ -185,6 +189,9 @@ public:
   void set_send_delay( int new_delay ) { SEND_MINDELAY = new_delay; }
   void set_low_latency( bool enabled ) { low_latency = enabled; }
   unsigned int send_mindelay( void ) const { return low_latency ? std::min( SEND_MINDELAY, 1U ) : SEND_MINDELAY; }
+  /* What the sender waits without the low latency mode, whatever the mode. */
+  unsigned int normal_mindelay( void ) const { return SEND_MINDELAY; }
+  unsigned int normal_interval( void ) const;
   void request_immediate_send( void ) { immediate_send_requested = true; }
 
   unsigned int send_interval( void ) const;

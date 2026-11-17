@@ -159,24 +159,36 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
                                                   bool allow_zstd,
                                                   bool allow_zstd_dictionary,
                                                   const std::string& zstd_dictionary_id,
-                                                  bool allow_large_fragments )
+                                                  bool allow_large_fragments,
+                                                  bool allow_raw )
 {
   if ( MTU <= Fragment::frag_header_len ) { throw std::invalid_argument( "MTU is too small for a state fragment" ); }
   MTU -= Fragment::frag_header_len;
-  if ( ( inst.old_num() != last_instruction.old_num() ) || ( inst.new_num() != last_instruction.new_num() )
-       || ( inst.ack_num() != last_instruction.ack_num() )
-       || ( inst.throwaway_num() != last_instruction.throwaway_num() )
-       || ( inst.chaff() != last_instruction.chaff() )
-       || ( inst.protocol_version() != last_instruction.protocol_version() )
-       || ( inst.goblin_release() != last_instruction.goblin_release() )
-       || ( inst.goblin_build() != last_instruction.goblin_build() )
-       || ( inst.goblin_protocol() != last_instruction.goblin_protocol() )
-       || ( inst.zstd_supported() != last_instruction.zstd_supported() )
-       || ( inst.zstd_dict_id() != last_instruction.zstd_dict_id() ) || ( last_MTU != MTU )
-       || ( inst.large_fragments_supported() != last_instruction.large_fragments_supported() )
-       || ( allow_large_fragments != last_allow_large_fragments )
-       || ( allow_zstd != last_allow_zstd ) || ( allow_zstd_dictionary != last_allow_zstd_dictionary )
-       || ( zstd_dictionary_id != last_zstd_dictionary_id ) ) {
+  const bool same_update
+    = ( inst.old_num() == last_instruction.old_num() ) && ( inst.new_num() == last_instruction.new_num() )
+      && ( inst.protocol_version() == last_instruction.protocol_version() )
+      && ( inst.goblin_release() == last_instruction.goblin_release() )
+      && ( inst.goblin_build() == last_instruction.goblin_build() )
+      && ( inst.goblin_protocol() == last_instruction.goblin_protocol() )
+      && ( inst.zstd_supported() == last_instruction.zstd_supported() )
+      && ( inst.zstd_dict_id() == last_instruction.zstd_dict_id() ) && ( last_MTU == MTU )
+      && ( inst.large_fragments_supported() == last_instruction.large_fragments_supported() )
+      && ( allow_large_fragments == last_allow_large_fragments ) && ( allow_raw == last_allow_raw )
+      && ( allow_zstd == last_allow_zstd ) && ( allow_zstd_dictionary == last_allow_zstd_dictionary )
+      && ( zstd_dictionary_id == last_zstd_dictionary_id );
+  const bool same_bytes = same_update && ( inst.ack_num() == last_instruction.ack_num() )
+                          && ( inst.throwaway_num() == last_instruction.throwaway_num() )
+                          && ( inst.chaff() == last_instruction.chaff() );
+  /* An update of several fragments arrives whole or not at all. Sent again as
+     something new, it needs every fragment through in one pass, which on a lossy
+     link grows ever less likely with its size, and may never happen. Sent again
+     as the same bytes under the same id, each pass fills the gaps of the last.
+     The ack and throwaway it carries may have aged, which a receiver takes in
+     its stride; the signal that ends a session may not. */
+  const bool resend = same_update && have_last_payload && last_fragment_count > 1
+                      && inst.ack_num() != uint64_t( -1 ) && inst.new_num() != uint64_t( -1 );
+  const bool reuse = have_last_payload && ( same_bytes || resend );
+  if ( !reuse ) {
     next_instruction_id++;
   }
 
@@ -190,8 +202,13 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
   last_allow_zstd_dictionary = allow_zstd_dictionary;
   last_zstd_dictionary_id = zstd_dictionary_id;
   last_allow_large_fragments = allow_large_fragments;
+  last_allow_raw = allow_raw;
 
-  std::string payload = get_compressor().compress_str( inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary );
+  if ( !reuse ) {
+    last_payload = get_compressor().compress_str( inst.SerializeAsString(), allow_zstd, allow_zstd_dictionary, allow_raw );
+    have_last_payload = true;
+  }
+  const std::string& payload = last_payload;
   size_t count = payload.size() / MTU + ( payload.size() % MTU != 0 );
   if ( !allow_large_fragments && count > 32768 ) {
     throw std::length_error( "large screen state requires a peer supporting extended fragments" );
@@ -203,6 +220,7 @@ std::vector<Fragment> Fragmenter::make_fragments( const Instruction& inst,
     MTU -= extra_header;
     count = payload.size() / MTU + ( payload.size() % MTU != 0 );
   }
+  last_fragment_count = count;
   std::vector<Fragment> ret;
   ret.reserve( count );
   // Offset slicing is linear. Repeatedly copying the remaining payload was

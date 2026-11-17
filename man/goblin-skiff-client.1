@@ -147,6 +147,14 @@ images locally. These options override forced mascot and preview formats;
 a disabled forced format falls back to ASCII.
 
 .TP
+.B \-\-exact\-mouse
+Send every report of a mouse, pen or finger as it came, with nothing smoothed,
+merged or held; the same as \fBGOBLIN_SKIFF_EXACT_MOUSE=1\fP. Otherwise a
+hand's motion is smoothed and thinned on the client, and a moving hand is
+reported at least every \fBGOBLIN_SKIFF_HAND_INTERVAL\fP milliseconds
+(default 25; \fB--radio\fP makes it 250 unless set).
+
+.TP
 .B \-\-mascot=\fIFORMAT\fP
 Select auto, kitty, sixel, ascii, or none for the inline startup mascot.
 The mascot remains in native scrollback when the first remote frame arrives;
@@ -192,7 +200,9 @@ Request a local SOCKS5 dynamic forward. See
 
 .TP
 .B \-A
-Request SSH agent forwarding.
+Authorize the local SSH_AUTH_SOCK as a fallback when the terminal has no
+agent provider. Terminal providers are preferred; the server exposes a stable
+SSH-compatible socket. See goblin-skiff(1).
 
 .TP
 .B \-X

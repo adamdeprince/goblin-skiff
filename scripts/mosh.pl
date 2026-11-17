@@ -111,6 +111,7 @@ my $tmux_control = 0;
 my $mascot = $ENV{ 'GOBLIN_SKIFF_MASCOT' } // 'auto';
 my $no_kitty = 0;
 my $no_sixel = 0;
+my $exact_mouse = 0;
 my $lossy_quality = undef;
 my $djvu_lossy = 0;
 my $clipboard_fast_threshold = $ENV{ 'GOBLIN_SKIFF_CLIPBOARD_FAST_THRESHOLD' } // 65536;
@@ -195,6 +196,10 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
                             local destination (default: ~/Downloads)
         --stream-delay=MS   coalesce forwarded stream bytes before sending
                                 (default: 75)
+        --exact-mouse       send every report of a mouse, pen or finger as it
+                                came, nothing smoothed or merged (otherwise a
+                                moving hand is reported at least every
+                                GOBLIN_SKIFF_HAND_INTERVAL ms, default 25)
         --connect-timeout=SECONDS
                                 initial UDP connection and proxy setup timeout
                                 (1..3600 seconds; default: 120)
@@ -293,6 +298,7 @@ GetOptions( 'client=s' => \$client,
 	    'download-directory=s' => \$download_directory,
 	    'stream-delay=i' => \$stream_delay,
 	    'stream-bandwidth=i' => \$stream_bandwidth,
+	    'exact-mouse' => \$exact_mouse,
             'connect-timeout=s' => \$connect_timeout,
 	    'state-zstd-dict=s' => \$state_zstd_dict,
 	    'state-sample-log=s' => \$state_sample_log,
@@ -586,6 +592,9 @@ close COLORCOUNT or die;
 # exposing its unknown-option diagnostics, and advertise only confirmed codecs.
 my $client_palette_djvu = 0;
 my $client_png_state = 0;
+my $client_packed_state = 0;
+my $client_packed_zstd = 0;
+my $client_native_images = 0;
 my $codec_pid = open( my $codec_output, '-|' );
 die "Can't query client image codecs: $!\n" unless defined $codec_pid;
 if ( !$codec_pid ) {
@@ -598,7 +607,10 @@ if ( !$codec_pid ) {
   my $codecs = <$codec_output> // '';
   my $codec_ok = close( $codec_output );
   $client_palette_djvu = $codec_ok && $codecs =~ /(?:\A|\s)palette-djvu-v1(?:\s|\z)/;
+  $client_native_images = $codec_ok && $codecs =~ /(?:\A|\s)native-image-v1(?:\s|\z)/;
   $client_png_state = $codec_ok && $codecs =~ /(?:\A|\s)png-state-v1(?:\s|\z)/;
+  $client_packed_state = $codec_ok && $codecs =~ /(?:\A|\s)packed-state-v2(?:\s|\z)/;
+  $client_packed_zstd = $codec_ok && $codecs =~ /(?:\A|\s)packed-zstd-v1(?:\s|\z)/;
 }
 die "$0: --djvu-lossy requires a client supporting palette-djvu-v1; update goblin-skiff-client.\n"
   if $djvu_lossy && !$client_palette_djvu;
@@ -930,6 +942,7 @@ if ( $pid == 0 ) { # child
   push @client_crypto, '--tmux-control' if $tmux_control;
   push @client_crypto, '--no-kitty' if $no_kitty;
   push @client_crypto, '--no-sixel' if $no_sixel;
+  push @client_crypto, '--exact-mouse' if $exact_mouse;
   push @client_crypto, '--udp-relay' if @jumps;
   push @client_crypto, "--socks5-proxy=$socks5_proxy" if defined $socks5_proxy;
   exec {$client} ("$client", "-# @cmdline |", "--connect-timeout=$connect_timeout", @client_crypto, @client_forwarding, $ip, $port);
@@ -1156,6 +1169,9 @@ sub server_environment_prefix {
   my @client_capabilities = ( "keepalive-v1", "directory-v1", "directory-v2", "file-sync-v1", "link-budget-v1", "sixel-state-v1", "osc5522-v1" );
   push @client_capabilities, "palette-djvu-v1" if $client_palette_djvu;
   push @client_capabilities, "png-state-v1" if $client_png_state;
+  push @client_capabilities, "native-image-v1" if $client_native_images;
+  push @client_capabilities, "packed-state-v2" if $client_packed_state;
+  push @client_capabilities, "packed-zstd-v1" if $client_packed_state && $client_packed_zstd;
   push @client_capabilities, "goblin-download-v2" unless $no_downloads;
   push @client_capabilities, "fips-aes128-gcm-v1" if $fips_crypto;
   push @client_capabilities, "tmux-control-v1" if $tmux_control;

@@ -63,6 +63,7 @@
 #include "src/util/pty_compat.h"
 #include "src/util/select.h"
 #include "src/util/swrite.h"
+#include "src/terminal/ssh_agent.hpp"
 #include "src/util/timestamp.h"
 #include "stmclient.h"
 
@@ -146,6 +147,14 @@ void STMClient::init( void )
     overlays.set_title_prefix( std::wstring( L"[goblin-skiff] " ) );
   }
 
+  if ( const char* path = getenv( "GOBLIN_SKIFF_RECORD_INPUT" ) ) {
+    /* Every frame this terminal sends, raw, with the client's clock, for
+       tools/hand-motion/evaluate.py to tune the smoothing and thinning on. */
+    if ( *path && !( record_input = fopen( path, "a" ) ) ) {
+      perror( "GOBLIN_SKIFF_RECORD_INPUT" );
+    }
+  }
+
   /* Set terminal escape key. */
   const char* escape_key_env;
   if ( ( escape_key_env = getenv( "MOSH_ESCAPE_KEY" ) ) != NULL ) {
@@ -225,6 +234,10 @@ void STMClient::init( void )
 
 void STMClient::shutdown( void )
 {
+  if ( record_input ) {
+    fclose( record_input );
+    record_input = nullptr;
+  }
   dismiss_mascot();
   const auto download_cancel = downloads.close_forwarding();
   swrite( STDOUT_FILENO, download_cancel.data(), download_cancel.size() );
@@ -294,6 +307,8 @@ void STMClient::main_init( void )
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
   network = NetworkPointer(
     new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str(), compact_keepalive, crypto_mode, socks5_proxy ) );
+  network->get_current_state().push_back(Terminal::ExtensionInput(
+    "777;ssh-agent;v=1:op=attach:id=" + terminal_agent::nonce()));
   if ( !relay_keys.empty() ) { network->set_relay_keys( relay_keys ); relay_keys.clear(); }
   network->enable_link_budget( compact_keepalive && getenv( "GOBLIN_SKIFF_LINK_BUDGET" ) && !strcmp( getenv( "GOBLIN_SKIFF_LINK_BUDGET" ), "1" ) );
   if ( radio_mode && !network->link_budget().active() ) {
@@ -466,9 +481,14 @@ void STMClient::process_network_input( void )
           }
         }
       } else if ( input.instruction( i ).HasExtension( HostBuffers::ext_output ) ) {
-        /* Haptic feedback and pad labels, for this terminal, once. */
+        /* Haptic feedback, pad labels and requests of the vector service, for
+           this terminal, once. They reach it before the frame that follows, so
+           a font is there before the records that use it. */
         const std::string& frame = input.instruction( i ).GetExtension( HostBuffers::ext_output );
-        if ( !tmux_parser.active() && !( contact_was_lost && frame.find( ";haptic;" ) != std::string::npos ) ) {
+        if (agent_output(frame)) {
+          // Handled independently of drawing and input prediction.
+        } else if ( !tmux_parser.active() && !( contact_was_lost && frame.find( ";haptic;" ) != std::string::npos ) ) {
+          ext_client.service_written( frame );
           swrite( STDOUT_FILENO, frame.data(), frame.size() );
         }
       } else if ( tmux_control && input.instruction( i ).HasExtension( HostBuffers::tmux_output ) ) {
@@ -487,6 +507,7 @@ void STMClient::process_network_input( void )
 
   Network::Bulk::Datagram bulk;
   while ( network->pop_bulk( bulk ) ) {
+    if ( notices.receive( bulk ) ) { continue; }
     if ( bulk.type == Network::Bulk::PacketType::FileSymbol || bulk.type == Network::Bulk::PacketType::FileAck ) {
       if ( files.supported() ) { files.channel.receive( bulk ); }
       continue;
@@ -496,6 +517,12 @@ void STMClient::process_network_input( void )
       continue;
     }
     if ( !mime_clipboard.channel.receive( bulk ) ) { bulk_control.broadcast( bulk ); }
+  }
+  /* A notification is written the moment it arrives, whatever the screen is
+     waiting for. It draws nothing, so it disturbs nothing that is drawn. */
+  std::string notice;
+  while ( notices.take_message( notice ) ) {
+    if ( !tmux_parser.active() ) { swrite( STDOUT_FILENO, notice.data(), notice.size() ); }
   }
 
   /* Now give hints to the overlays */
@@ -565,11 +592,15 @@ bool STMClient::is_command_key( const std::string& key )
 
 bool STMClient::process_user_bytes( const std::string& bytes, bool panel_filtered )
 {
-  if ( panel_filtered || tmux_parser.active() ) { return process_pointer_filtered_bytes( bytes, panel_filtered ); }
+  if ( panel_filtered || tmux_parser.active() ) {
+    if ( !bytes.empty() ) { flush_collected(); }
+    return process_pointer_filtered_bytes( bytes, panel_filtered );
+  }
   if ( bytes.empty() ) { return true; }
   /* A held prefix, such as a lone Escape key, is released 50 ms after the
      last input; the empty polls of the main loop do not count. */
   ext_demux_at = timestamp();
+  ext_demux.capture_graphics( ext_client.service_pending( ext_demux_at ) );
   Terminal::Ext::InputDemux::Output output;
   ext_demux.feed( bytes, output );
   return process_demuxed( output );
@@ -582,33 +613,192 @@ bool STMClient::process_demuxed( const Terminal::Ext::InputDemux::Output& output
     if ( item.first ) {
       process_terminal_frame( item.second );
     } else if ( ok ) {
-      ok = process_pointer_filtered_bytes( item.second );
+      ok = process_plain_input( item.second );
     }
   }
   return ok;
 }
 
+/* xterm mouse motion is collected like the other reports of a mouse; what is
+   not motion is sent after what is held, in the order it all arrived. */
+bool STMClient::process_plain_input( const std::string& bytes )
+{
+  const auto mode = local_framebuffer.ds.mouse_reporting_mode;
+  const bool motion = ( mode == Terminal::DrawState::MOUSE_REPORTING_BTN_EVENT
+                        || mode == Terminal::DrawState::MOUSE_REPORTING_ANY_EVENT )
+                      && !control_panel.active() && !tmux_control && !expecting_osc52_reply;
+  const int encoding = motion ? int( local_framebuffer.ds.mouse_encoding_mode ) : -1;
+  std::vector<std::pair<bool, std::string>> pieces;
+  pointer_collector.split_motion( bytes, encoding, pieces );
+  bool ok = true;
+  for ( const auto& piece : pieces ) {
+    if ( !ok ) { break; }
+    if ( piece.first ) {
+      record_frame( "xterm", piece.second );
+      std::vector<Terminal::Motion::PointerCollector::Item> ready;
+      pointer_collector.collect_motion( piece.second, encoding, timestamp(), network->send_interval(),
+                                        network->has_unsent_data(), ready );
+      ok = send_collected( ready );
+    } else {
+      ok = flush_collected() && process_pointer_filtered_bytes( piece.second );
+    }
+  }
+  return ok;
+}
+
+bool STMClient::send_collected( const std::vector<Terminal::Motion::PointerCollector::Item>& items )
+{
+  bool ok = true;
+  for ( const auto& item : items ) {
+    if ( item.bytes && item.direct ) {
+      if ( !network->shutdown_in_progress() ) {
+        for ( char c : item.raw ) { network->get_current_state().push_back( Parser::UserByte( c ) ); }
+        network->request_immediate_send();
+      }
+    } else if ( item.bytes ) {
+      ok = process_pointer_filtered_bytes( item.raw ) && ok;
+    } else if ( !network->shutdown_in_progress() ) {
+      push_extension_input( item.input );
+    }
+  }
+  return ok;
+}
+
+bool STMClient::flush_collected( void )
+{
+  if ( !pointer_collector.holding() ) { return true; }
+  std::vector<Terminal::Motion::PointerCollector::Item> ready;
+  pointer_collector.flush( ready );
+  return send_collected( ready );
+}
+
 /* A frame from this terminal is one input operation, never predicted as
    printable text or taken for a panel shortcut; while the panel is open the
    program keeps what it captured, its final release above all. */
+void STMClient::record_frame( const std::string& kind, const std::string& bytes )
+{
+  if ( !record_input ) {
+    return;
+  }
+  std::string text;
+  for ( char c : bytes ) {
+    if ( c == '\033' ) {
+      text += "\\e";
+    } else if ( c == '\\' ) {
+      text += "\\\\";
+    } else if ( static_cast<unsigned char>( c ) < 0x20 || c == 0x7f ) {
+      char hex[8];
+      snprintf( hex, sizeof hex, "\\x%02x", static_cast<unsigned char>( c ) );
+      text += hex;
+    } else {
+      text += c;
+    }
+  }
+  fprintf( record_input, "%llu\t%s\t%s\n", (unsigned long long)timestamp(), kind.c_str(), text.c_str() );
+  fflush( record_input );
+}
+
+void STMClient::collect_smoothed( const std::vector<Terminal::ExtensionInput>& inputs )
+{
+  for ( const auto& input : inputs ) {
+    std::vector<Terminal::Motion::PointerCollector::Item> ready;
+    pointer_collector.collect( input, timestamp(), network->send_interval(), network->has_unsent_data(), ready );
+    send_collected( ready );
+  }
+}
+
+bool STMClient::agent_output(const std::string &raw)
+{
+  bool handled=agent.from_remote(raw);
+  if (handled) agent_tick();
+  return handled;
+}
+
+bool STMClient::agent_input(const std::string &raw)
+{
+  bool handled=agent.from_terminal(raw);
+  if (handled) agent_tick();
+  return handled;
+}
+
+void STMClient::agent_tick()
+{
+  agent.tick();
+  for (const auto &raw : agent.take_terminal()) swrite(STDOUT_FILENO,raw.data(),raw.size());
+  for (const auto &raw : agent.take_remote())
+    if (!network->shutdown_in_progress()) push_extension_input(Terminal::ExtensionInput(Terminal::Ext::frame_payload(raw)));
+}
+
 void STMClient::process_terminal_frame( const std::string& frame )
 {
   NetworkType& net = *network;
+  if (agent_input(frame)) return;
+  record_frame( "frame", frame );
   if ( frame.compare( 0, 2 + goblin::pointer::prefix.size(), "\033]" + std::string( goblin::pointer::prefix ) ) == 0 ) {
     goblin::pointer::Message m;
-    if ( goblin::pointer::parse( frame, m ) && m.op == goblin::pointer::Op::Event && local_framebuffer.ds.pointer_mode ) {
-      for ( char c : frame ) { net.get_current_state().push_back( Parser::UserByte( c ) ); }
-      net.request_immediate_send();
+    if ( goblin::pointer::parse( frame, m ) && m.op == goblin::pointer::Op::Event && local_framebuffer.ds.pointer_mode
+         && !net.shutdown_in_progress() ) {
+      /* Skiff's own pointer protocol: a hand too, thinned like the others. */
+      std::vector<Terminal::Motion::PointerCollector::Item> ready;
+      pointer_collector.collect_pointer( frame, timestamp(), net.send_interval(), net.has_unsent_data(), ready );
+      send_collected( ready );
+    }
+    return;
+  }
+  if ( frame.compare( 0, 3, "\033_G" ) == 0 ) {
+    /* The answer to a request of the vector service; anything else of this
+       kind is the input it would have been. */
+    bool forward = false, info_changed = false;
+    Terminal::ExtensionInput input;
+    if ( !ext_client.service_reply( frame, timestamp(), forward, input, info_changed ) ) {
+      flush_collected();
+      process_pointer_filtered_bytes( frame );
+      return;
+    }
+    ext_info_dirty = ext_info_dirty || info_changed;
+    if ( forward && !tmux_control && !net.shutdown_in_progress() ) {
+      flush_collected();
+      push_extension_input( input );
     }
     return;
   }
   const auto result = ext_client.frame( frame, local_framebuffer, display.get_graphics_geometry(), timestamp() );
   ext_info_dirty = ext_info_dirty || result.info_changed;
+  if ( !result.notice.empty() && !tmux_control ) {
+    notice_answers_waiting.push_back( result.notice );
+  }
   if ( !result.to_terminal.empty() && !tmux_parser.active() ) {
     swrite( STDOUT_FILENO, result.to_terminal.data(), result.to_terminal.size() );
   }
   if ( result.forward && !tmux_control && !net.shutdown_in_progress() ) {
-    push_extension_input( result.input );
+    /* Through the smoother, which holds a hand's motion for its lag, then the
+       collector, which thins it and keeps everything in order. */
+    Terminal::Motion::Smoother::Report report;
+    report.input = result.input;
+    report.ink = result.ink;
+    std::vector<Terminal::ExtensionInput> smoothed;
+    hand_smoother.feed( report, timestamp(), smoothed );
+    collect_smoothed( smoothed );
+  }
+}
+
+/* What the terminal answered of a notification goes to the program ahead of
+   everything else; to a server from before that channel, as the input it
+   would have been. */
+void STMClient::flush_notice_answers( void )
+{
+  if ( notice_answers_waiting.empty() || network->shutdown_in_progress() || network->peer_takes_notices() < 0 ) {
+    return;
+  }
+  std::deque<std::string> answers;
+  answers.swap( notice_answers_waiting );
+  for ( const auto& answer : answers ) {
+    if ( network->peer_takes_notices() ) {
+      notices.enqueue( answer );
+    } else {
+      flush_collected();
+      process_pointer_filtered_bytes( answer );
+    }
   }
 }
 
@@ -844,6 +1034,7 @@ bool STMClient::process_resize( void )
   repaint_requested = true;
 
   if ( !network->shutdown_in_progress() ) {
+    flush_collected();
     network->get_current_state().push_back( geometry );
     network->get_current_state().push_back( res );
     network->request_immediate_send();
@@ -915,10 +1106,23 @@ bool STMClient::main( void )
         ext_demux.expire( output );
         process_demuxed( output );
       }
+      if ( graphics_sent && !tmux_control && mascot.image_gamut_known()
+           && mascot.supports_image_gamut() != ext_client.info.image_gamut ) {
+        /* Whether the terminal takes the G key, from the query of a pixel the
+           local probe made, which DA1 bounds. */
+        ext_client.info.image_gamut = mascot.supports_image_gamut();
+        ext_info_dirty = true;
+      }
       if ( ext_info_dirty && !tmux_control && graphics_sent && !network->shutdown_in_progress() ) {
         /* What this terminal said of the extensions, once its replies to
            the probe are in and again whenever something of it changes, with
            the terminal's clock as the client reckons it. */
+        /* Text in a font or with Silkie's attributes, and images in a wide
+           gamut or HDR, that were drawn before this terminal was known to
+           take them, or that it no longer takes, are drawn again. */
+        if ( display.needs_repaint( ext_client.info, local_framebuffer ) ) {
+          repaint_requested = true;
+        }
         display.set_extensions( ext_client.info );
         network->get_current_state().push_back( ext_client.info );
         push_extension_input( ext_client.heartbeat( timestamp() ) );
@@ -928,6 +1132,14 @@ bool STMClient::main( void )
         /* Something the terminal reported is in progress: the server is
            told the client is still there. */
         push_extension_input( ext_client.heartbeat( timestamp() ) );
+      }
+      if ( !network->shutdown_in_progress() ) {
+        std::vector<Terminal::ExtensionInput> smoothed;
+        hand_smoother.release( timestamp(), smoothed );
+        collect_smoothed( smoothed );
+        std::vector<Terminal::Motion::PointerCollector::Item> ready;
+        pointer_collector.release( timestamp(), network->send_interval(), network->has_unsent_data(), ready );
+        send_collected( ready );
       }
       if ( !tmux_parser.active() ) {
         process_user_bytes( control_panel.flush_input( timestamp(),
@@ -954,6 +1166,7 @@ bool STMClient::main( void )
       output_new_frame();
 
       uint64_t now = timestamp();
+      agent_tick();
       if ( downloads_enabled && !tmux_control ) { downloads.tick( now ); }
       if ( downloads_enabled && !tmux_control ) {
         process_download_filtered_bytes( downloads.expire_input( now ) );
@@ -977,13 +1190,23 @@ bool STMClient::main( void )
         const auto sequence = "\033]" + mime_body + "\033\\";
         swrite( STDOUT_FILENO, sequence.data(), sequence.size() );
       }
+      flush_notice_answers();
+      const bool notice_peer = network->peer_takes_notices() == 1
+                               && now - network->get_latest_remote_state().timestamp < 15000;
       const bool reliable_data_pending = network->has_unsent_data();
       int wait_time = network->wait_time();
+      if ( notices.wait_time( now, notice_peer ) != INT_MAX ) {
+        wait_time = std::min( wait_time, std::max( notices.wait_time( now, notice_peer ), network->notice_wait_time() ) );
+      }
+      int agent_wait=agent.wait_ms();
+      if (agent_wait>=0) wait_time=std::min(wait_time,agent_wait);
       wait_time = std::min( wait_time, std::max( network->bulk_wait_time(), files.wait_time( now, !forwarder.has_pending_network_data() ) ) );
       wait_time = std::min( wait_time, mascot.wait_time( now ) );
       wait_time = std::min( wait_time, mime_input.wait_time( now ) );
       if ( ext_demux.pending() && !ext_demux.in_frame() ) { wait_time = std::min( wait_time, 50 ); }
       if ( !tmux_control ) { wait_time = std::min( wait_time, ext_client.wait_time( now ) ); }
+      wait_time = std::min( wait_time, pointer_collector.wait_time( now, network->has_unsent_data() ) );
+      wait_time = std::min( wait_time, hand_smoother.wait_time( now ) );
       if ( downloads_enabled && !tmux_control ) { wait_time = std::min( wait_time, downloads.wait_time( now, network->bulk_wait_time() ) ); }
       if ( mime_enabled ) { wait_time = std::min( wait_time, std::max( network->bulk_wait_time(), mime_clipboard.channel.wait_time( now, !forwarder.has_pending_network_data() && !reliable_data_pending ) ) ); }
       if ( !network->shutdown_in_progress() ) {
@@ -1013,6 +1236,7 @@ bool STMClient::main( void )
       for ( std::vector<int>::const_iterator it = fd_list.begin(); it != fd_list.end(); it++ ) {
         sel.add_fd( *it );
       }
+      for (const auto &fd : agent.pollfds()) if (fd.events&POLLIN) sel.add_fd(fd.fd);
       std::vector<int> forward_fds( forwarder.fds() );
       for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {
         sel.add_fd( *it );
@@ -1140,9 +1364,20 @@ bool STMClient::main( void )
           network->get_current_state(), timestamp(), network->send_interval(), network->max_datagram_payload() );
       }
       const int interactive_wait_before_tick = network->wait_time();
+      Network::Bulk::Datagram bulk;
+      {
+        /* The answers about notifications first, and the acknowledgments of
+           those that arrived, before anything else this end has to send. */
+        const bool notice_listening = network->peer_takes_notices() == 1
+                                      && timestamp() - network->get_latest_remote_state().timestamp < 15000;
+        while ( !network->shutdown_in_progress() && network->has_remote_addr() && !network->notice_wait_time()
+                && notices.take_packet( timestamp(), network->get_SRTT(), network->max_datagram_payload(),
+                                        notice_listening, bulk ) ) {
+          network->send_bulk( bulk );
+        }
+      }
       network->tick();
 
-      Network::Bulk::Datagram bulk;
       const bool sent_clipboard = mime_enabled && !network->shutdown_in_progress() && !network->bulk_wait_time()
         && mime_clipboard.channel.take_packet( Clipboard::Priority::Interactive, timestamp(), network->get_SRTT(), bulk );
       if ( sent_clipboard ) { network->send_bulk( bulk ); }

@@ -56,6 +56,41 @@ namespace Terminal {
    them (see Renditions::get_background_rendition). */
 using color_type = uint64_t;
 
+/* The font a program selected for its text (OSC 777 font), which cells keep
+   as a handle into a table that only grows, so a cell stays small however
+   many roles there are and however long their names are. The handle means
+   nothing outside this process: on the wire a style is a font selection. */
+struct TextStyle
+{
+  std::string role = "default";
+  int weight = 0;         /* 0: the configured face and SGR bold */
+  bool has_slant = false; /* false: the native slant of the face */
+  int slant = 0;          /* hundredths of a degree */
+  /* The depth a program gave its text (OSC 777 depth), which is kept with
+     the font because cells with either are as rare: the divergence of the
+     two eyes' views in millidegrees, or instead in reference pixels, and
+     their vertical separation in pixels. Zero is the plane of the terminal. */
+  int32_t depth = 0;
+  float depth_pixels = 0;
+  float phase = 0;
+  bool has_font( void ) const { return role != "default" || weight || has_slant; }
+  bool has_depth( void ) const { return depth || depth_pixels != 0 || phase != 0; }
+  bool operator==( const TextStyle& x ) const
+  {
+    return role == x.role && weight == x.weight && has_slant == x.has_slant && slant == x.slant && depth == x.depth
+           && depth_pixels == x.depth_pixels && phase == x.phase;
+  }
+};
+uint32_t intern_text_style( const TextStyle& style );
+const TextStyle& text_style_of( uint32_t handle );
+/* role=...:weight=...:slant=..., as the frames of the font protocol write them. */
+std::string text_style_fields( const TextStyle& style );
+/* The frame of the depth protocol that gives a terminal this depth and phase
+   whatever it had: a set of both, or a reset when both are zero. */
+std::string depth_frame( int32_t depth, float depth_pixels, float phase );
+/* The shortest decimal text that reads back as the same float. */
+std::string float_text( float value );
+
 class Renditions
 {
 public:
@@ -85,6 +120,7 @@ private:
   uint32_t foreground_gamut : 2;
   uint32_t background_gamut : 2;
   uint32_t background_alpha : 6;
+  uint32_t text_style = 0; /* see TextStyle; 0 is the default */
 
 public:
   Renditions( color_type s_background );
@@ -93,8 +129,15 @@ public:
   void set_rendition( color_type num );
   /* extended: with the attributes Silkie added, in a sequence of their own
      after the others, so a terminal that drops what it does not know keeps
-     the colors. */
-  std::string sgr( bool extended = true ) const;
+     the colors. fonts: with the selection of the font protocol, which the
+     SGR 0 this starts with has just reset. depth: with the depth and phase
+     of the depth protocol, which it has reset too. */
+  std::string sgr( bool extended = true, bool fonts = true, bool depth = true ) const;
+
+  uint32_t get_text_style( void ) const { return text_style; }
+  void set_text_style( uint32_t handle ) { text_style = handle; }
+  bool has_font( void ) const { return text_style && text_style_of( text_style ).has_font(); }
+  bool has_depth( void ) const { return text_style && text_style_of( text_style ).has_depth(); }
 
   void set_gamut( bool background, unsigned id )
   {
@@ -110,6 +153,9 @@ public:
   /* A percent of opacity; 100 or more is opaque. */
   void set_background_alpha( int percent );
   int get_background_alpha( void ) const { return background_alpha ? ( background_alpha - 1 ) * 2 : 100; }
+  /* The color as kept: 0 default, 30 + index of the 256 colors, or RGB with
+     the true color bit. */
+  uint32_t get_foreground_color( void ) const { return foreground_color; }
   bool has_extended( void ) const
   {
     return foreground_brightness || background_brightness || foreground_gamut || background_gamut || background_alpha;
@@ -136,7 +182,8 @@ public:
     return ( attributes == x.attributes ) && ( foreground_color == x.foreground_color )
            && ( background_color == x.background_color ) && ( foreground_brightness == x.foreground_brightness )
            && ( background_brightness == x.background_brightness ) && ( foreground_gamut == x.foreground_gamut )
-           && ( background_gamut == x.background_gamut ) && ( background_alpha == x.background_alpha );
+           && ( background_gamut == x.background_gamut ) && ( background_alpha == x.background_alpha )
+           && ( text_style == x.text_style );
   }
   void set_attribute( attribute_type attr, bool val )
   {
@@ -205,6 +252,7 @@ public:
 
   /* Accessors for contents field */
   std::string debug_contents( void ) const;
+  const std::string& get_contents( void ) const { return contents; }
 
   bool empty( void ) const { return !sized_text && contents.empty(); }
   /* 32 seems like a reasonable limit on combining characters */
@@ -490,6 +538,10 @@ private:
   std::vector<KittyPlacement> kitty_placements;
   uint32_t kitty_next_id;
   uint64_t kitty_serial;
+  /* The fonts a program uploaded to the vector service: terminal state of the
+     session, kept across both screens and a reset, as Silkie keeps them. */
+  Vector::SessionFonts vector_fonts;
+  uint64_t vector_font_generation;
 
   row_pointer newrow( void )
   {
@@ -585,6 +637,7 @@ public:
   unsigned int get_bell_count( void ) const { return bell_count; }
 
   uint32_t allocate_kitty_id( void );
+  static void let_go_of_surface( KittyImage& image );
   uint32_t put_kitty_image( const KittyImage& image );
   const std::map<uint32_t, KittyImage>& get_kitty_images( void ) const { return kitty_images; }
   const KittyImage* find_kitty_image( uint32_t id ) const;
@@ -595,10 +648,24 @@ public:
   void replace_vector_doc( uint32_t id, std::shared_ptr<const Vector::Doc> doc );
   /* New pixels for an image, as a GPU surface refresh gives: its placements stay. */
   bool refresh_kitty_image( const KittyImage& image );
+  const Vector::SessionFonts& get_vector_fonts( void ) const { return vector_fonts; }
+  /* An upload the terminal accepted, under the relay's request id. */
+  void commit_vector_font( const std::string& name,
+                           std::shared_ptr<const std::string> upload,
+                           uint32_t request,
+                           std::shared_ptr<const Vector::FontInfo> info );
+  /* A release: false when there is no such font to release. */
+  bool release_vector_font( const std::string& name );
+  /* Forgets the released fonts no text in any scene names any more. */
+  void prune_vector_fonts( void );
+  /* As a peer was sent them. */
+  void put_vector_font( const std::string& name, const Vector::SessionFont& font ) { vector_fonts[name] = font; }
+  void erase_vector_font( const std::string& name ) { vector_fonts.erase( name ); }
   void put_kitty_placement( const KittyPlacement& placement );
   const std::vector<KittyPlacement>& get_kitty_placements( void ) const { return kitty_placements; }
   void replace_kitty_placements( const std::vector<KittyPlacement>& placements );
-  void delete_kitty( const KittyCommand& cmd );
+  void delete_kitty( const KittyCommand& cmd, const ClientGeometry* geometry = nullptr );
+  void prune_orphan_placements( void );
   void scroll_kitty_placements( int first_row, int count, bool inserting );
   void erase_sixel_cells( int row, int col, int height, int width );
   void scroll_sixel( int first_row, int count, bool inserting );
@@ -615,7 +682,7 @@ public:
   {
     return ( rows == x.rows ) && ( window_title == x.window_title ) && ( clipboard == x.clipboard )
            && ( bell_count == x.bell_count ) && ( ds == x.ds ) && ( kitty_images == x.kitty_images )
-           && ( kitty_placements == x.kitty_placements );
+           && ( kitty_placements == x.kitty_placements ) && ( vector_fonts == x.vector_fonts );
   }
 };
 }

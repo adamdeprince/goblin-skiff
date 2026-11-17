@@ -93,8 +93,10 @@ public:
   std::string set_client_extensions( const ClientExtensions& info ) { return terminal.set_client_extensions( info ); }
   std::string extension_detach( void ) { return terminal.extension_detach(); }
   bool extension_contacts_live( void ) const { return terminal.extension_contacts_live(); }
+  bool extension_service_overdue( uint64_t ms ) const { return terminal.extension_service_overdue( ms ); }
   void extension_output_written( void ) { terminal.extension_output_written(); }
   std::vector<std::string> take_extension_outputs( void ) { return terminal.take_extension_outputs(); }
+  std::vector<std::string> take_notices( void ) { return terminal.take_notices(); }
   void set_relay_timing( uint64_t input_us, uint64_t repaint_us, uint64_t rtt_ms )
   {
     terminal.set_relay_timing( input_us, repaint_us, rtt_ms );

@@ -125,8 +125,7 @@ bool parse_program( const std::string& payload, Frame& out )
   if ( !parse( payload, out ) ) {
     return false;
   }
-  const size_t semi = payload.find( ';', 4 );
-  if ( semi == std::string::npos || payload.size() - semi - 1 > PROGRAM_FIELDS_LIMIT ) {
+  if ( payload.find( ';', 4 ) == std::string::npos ) {
     return false;
   }
   int64_t version = 0;
@@ -169,6 +168,35 @@ Value integer( const Fields& fields, const std::string& key, int64_t lo, int64_t
   return parse_integer( *text, lo, hi, out ) ? Value::Valid : Value::Invalid;
 }
 
+bool parse_unsigned( const std::string& text, uint64_t max, uint64_t& out )
+{
+  if ( text.empty() ) {
+    return false;
+  }
+  uint64_t value = 0;
+  for ( char c : text ) {
+    if ( c < '0' || c > '9' ) {
+      return false;
+    }
+    const uint64_t digit = c - '0';
+    if ( value > ( max - digit ) / 10 ) {
+      return false;
+    }
+    value = value * 10 + digit;
+  }
+  out = value;
+  return true;
+}
+
+Value unsigned_integer( const Fields& fields, const std::string& key, uint64_t max, uint64_t& out )
+{
+  const std::string* text = fields.find( key );
+  if ( !text ) {
+    return Value::Absent;
+  }
+  return parse_unsigned( *text, max, out ) ? Value::Valid : Value::Invalid;
+}
+
 std::string encode( const std::string& selector, const Fields& fields )
 {
   return "\033]777;" + selector + ";" + fields.text() + "\033\\";
@@ -200,18 +228,21 @@ std::string number( double value )
   return buf;
 }
 
-static const char* const FRAME_STARTS[] = { "\033]777;", "\033]22;" };
+static const char* const FRAME_STARTS[] = { "\033]777;", "\033]22;", "\033]99;", "\033]7501;", "\033_G" };
+static const size_t GRAPHICS_START = sizeof FRAME_STARTS / sizeof *FRAME_STARTS - 1;
 
-static bool frame_prefix( const std::string& s, bool& complete )
+static bool frame_prefix( const std::string& s, bool graphics, bool& complete )
 {
   bool prefix = false;
   complete = false;
+  size_t index = 0;
   for ( const char* start : FRAME_STARTS ) {
     const std::string text( start );
-    if ( s.size() <= text.size() && text.compare( 0, s.size(), s ) == 0 ) {
+    if ( ( graphics || index != GRAPHICS_START ) && s.size() <= text.size() && text.compare( 0, s.size(), s ) == 0 ) {
       prefix = true;
       complete = complete || s.size() == text.size();
     }
+    index++;
   }
   return prefix;
 }
@@ -257,7 +288,7 @@ void InputDemux::feed( const std::string& bytes, Output& out )
       }
       pending_ += c;
       bool complete = false;
-      if ( frame_prefix( pending_, complete ) ) {
+      if ( frame_prefix( pending_, graphics_, complete ) ) {
         matched_ = complete;
         continue;
       }
@@ -306,7 +337,7 @@ void InputDemux::expire( Output& out )
 
 std::string frame_payload( const std::string& frame )
 {
-  if ( frame.size() < 3 || frame.compare( 0, 2, "\033]" ) != 0 ) {
+  if ( frame.size() < 3 || ( frame.compare( 0, 2, "\033]" ) != 0 && frame.compare( 0, 2, "\033_" ) != 0 ) ) {
     return {};
   }
   size_t end = frame.size();

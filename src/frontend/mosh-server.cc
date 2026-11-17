@@ -43,6 +43,7 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include "src/terminal/ssh_agent.hpp"
 #include <getopt.h>
 #include <sstream>
 #include <stdexcept>
@@ -104,6 +105,7 @@
 #include "src/network/networktransport-impl.h"
 #include "src/network/bulkcontrol.h"
 #include "src/network/compressor.h"
+#include "src/network/noticechannel.h"
 #include "streamforward.h"
 #include "directory.h"
 #include "mimeclipboard.h"
@@ -123,6 +125,7 @@ static void serve( int host_fd,
                    Terminal::Complete& terminal,
                    ServerConnection& network,
                    StreamForwarder& forwarder,
+                   terminal_agent::Proxy& terminal_agent_proxy,
                    Network::Bulk::ControlServer& bulk_control,
                    long network_timeout,
                    long network_signaled_timeout,
@@ -332,6 +335,9 @@ int main( int argc, char* argv[] )
   Terminal::ImageEncoding image_encoding;
   image_encoding.palette_djvu = has_capability( client_capabilities, "palette-djvu-v1" );
   image_encoding.png = has_capability( client_capabilities, "png-state-v1" );
+  image_encoding.native = has_capability( client_capabilities, "native-image-v1" );
+  image_encoding.packed = has_capability( client_capabilities, "packed-state-v2" );
+  image_encoding.packed_zstd = image_encoding.packed && has_capability( client_capabilities, "packed-zstd-v1" );
   bool compact_keepalive = has_capability( client_capabilities, "keepalive-v1" );
   bool tmux_control = has_capability( client_capabilities, "tmux-control-v1" );
   bool client_supports_fips_crypto = has_capability( client_capabilities, "fips-aes128-gcm-v1" );
@@ -700,6 +706,7 @@ static int run_server( const char* desired_ip,
   const bool radio_mode = link_budget && has_capability( getenv( "MOSH_CLIENT_CAPS" ), "radio-v1" );
   if ( radio_mode ) { network->enable_radio_mode(); }
 
+  terminal_agent::Proxy terminal_agent_proxy;
   StreamForwarder forwarder(
     StreamForwarder::ServerSide, stream_delay_ms, stream_rate_bytes_per_second, crypto_mode );
   std::string forward_error;
@@ -709,10 +716,9 @@ static int run_server( const char* desired_ip,
       exit( 1 );
     }
   }
-  if ( agent_forwarding && !forwarder.enable_agent_forwarding( forward_error ) ) {
-    fprintf( stderr, "Cannot enable agent forwarding: %s\n", forward_error.c_str() );
-    exit( 1 );
-  }
+  // The server always exports the stable terminal socket. -A authorizes the
+  // client's local fallback; it does not select a different socket here.
+  (void)agent_forwarding;
   if ( x11_forwarding && !forwarder.enable_x11_forwarding( forward_error ) ) {
     fprintf( stderr, "Cannot enable X11 forwarding: %s\n", forward_error.c_str() );
     exit( 1 );
@@ -908,11 +914,8 @@ static int run_server( const char* desired_ip,
       exit( 1 );
     }
 
-    if ( !forwarder.agent_socket_path().empty() ) {
-      if ( setenv( "SSH_AUTH_SOCK", forwarder.agent_socket_path().c_str(), true ) < 0 ) {
-        perror( "setenv" );
-        exit( 1 );
-      }
+    if (setenv("SSH_AUTH_SOCK",terminal_agent_proxy.path().c_str(),true)<0) {
+      perror("setenv terminal agent"); exit(1);
     }
 
     if ( !forwarder.x11_display().empty() ) {
@@ -1008,7 +1011,7 @@ static int run_server( const char* desired_ip,
 #endif
 
     try {
-      serve( master, pipes[1], terminal, *network, forwarder, bulk_control, network_timeout, network_signaled_timeout,
+      serve( master, pipes[1], terminal, *network, forwarder, terminal_agent_proxy, bulk_control, network_timeout, network_signaled_timeout,
              tmux_control, crypto_mode );
     } catch ( const Network::NetworkException& e ) {
       fprintf( stderr, "Network exception: %s\n", e.what() );
@@ -1036,6 +1039,7 @@ static void serve( int host_fd,
                    Terminal::Complete& terminal,
                    ServerConnection& network,
                    StreamForwarder& forwarder,
+                   terminal_agent::Proxy& terminal_agent_proxy,
                    Network::Bulk::ControlServer& bulk_control,
                    long network_timeout,
                    long network_signaled_timeout,
@@ -1090,6 +1094,14 @@ static void serve( int host_fd,
 
   bool child_released = false;
   uint64_t idle_cleanup_deadline = 0;
+  /* Desktop notifications cross ahead of everything else, on a channel of
+     their own; those written before the client has said whether it takes
+     that channel wait here for it to say. */
+  Network::NoticeChannel notices;
+  std::deque<std::string> notices_waiting;
+  /* A client not heard from for this long is not written notifications to;
+     they are kept, and go as soon as it is heard from again. */
+  const uint64_t NOTICE_PEER_SILENCE_MS = 15000;
 
   while ( true ) {
     try {
@@ -1125,6 +1137,14 @@ static void serve( int host_fd,
       const bool reliable_data_pending = network.has_unsent_data();
 
       timeout = std::min( timeout, network.wait_time() );
+      {
+        const bool notice_peer = network.peer_takes_notices() == 1
+                                 && now - network.get_latest_remote_state().timestamp < NOTICE_PEER_SILENCE_MS;
+        const int notice_wait = notices.wait_time( now, notice_peer );
+        if ( notice_wait != INT_MAX ) {
+          timeout = std::min( timeout, std::max( notice_wait, network.notice_wait_time() ) );
+        }
+      }
       timeout = std::min( timeout, std::max( network.bulk_wait_time(), files.wait_time( now, !forwarder.has_pending_network_data() ) ) );
       timeout = std::min( timeout, std::max( network.bulk_wait_time(), downloads.wait_time( now, !network.has_unsent_data() && !forwarder.has_pending_network_data() ) ) );
       if ( mime_enabled ) { timeout = std::min( timeout, std::max( network.bulk_wait_time(), mime_clipboard.channel.wait_time( now, !network.has_unsent_data() && !forwarder.has_pending_network_data() ) ) ); }
@@ -1158,12 +1178,20 @@ static void serve( int host_fd,
         timeout = std::min( timeout, std::max( 20, network.bulk_wait_time() ) );
       }
 
+      terminal_agent_proxy.tick(terminal_agent::now_ms());
+      for (const auto &frame : terminal_agent_proxy.take_output())
+        if (!network.shutdown_in_progress()) network.get_current_state().push_extension_output(frame);
+      int agent_wait = terminal_agent_proxy.wait_ms(terminal_agent::now_ms());
+      if (agent_wait >= 0) timeout = std::min(timeout, agent_wait);
+
       /* poll for events */
       sel.clear_fds();
       std::vector<int> fd_list( network.fds() );
       assert( fd_list.size() == 1 ); /* servers don't hop */
       int network_fd = fd_list.back();
       sel.add_fd( network_fd );
+      auto agent_fds = terminal_agent_proxy.pollfds();
+      for (const auto &fd : agent_fds) if (fd.events & POLLIN) sel.add_fd(fd.fd);
       std::vector<int> forward_fds( forwarder.fds() );
       for ( std::vector<int>::const_iterator it = forward_fds.begin(); it != forward_fds.end(); it++ ) {
         sel.add_fd( *it );
@@ -1196,6 +1224,7 @@ static void serve( int host_fd,
 
         Network::Bulk::Datagram bulk;
         while ( network.pop_bulk( bulk ) ) {
+          if ( notices.receive( bulk ) ) { continue; }
           if ( bulk.type == Network::Bulk::PacketType::FileSymbol || bulk.type == Network::Bulk::PacketType::FileAck ) {
             if ( files.supported() ) { files.channel.receive( bulk ); }
             continue;
@@ -1205,6 +1234,14 @@ static void serve( int host_fd,
             continue;
           }
           if ( !mime_clipboard.channel.receive( bulk ) ) { bulk_control.broadcast( bulk ); }
+        }
+        /* What the client's terminal said of a notification, that it was
+           clicked or closed, is the program's to read, as the terminal wrote it. */
+        std::string notice_answer;
+        while ( notices.take_message( notice_answer ) ) {
+          if ( Terminal::notification_answer_ok( notice_answer ) || Terminal::program_status_answer_ok( notice_answer ) ) {
+            terminal_to_host += notice_answer;
+          }
         }
 
         /* is new user input available for the terminal? */
@@ -1236,6 +1273,13 @@ static void serve( int host_fd,
               continue;
             }
             if ( us.is_extension_input( i ) ) {
+              terminal_agent::Fields agent_fields;
+              if (terminal_agent::parse(us.get_extension_input(i).payload, agent_fields)
+                  && terminal_agent::get(agent_fields,"op") == "attach") {
+                terminal_agent_proxy.cancel();
+                continue;
+              }
+              if (terminal_agent_proxy.receive(us.get_extension_input(i).payload, terminal_agent::now_ms())) continue;
               /* A report from the client's terminal: never keystrokes. */
               if ( !tmux_control ) {
                 terminal_to_host += terminal.extension_input( us.get_extension_input( i ) );
@@ -1434,6 +1478,10 @@ static void serve( int host_fd,
         }
       }
 
+      terminal_agent_proxy.tick(terminal_agent::now_ms());
+      for (const auto &frame : terminal_agent_proxy.take_output())
+        if (!network.shutdown_in_progress()) network.get_current_state().push_extension_output(frame);
+
       /* Silkie's extensions: frames for the client's terminal, written once.
          (The client drops haptic feedback that reaches it after it lost
          contact, rather than play it late.) */
@@ -1444,18 +1492,40 @@ static void serve( int host_fd,
       const bool client_listening = network.get_remote_state_num()
                                     && Network::timestamp() - network.get_latest_remote_state().timestamp
                                          < silence_limit;
+      for ( auto& frame : terminal.take_notices() ) { notices_waiting.push_back( std::move( frame ) ); }
+      if ( !notices_waiting.empty() && !network.shutdown_in_progress() && network.peer_takes_notices() >= 0 ) {
+        for ( const auto& frame : notices_waiting ) {
+          if ( network.peer_takes_notices() ) {
+            notices.enqueue( frame );
+          } else {
+            /* A client from before the channel takes them with the frames
+               it writes to its terminal once, in their turn. */
+            network.get_current_state().push_extension_output( frame );
+          }
+        }
+        notices_waiting.clear();
+      }
       for ( const auto& frame : terminal.take_extension_outputs() ) {
-        if ( !network.shutdown_in_progress() ) {
+        /* Feedback is for now: a client that is not there is not sent it to
+           play later, and the frames do not pile up while it is away. */
+        static const std::string haptic_frame = "\033]777;haptic;";
+        const bool haptic = frame.compare( 0, haptic_frame.size(), haptic_frame ) == 0;
+        if ( !network.shutdown_in_progress() && ( client_listening || !haptic ) ) {
           network.get_current_state().push_extension_output( frame );
         }
       }
-      /* A client that has gone quiet leaves no contact open in the program. */
-      if ( !client_listening && terminal.extension_contacts_live() && !network.shutdown_in_progress() ) {
+      /* A client that has gone quiet leaves no contact open in the program,
+         and no request of the vector service unanswered: one the client has
+         had time to hear of, and so to send heartbeats for. */
+      if ( !client_listening
+           && ( terminal.extension_contacts_live() || terminal.extension_service_overdue( silence_limit ) )
+           && !network.shutdown_in_progress() ) {
         terminal_to_host += terminal.extension_detach();
         network.get_current_state().replace_terminal_state( terminal );
       }
       network.set_low_latency( terminal.get_fb().ds.ext.latency );
-      terminal.set_relay_timing( uint64_t( network.send_mindelay() ) * 1000, uint64_t( network.send_interval() ) * 1000,
+      /* The latency listing gives what the relay normally waits, with the mode off. */
+      terminal.set_relay_timing( uint64_t( network.normal_mindelay() ) * 1000, uint64_t( network.normal_interval() ) * 1000,
                                  uint64_t( network.get_SRTT() ) );
 
       /* write user input and terminal writeback to the host */
@@ -1552,9 +1622,19 @@ static void serve( int host_fd,
         forwarder.flush( network.get_current_state(), now, network.send_interval(), network.max_datagram_payload() );
       }
       const int interactive_wait_before_tick = network.wait_time();
+      Network::Bulk::Datagram bulk;
+      {
+        /* Notifications first: before the screen, the streams and the files,
+           at the first moment the link's budget allows anything at all. */
+        const bool notice_peer = network.peer_takes_notices() == 1
+                                 && now - network.get_latest_remote_state().timestamp < NOTICE_PEER_SILENCE_MS;
+        while ( !network.shutdown_in_progress() && network.has_remote_addr() && !network.notice_wait_time()
+                && notices.take_packet( now, network.get_SRTT(), network.max_datagram_payload(), notice_peer, bulk ) ) {
+          network.send_bulk( bulk );
+        }
+      }
       network.tick();
 
-      Network::Bulk::Datagram bulk;
       const bool sent_clipboard = mime_enabled && !network.shutdown_in_progress() && !network.bulk_wait_time()
         && mime_clipboard.channel.take_packet( Clipboard::Priority::Interactive, now, network.get_SRTT(), bulk );
       if ( sent_clipboard ) { network.send_bulk( bulk ); }

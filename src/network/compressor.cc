@@ -34,6 +34,7 @@
 
 #include <limits>
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 #include <zlib.h>
@@ -49,7 +50,11 @@
 using namespace Network;
 
 namespace {
-const int STATE_ZSTD_LEVEL = 22;
+const int LEVELS[] = { CompressionPacer::TOP_LEVEL, 19, 15, 12, 9, 6, 3, 1 };
+/* A cautious first guess, in nanoseconds a byte, until a level has been timed. */
+const double FIRST_COST[] = { 2000, 800, 200, 50, 20, 8, 3, 1.5 };
+/* Of output to input, until a level has been seen to do better or worse. */
+const double FIRST_RATIO = 0.25;
 
 std::string zlib_compress_str( const std::string& input )
 {
@@ -89,12 +94,12 @@ bool looks_like_zstd_frame( const std::string& input )
 }
 
 #ifdef HAVE_ZSTD
-std::string zstd_compress_str( const std::string& input )
+std::string zstd_compress_str( const std::string& input, int level )
 {
   const size_t bound = ZSTD_compressBound( input.size() );
   std::string compressed( bound, '\0' );
   const size_t written
-    = ZSTD_compress( &compressed[0], compressed.size(), input.data(), input.size(), STATE_ZSTD_LEVEL );
+    = ZSTD_compress( &compressed[0], compressed.size(), input.data(), input.size(), level );
   if ( ZSTD_isError( written ) ) {
     throw std::runtime_error( std::string( "zstd compression failed: " ) + ZSTD_getErrorName( written ) );
   }
@@ -104,14 +109,15 @@ std::string zstd_compress_str( const std::string& input )
 
 std::string zstd_compress_str( const std::string& input,
                                const std::string& dictionary,
-                               void*& cached_cdict )
+                               void*& cached_cdict,
+                               int level )
 {
   if ( dictionary.empty() ) {
-    return zstd_compress_str( input );
+    return zstd_compress_str( input, level );
   }
 
   if ( cached_cdict == NULL ) {
-    cached_cdict = ZSTD_createCDict( dictionary.data(), dictionary.size(), STATE_ZSTD_LEVEL );
+    cached_cdict = ZSTD_createCDict( dictionary.data(), dictionary.size(), level );
     if ( cached_cdict == NULL ) {
       throw std::runtime_error( "could not allocate zstd compression dictionary" );
     }
@@ -170,15 +176,76 @@ std::string zstd_uncompress_str( const std::string& input, void* zstd_ddict )
 #endif
 }
 
+CompressionPacer::CompressionPacer()
+{
+  std::copy( std::begin( FIRST_COST ), std::end( FIRST_COST ), cost_ns_per_byte );
+  std::fill( std::begin( ratio ), std::end( ratio ), FIRST_RATIO );
+}
+
+void CompressionPacer::set_budget( uint64_t send_interval_ms, double link_bytes_per_second )
+{
+  interval_ms = send_interval_ms;
+  link_rate = link_bytes_per_second;
+}
+
+int CompressionPacer::level_for( size_t input_size ) const
+{
+  if ( link_rate <= 0 ) {
+    return CompressionPacer::TOP_LEVEL;
+  }
+  for ( size_t rung = 0; rung + 1 < RUNGS; rung++ ) {
+    /* A lower level makes more to carry, which also gives it longer. */
+    const double on_the_wire_ms = 1000. * double( input_size ) * ratio[rung] / link_rate;
+    if ( cost_ns_per_byte[rung] * double( input_size ) / 1e6 <= std::max( double( interval_ms ), on_the_wire_ms ) ) {
+      return LEVELS[rung];
+    }
+  }
+  return LEVELS[RUNGS - 1];
+}
+
+void CompressionPacer::note( int level, size_t input_size, size_t output_size, double elapsed_ms )
+{
+  if ( !input_size ) {
+    return;
+  }
+  size_t used = 0;
+  while ( used + 1 < RUNGS && LEVELS[used] != level ) {
+    used++;
+  }
+  ratio[used] = 0.75 * ratio[used] + 0.25 * ( double( output_size ) / double( input_size ) );
+  /* A lower level is never taken to compress better than a higher one. */
+  for ( size_t rung = used + 1; rung < RUNGS; rung++ ) {
+    ratio[rung] = std::max( ratio[rung], ratio[rung - 1] );
+  }
+  /* What a level does to one kind of data says little of another, and a pause
+     of the whole machine looks like a slow level. So what was learnt of the
+     levels above the one in use fades, and they are tried again in time. */
+  for ( size_t rung = 0; rung < used; rung++ ) {
+    cost_ns_per_byte[rung] = std::max( FIRST_COST[rung], cost_ns_per_byte[rung] * 0.98 );
+  }
+  /* Below a millisecond the clock says nothing about the level. */
+  if ( elapsed_ms >= 1 ) {
+    const double measured = elapsed_ms * 1e6 / double( input_size );
+    cost_ns_per_byte[used] = 0.5 * cost_ns_per_byte[used] + 0.5 * measured;
+  }
+  /* A higher level is never taken to be faster than a lower one. */
+  for ( size_t rung = used; rung-- > 0; ) {
+    cost_ns_per_byte[rung] = std::max( cost_ns_per_byte[rung], cost_ns_per_byte[rung + 1] );
+  }
+  for ( size_t rung = used + 1; rung < RUNGS; rung++ ) {
+    cost_ns_per_byte[rung] = std::min( cost_ns_per_byte[rung], cost_ns_per_byte[rung - 1] );
+  }
+}
+
 Compressor::Compressor()
-  : zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdict( NULL ), zstd_ddict( NULL )
+  : zstd_dictionary(), zstd_dictionary_id_value(), zstd_cdicts(), zstd_ddict( NULL ), pacer()
 {}
 
 Compressor::~Compressor()
 {
 #ifdef HAVE_ZSTD
-  if ( zstd_cdict != NULL ) {
-    ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( zstd_cdict ) );
+  for ( auto& item : zstd_cdicts ) {
+    ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( item.second ) );
   }
   if ( zstd_ddict != NULL ) {
     ZSTD_freeDDict( reinterpret_cast<ZSTD_DDict*>( zstd_ddict ) );
@@ -191,24 +258,38 @@ std::string Compressor::compress_str( const std::string& input )
   return zlib_compress_str( input );
 }
 
-std::string Compressor::compress_str( const std::string& input, bool allow_zstd, bool allow_zstd_dictionary )
+std::string Compressor::compress_str( const std::string& input, bool allow_zstd, bool allow_zstd_dictionary, bool allow_raw )
 {
+  std::string output;
 #ifdef HAVE_ZSTD
   if ( allow_zstd ) {
-    if ( allow_zstd_dictionary && !zstd_dictionary.empty() ) {
-      return zstd_compress_str( input, zstd_dictionary, zstd_cdict );
-    }
-    return zstd_compress_str( input );
-  }
+    const int level = pacer.level_for( input.size() );
+    const auto started = std::chrono::steady_clock::now();
+    output = allow_zstd_dictionary && !zstd_dictionary.empty()
+               ? zstd_compress_str( input, zstd_dictionary, zstd_cdicts[level], level )
+               : zstd_compress_str( input, level );
+    const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - started;
+    pacer.note( level, input.size(), output.size(), elapsed.count() );
+    last_level = level;
+  } else
 #else
   (void)allow_zstd;
   (void)allow_zstd_dictionary;
 #endif
-  return zlib_compress_str( input );
+  {
+    output = zlib_compress_str( input );
+  }
+  if ( allow_raw && input.size() + 1 < output.size() ) {
+    return std::string( 1, char( RAW_FRAME ) ) + input;
+  }
+  return output;
 }
 
 std::string Compressor::uncompress_str( const std::string& input )
 {
+  if ( !input.empty() && static_cast<unsigned char>( input[0] ) == RAW_FRAME ) {
+    return input.substr( 1 );
+  }
 #ifdef HAVE_ZSTD
   if ( looks_like_zstd_frame( input ) ) {
     return zstd_uncompress_str( input, zstd_ddict );
@@ -229,10 +310,10 @@ bool Compressor::zstd_available( void ) const
 void Compressor::set_zstd_dictionary( const std::string& dictionary )
 {
 #ifdef HAVE_ZSTD
-  if ( zstd_cdict != NULL ) {
-    ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( zstd_cdict ) );
-    zstd_cdict = NULL;
+  for ( auto& item : zstd_cdicts ) {
+    ZSTD_freeCDict( reinterpret_cast<ZSTD_CDict*>( item.second ) );
   }
+  zstd_cdicts.clear();
   if ( zstd_ddict != NULL ) {
     ZSTD_freeDDict( reinterpret_cast<ZSTD_DDict*>( zstd_ddict ) );
     zstd_ddict = NULL;
