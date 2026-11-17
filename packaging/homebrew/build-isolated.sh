@@ -44,4 +44,69 @@ brew trust --formula goblin-deploy/build/goblin-skiff
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
 export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_NO_ENV_HINTS=1
 cp packaging/homebrew/goblin-skiff.rb.in "$DEPLOY_WORK/goblin-skiff.rb"
-"$DEPLOY_SELF" brew-bottle "$DEPLOY_WORK/goblin-skiff.rb"
+# Build with the selected CLT directly. Homebrew's install preflight rejects
+# an unrelated older Xcode.app even when the current CLT is selected.
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export CC="$DEVELOPER_DIR/usr/bin/clang" CXX="$DEVELOPER_DIR/usr/bin/clang++"
+export CPPFLAGS="-I$brew_prefix/opt/openssl@3/include -I$brew_prefix/opt/ncurses/include"
+export LDFLAGS="-L$brew_prefix/opt/openssl@3/lib -L$brew_prefix/opt/ncurses/lib -Wl,-headerpad_max_install_names"
+export PKG_CONFIG_PATH="$brew_prefix/opt/openssl@3/lib/pkgconfig:$brew_prefix/opt/ncurses/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+full=goblin-deploy/build/goblin-skiff
+brew tap-new --no-git goblin-deploy/build
+formula="$isolated/Library/Taps/goblin-deploy/homebrew-build/Formula/goblin-skiff.rb"
+python3 - "$DEPLOY_WORK/goblin-skiff.rb" "$formula" <<'PYFORMULA'
+import os
+from pathlib import Path
+import re
+import sys
+text = Path(sys.argv[1]).read_text()
+for key, value in [('url', os.environ['DEPLOY_SOURCE_URL']),
+                   ('version', os.environ['DEPLOY_BREW_VERSION']),
+                   ('sha256', os.environ['DEPLOY_SOURCE_SHA256'])]:
+    text = re.sub(r'^  ' + key + r' "[^"\n]*"', '  ' + key + ' "' + value + '"', text, flags=re.M)
+Path(sys.argv[2]).write_text(text)
+PYFORMULA
+prefix="$isolated/Cellar/goblin-skiff/$DEPLOY_BREW_VERSION"
+autoreconf -fi
+./configure --prefix="$prefix" --docdir="$prefix/share/doc/goblin-skiff" \
+  --disable-completion --disable-ufw --without-utempter \
+  --with-crypto-library=apple-common-crypto --with-zstd --with-librsync \
+  --with-fips-crypto --without-libraptorq --enable-compile-warnings=yes
+make -j"$DEPLOY_JOBS"
+sh packaging/check-prebuilt-fec.sh ./src/moshcp/goblin-skiffcp
+runtime=$(mktemp -d /tmp/skiff-check.XXXXXX)
+trap 'rm -rf "$runtime"' EXIT
+XDG_RUNTIME_DIR="$runtime" make -j"$DEPLOY_JOBS" check TESTS="$(cat packaging/release-tests.txt)"
+cp src/tests/test-suite.log "$DEPLOY_OUT/test-suite.log"
+make install
+mkdir -p "$prefix/.brew" "$prefix/share/bash-completion/completions"
+cp "$formula" "$prefix/.brew/goblin-skiff.rb"
+cp conf/bash-completion/completions/goblin-skiff "$prefix/share/bash-completion/completions/"
+GOBLIN_SKIFF_TEST_CLIENT="$prefix/bin/goblin-skiff-client" \
+GOBLIN_SKIFF_TEST_SERVER="$prefix/bin/goblin-skiff-server" \
+python3 src/tests/control-panel-integration.py --files
+GOBLIN_SKIFF_TEST_CLIENT="$prefix/bin/goblin-skiff-client" \
+GOBLIN_SKIFF_TEST_SERVER="$prefix/bin/goblin-skiff-server" \
+python3 src/tests/control-panel-integration.py --udp-relay
+brew ruby -e 'require "formula"; require "tab/tab"; f = Formulary.factory(ARGV.fetch(0)); t = Tab.create(f, :clang, :libcxx); t.built_as_bottle = true; t.built_prefix = HOMEBREW_PREFIX.to_s; t.write' "$full"
+mkdir "$DEPLOY_WORK/bottle"
+(cd "$DEPLOY_WORK/bottle"
+ brew bottle --json --root-url="$DEPLOY_BREW_URL" "$full"
+ brew bottle --merge --write --no-commit ./*.bottle.json
+ python3 - "$DEPLOY_OUT" <<'PYBOTTLE'
+import json
+from pathlib import Path
+import shutil
+import sys
+manifest, = Path('.').glob('*.bottle.json')
+info, = json.loads(manifest.read_text()).values()
+tags = info['bottle']['tags']
+if list(tags) != ['arm64_tahoe']:
+    raise SystemExit('Unexpected bottle platforms: ' + repr(list(tags)))
+tag = tags['arm64_tahoe']
+shutil.move(tag['local_filename'], Path(sys.argv[1]) / tag['filename'])
+shutil.copy2(manifest, Path(sys.argv[1]) / manifest.name)
+PYBOTTLE
+)
+cp "$formula" "$DEPLOY_OUT/goblin-skiff.rb"
+brew untap --force goblin-deploy/build

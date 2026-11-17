@@ -47,12 +47,24 @@ make DESTDIR="$root" install
 install -D -m 0644 conf/bash-completion/completions/goblin-skiff "$root/usr/share/bash-completion/completions/goblin-skiff"
 private="$root/usr/lib/goblin-skiff"
 mkdir -p "$private"
-for lib in "$prefix/lib/"*.so* "$SKIFF_DEPS/lib/"*.so*; do
-  [ -f "$lib" ] && cp -L "$lib" "$private/${lib##*/}"
-done
-for lib in libstdc++.so.6 libgcc_s.so.1; do
-  cp -L "$($CXX -print-file-name="$lib")" "$private/$lib"
-done
+python3 - "$root/usr/bin" "$private" "$prefix" "$SKIFF_DEPS" /opt/loongson-gcc-15.2.0 <<'PYLIBS'
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+bindir, private, *prefixes = map(Path, sys.argv[1:])
+for binary in bindir.iterdir():
+    with binary.open('rb') as stream:
+        if stream.read(4) != b'\x7fELF':
+            continue
+    for line in subprocess.check_output(['ldd', str(binary)], text=True).splitlines():
+        fields = line.split()
+        if len(fields) < 3 or fields[1] != '=>':
+            continue
+        path = Path(fields[2]).resolve()
+        if any(path.is_relative_to(prefix.resolve()) for prefix in prefixes):
+            shutil.copy2(path, private / fields[0])
+PYLIBS
 for executable in "$root/usr/bin/"*; do
   if readelf -h "$executable" >/dev/null 2>&1; then
     patchelf --set-rpath '$ORIGIN/../lib/goblin-skiff' "$executable"
@@ -74,7 +86,9 @@ for lib in "$private/"*; do
   fi
 done
 export DEPLOY_SHLIBDEPS_ARGS="-l$private -L$PWD/debian/shlibs.local -xgoblin-skiff"
+mkdir -p "$root/usr/share/doc/goblin-skiff/private-licenses"
+cp "$cache/build/openssl-3.5.5/LICENSE.txt" "$root/usr/share/doc/goblin-skiff/private-licenses/OpenSSL.txt"
+cp "$cache/build/librsync-2.3.4/COPYING" "$root/usr/share/doc/goblin-skiff/private-licenses/librsync.txt"
 deploy_make_deb goblin-skiff "$DEPLOY_VERSION+${DEPLOY_SUITE}$DEPLOY_DEB_REVISION" "$root" \
   "Remote terminal optimized for bandwidth-constrained links" "openssh-client, perl"
 sha256sum "$cache/downloads/"*.tar.gz > "$DEPLOY_OUT/private-dependency-sources.sha256"
-cp "$cache/downloads/"*.tar.gz "$DEPLOY_OUT/"

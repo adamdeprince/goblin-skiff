@@ -107,10 +107,10 @@ void tests()
   for ( size_t split = 0; split <= gamut_replies.size(); split++ ) {
     Mascot::Splash with_gamut;
     with_gamut.start( {}, true );
-    require( with_gamut.filter( "a" + gamut_replies.substr( 0, split ), 0 )
-                 + with_gamut.filter( gamut_replies.substr( split ) + "b", 1 )
-               == "ab",
-             "the answer stays local" );
+    // The parser is stateful; C++ does not order the operands of operator+.
+    const auto first = with_gamut.filter( "a" + gamut_replies.substr( 0, split ), 0 );
+    const auto second = with_gamut.filter( gamut_replies.substr( split ) + "b", 1 );
+    require( first + second == "ab", "the answer stays local" );
     require( with_gamut.image_gamut_known() && with_gamut.supports_image_gamut() && with_gamut.supports_sixel(),
              "a terminal that takes G" );
   }
